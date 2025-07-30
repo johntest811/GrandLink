@@ -30,7 +30,7 @@ export default function Login() {
       await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Mock authentication - replace with actual API call
-      if (email === 'admin@grandlink.com' && password === 'admin123') {
+      if (email === 'Usename' && password === 'admin123') {
         // Successful login
         router.push('/dashboard');
       } else {
@@ -71,13 +71,13 @@ export default function Login() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-              Email Address
+              User
             </label>
             <input
               type="email"
               id="email"
               className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              placeholder="admin@grandlink.com"
+              placeholder="Username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required

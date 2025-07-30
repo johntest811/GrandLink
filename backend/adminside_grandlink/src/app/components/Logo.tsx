@@ -20,7 +20,7 @@ export default function Logo({ size = 'medium', color = 'dark' }: LogoProps) {
   };
 
   // Accent color
-  const accentColor = color === 'light' ? 'text-blue-300' : 'text-blue-600';
+  const accentColor = color === 'light' ? 'text-red-300' : 'text-red-600';
 
   return (
     <div className={`font-bold ${sizeClasses[size]} ${colorClasses[color]} flex items-center`}>
