@@ -1,3 +1,4 @@
+import { FaEnvelope, FaLock } from "react-icons/fa"; // Add this import at the top
 import Image from "next/image";
 
 export default function LoginPage() {
@@ -29,14 +30,14 @@ export default function LoginPage() {
             <div>
               <label className="font-semibold text-sm mb-1 block" htmlFor="email">Gmail</label>
               <div className="flex items-center border border-gray-400 rounded-lg px-3 py-2 bg-gray-100">
-                <span className="material-icons text-gray-500 mr-2">mail</span>
+                <FaEnvelope className="text-gray-500 mr-2" /> {/* Changed to icon */}
                 <input id="email" type="email" placeholder="Please Enter your Gmail Address" className="bg-transparent outline-none flex-1 text-gray-700 placeholder-gray-400" />
               </div>
             </div>
             <div>
               <label className="font-semibold text-sm mb-1 block" htmlFor="password">Password</label>
               <div className="flex items-center border border-gray-400 rounded-lg px-3 py-2 bg-gray-100">
-                <span className="material-icons text-gray-500 mr-2">lock</span>
+                <FaLock className="text-gray-500 mr-2" /> {/* Changed to icon */}
                 <input id="password" type="password" placeholder="Please Enter your password" className="bg-transparent outline-none flex-1 text-gray-700 placeholder-gray-400" />
               </div>
             </div>
