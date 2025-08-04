@@ -86,7 +86,7 @@ export default function LoginScreen() {
         {/* Sign Up Link */}
         <View style={styles.signupContainer}>
           <ThemedText>Don't have an account yet? </ThemedText>
-          <Link href="/signup">
+          <Link href="/register">
             <ThemedText style={[styles.signupLink, { color: tintColor }]}>Sign Up</ThemedText>
           </Link>
         </View>
