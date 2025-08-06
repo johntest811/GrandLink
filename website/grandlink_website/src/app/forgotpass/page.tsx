@@ -1,7 +1,7 @@
 import { FaEnvelope, FaLock } from "react-icons/fa"; // Add this import at the top
 import Image from "next/image";
 
-export default function LoginPage() {
+export default function ForgotPassword() {
   return (
     <div className="relative min-h-screen font-sans bg-cover bg-center flex flex-col" style={{ backgroundImage: 'url("/background-login.jpg")' }}>
       {/* Header */}
