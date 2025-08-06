@@ -115,7 +115,7 @@ export default function RegisterPage() {
           </button>
           <div className="text-xs text-center mt-4 text-gray-600">
             Already have an account?{" "}
-            <a href="/" className="text-blue-600 hover:underline">
+            <a href="login" className="text-blue-600 hover:underline">
               Login
             </a>
           </div>
