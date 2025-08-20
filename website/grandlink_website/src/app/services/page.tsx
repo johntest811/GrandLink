@@ -1,74 +1,84 @@
-'use client';
+"use client";
 
-import Image from 'next/image';
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
+import Footer from "@/components/Footer";
+import { useState } from "react";
+import { motion } from "framer-motion";
+import {
+  FaCogs,
+  FaColumns,
+  FaWindowMaximize,
+  FaThLarge,
+  FaWindowRestore,
+  FaGripHorizontal,
+  FaBuilding,
+  FaThList,
+  FaDoorOpen,
+  FaArrowsAltH,
+  FaWarehouse,
+  FaBorderAll,
+} from "react-icons/fa";
 
-const services = [
+const SERVICES = [
   {
-    title: 'Heavy Duty',
-    icon: '/icons/heavy-duty.png',
-    description: 'Strong and durable aluminum systems built for tough environments.',
+    icon: <FaCogs size={36} />,
+    label: "Heavy Duty",
+    info: "Heavy-duty aluminum and glass solutions for robust applications.",
   },
   {
-    title: 'Sliding',
-    icon: '/icons/sliding.png',
-    description: 'Smooth-sliding windows and doors for modern, space-saving solutions.',
+    icon: <FaColumns size={36} />,
+    label: "Sliding",
+    info: "Smooth and space-saving sliding window and door systems.",
   },
   {
-    title: 'Awning',
-    icon: '/icons/awning.png',
-    description: 'Hinged at the top to allow ventilation and protection from rain.',
+    icon: <FaWindowMaximize size={36} />,
+    label: "Awning",
+    info: "Awning windows for ventilation and modern style.",
   },
   {
-    title: 'Casement',
-    icon: '/icons/casement.png',
-    description: 'Side-hinged windows offering unobstructed views and airflow.',
+    icon: <FaThLarge size={36} />,
+    label: "Casement",
+    info: "Casement windows for classic looks and easy operation.",
   },
   {
-    title: 'Top Hung',
-    icon: '/icons/top-hung.png',
-    description: 'Windows hinged at the top, ideal for compact and secure openings.',
+    icon: <FaWindowRestore size={36} />,
+    label: "Top Hung",
+    info: "Top hung windows for versatile airflow and design.",
   },
   {
-    title: 'Bi-folding',
-    icon: '/icons/bifolding.png',
-    description: 'Space-efficient, elegant doors folding to open large areas.',
+    icon: <FaGripHorizontal size={36} />,
+    label: "Bi-folding",
+    info: "Bi-folding doors for wide openings and seamless transitions.",
   },
   {
-    title: 'Facade',
-    icon: '/icons/facade.png',
-    description: 'Custom aluminum-glass facades that add style and performance.',
+    icon: <FaBuilding size={36} />,
+    label: "Facade",
+    info: "Modern glass facades for commercial and residential buildings.",
   },
   {
-    title: 'Curtain Wall',
-    icon: '/icons/curtain-wall.png',
-    description: 'Non-structural glass walls for contemporary building exteriors.',
+    icon: <FaThList size={36} />,
+    label: "Curtain Wall",
+    info: "Curtain wall systems for sleek, expansive glass exteriors.",
   },
   {
-    title: 'Canopy',
-    icon: '/icons/canopy.png',
-    description: 'Protective glass/aluminum canopies for walkways and entrances.',
+    icon: <FaDoorOpen size={36} />,
+    label: "Canopy",
+    info: "Stylish and functional canopies for entrances and walkways.",
   },
   {
-    title: 'Glass Railing',
-    icon: '/icons/glass-railing.png',
-    description: 'Modern glass railings that combine safety and transparency.',
+    icon: <FaArrowsAltH size={36} />,
+    label: "Glass Railing",
+    info: "Glass railings for safety and unobstructed views.",
   },
   {
-    title: 'Shower Enclosure',
-    icon: '/icons/shower.png',
-    description: 'Sleek, watertight glass enclosures for modern bathrooms.',
+    icon: <FaWarehouse size={36} />,
+    label: "Shower Enclosure",
+    info: "Custom glass shower enclosures for modern bathrooms.",
   },
   {
-    title: 'Glass Partition',
-    icon: '/icons/glass-partition.png',
-    description: 'Interior glass dividers to separate spaces with elegance.',
-  },
-  {
-    title: 'Custom Design',
-    icon: '/icons/custom.png',
-    description: 'Tailored solutions to meet your unique space and design needs.',
+    icon: <FaBorderAll size={36} />,
+    label: "Glass Partition",
+    info: "Glass partitions for open, light-filled interiors.",
   },
 ];
 
@@ -76,36 +86,106 @@ export default function ServicesPage() {
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <h1 className="text-4xl font-bold text-center mb-4">Our Services</h1>
-      <p className="text-center text-lg text-gray-700 max-w-2xl mx-auto mb-10">
-        We offer a comprehensive range of services tailored to meet the needs of both residential and commercial clients. From precision-crafted aluminum windows and doors to custom glass installations, our expertise spans across all stages of design, fabrication, and installation.
-      </p>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        {services.map((service, index) => (
-          <motion.div
-            key={index}
-            onClick={() => setFlippedIndex(index === flippedIndex ? null : index)}
-            className="w-full h-48 cursor-pointer perspective"
-          >
-            <motion.div
-              animate={{ rotateY: flippedIndex === index ? 180 : 0 }}
-              transition={{ duration: 0.6 }}
-              className="relative w-full h-full transform-style-preserve-3d"
-            >
-              {/* Front */}
-              <div className="absolute inset-0 bg-white shadow-md rounded-2xl flex flex-col items-center justify-center backface-hidden p-4">
-                <Image src={service.icon} alt={service.title} width={48} height={48} />
-                <p className="mt-4 text-lg font-medium text-center">{service.title}</p>
-              </div>
-              {/* Back */}
-              <div className="absolute inset-0 bg-gray-100 shadow-md rounded-2xl flex items-center justify-center backface-hidden transform rotateY-180 p-4">
-                <p className="text-sm text-center text-gray-800">{service.description}</p>
-              </div>
-            </motion.div>
-          </motion.div>
-        ))}
-      </div>
+    <div className="min-h-screen flex flex-col">
+      <TopNavBarLoggedIn />
+      <main className="flex-1 bg-white">
+        <div className="w-full">
+          <img
+            src="/services-hero.jpg"
+            alt="Services Hero"
+            className="w-full h-64 object-cover"
+          />
+        </div>
+        <section className="max-w-3xl mx-auto px-4 py-8 text-center">
+          <h1 className="text-2xl md:text-3xl font-bold mb-4 border-b-2 border-black inline-block pb-1">
+            Our Services
+          </h1>
+          <p className="text-gray-700 mt-4 mb-8 underline underline-offset-2 decoration-[#232d3b]">
+            We offer a comprehensive range of services tailored to meet the needs of
+            both residential and commercial clients. From precision-crafted aluminum
+            windows and doors to custom glass installations, our expertise spans
+            across all facets of design, fabrication, and installation. Explore our
+            full list of services below and discover how we can help transform your
+            space with top-tier craftsmanship and innovative solutions built for
+            style, durability, and performance.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            {SERVICES.map((service, idx) => (
+              <ServiceCard
+                key={service.label}
+                icon={service.icon}
+                label={service.label}
+                info={service.info}
+                flipped={flippedIndex === idx}
+                onClick={() =>
+                  setFlippedIndex(flippedIndex === idx ? null : idx)
+                }
+              />
+            ))}
+          </div>
+          <div className="flex flex-col items-center mt-6">
+            <div className="bg-[#232d3b] text-white rounded-full w-16 h-16 flex items-center justify-center mb-2">
+              <FaCogs size={32} />
+            </div>
+            <span className="font-semibold text-[#232d3b]">Custom Design</span>
+          </div>
+        </section>
+      </main>
+      <Footer />
+    </div>
+  );
+}
+
+function ServiceCard({
+  icon,
+  label,
+  info,
+  flipped,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  info: string;
+  flipped: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div className="perspective" onClick={onClick}>
+      <motion.div
+        className="relative w-full h-32 cursor-pointer"
+        style={{ perspective: 1000 }}
+        animate={{ rotateY: flipped ? 180 : 0 }}
+        transition={{ duration: 0.5 }}
+      >
+        {/* Front */}
+        <div
+          className={`absolute inset-0 flex flex-col items-center justify-center bg-[#232d3b] text-white rounded shadow-lg backface-hidden`}
+        >
+          {icon}
+          <span className="mt-2 font-semibold">{label}</span>
+        </div>
+        {/* Back */}
+        <div
+          className={`absolute inset-0 flex flex-col items-center justify-center bg-white text-[#232d3b] rounded shadow-lg backface-hidden`}
+          style={{
+            transform: "rotateY(180deg)",
+          }}
+        >
+          <span className="font-semibold mb-2">{label}</span>
+          <p className="text-xs mb-3 px-2 text-center">{info}</p>
+          <button className="bg-[#8B1C1C] text-white px-4 py-1 rounded font-semibold hover:bg-[#a83232] transition text-xs">
+            Learn More
+          </button>
+        </div>
+      </motion.div>
+      <style jsx>{`
+        .perspective {
+          perspective: 1000px;
+        }
+        .backface-hidden {
+          backface-visibility: hidden;
+        }
+      `}</style>
     </div>
   );
 }
