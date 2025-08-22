@@ -118,8 +118,8 @@ export default function Footer() {
       <div className="bg-[#232d3b] py-4 px-4 flex flex-col md:flex-row items-center justify-between">
         <div className="flex-1 flex justify-center">
           <div className="flex items-center gap-6">
-            <FaFacebookF className="text-white text-2xl bg-[#4267B2] rounded p-1 w-12 h-12 flex items-center justify-center" />
-            <span className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white">
+            <FaFacebookF className="text-white text-2xl bg-[#4267B2] rounded p-1 w-8 h-8 flex items-center justify-center" />
+            <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-white">
               <FiPhone className="text-[#232d3b] text-2xl" />
             </span>
             <span className="text-white text-lg">

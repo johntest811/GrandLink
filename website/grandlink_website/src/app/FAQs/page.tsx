@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
+import Footer from "@/components/Footer";
 
 export default function FAQsPage() {
   const [activeCategory, setActiveCategory] = useState(0);
@@ -120,73 +122,77 @@ export default function FAQsPage() {
   ];
 
   return (
-    <main className="bg-white">
-      {/* Hero Section */}
-      <section
-        className="relative h-72 flex items-center justify-center text-center"
-        style={{
-          backgroundImage: "url('/images/.jpg')",
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-        }}
-      >
-        <div className="bg-white bg-opacity-90 px-8 py-4 rounded-md shadow-md">
-          <h1 className="text-3xl font-bold">FAQs</h1>
-          <p className="text-gray-600">
-            Got questions about Grand East’s services? Find quick answers to
-            some of the most common inquiries we receive.
-          </p>
-        </div>
-      </section>
-
-      {/* FAQs Section */}
-      <section className="bg-[#0a223d] py-12">
-        <div className="bg-white max-w-3xl mx-auto p-8 shadow-lg rounded-md">
-          <h2 className="text-2xl font-bold text-center mb-8">
-            Frequently Asked Questions
-          </h2>
-
-          {/* Tabs */}
-          <div className="flex flex-wrap gap-4 justify-center mb-8 text-sm font-medium">
-            {faqData.map((cat, idx) => (
-              <button
-                key={idx}
-                onClick={() => {
-                  setActiveCategory(idx);
-                  setOpenIndex(null);
-                }}
-                className={`${
-                  activeCategory === idx
-                    ? "text-red-600 border-b-2 border-red-600"
-                    : "text-gray-600"
-                } hover:text-red-600 transition`}
-              >
-                {cat.category}
-              </button>
-            ))}
+    <div className="min-h-screen flex flex-col">
+      <TopNavBarLoggedIn />
+      <main className="flex-1 bg-white">
+        {/* Hero Section */}
+        <section
+          className="relative h-72 flex items-center justify-center text-center"
+          style={{
+            backgroundImage: "url('/images/.jpg')",
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        >
+          <div className="bg-white bg-opacity-90 px-8 py-4 rounded-md shadow-md">
+            <h1 className="text-3xl font-bold">FAQs</h1>
+            <p className="text-gray-600">
+              Got questions about Grand East’s services? Find quick answers to
+              some of the most common inquiries we receive.
+            </p>
           </div>
+        </section>
 
-          {/* Accordion */}
-          <div className="space-y-4">
-            {faqData[activeCategory].questions.map((faq, idx) => (
-              <div key={idx} className="border-b pb-2">
+        {/* FAQs Section */}
+        <section className="bg-[#0a223d] py-12">
+          <div className="bg-white max-w-3xl mx-auto p-8 shadow-lg rounded-md">
+            <h2 className="text-2xl font-bold text-center mb-8">
+              Frequently Asked Questions
+            </h2>
+
+            {/* Tabs */}
+            <div className="flex flex-wrap gap-4 justify-center mb-8 text-sm font-medium">
+              {faqData.map((cat, idx) => (
                 <button
-                  className="w-full text-left flex justify-between items-center font-bold text-gray-800"
-                  onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
+                  key={idx}
+                  onClick={() => {
+                    setActiveCategory(idx);
+                    setOpenIndex(null);
+                  }}
+                  className={`${
+                    activeCategory === idx
+                      ? "text-red-600 border-b-2 border-red-600"
+                      : "text-gray-600"
+                  } hover:text-red-600 transition`}
                 >
-                  {faq.question}
-                  <span className="text-red-600">
-                    {openIndex === idx ? "−" : "+"}
-                  </span>
+                  {cat.category}
                 </button>
-                {openIndex === idx && (
-                  <p className="mt-2 text-gray-600 text-sm">{faq.answer}</p>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
+
+            {/* Accordion */}
+            <div className="space-y-4">
+              {faqData[activeCategory].questions.map((faq, idx) => (
+                <div key={idx} className="border-b pb-2">
+                  <button
+                    className="w-full text-left flex justify-between items-center font-bold text-gray-800"
+                    onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
+                  >
+                    {faq.question}
+                    <span className="text-red-600">
+                      {openIndex === idx ? "−" : "+"}
+                    </span>
+                  </button>
+                  {openIndex === idx && (
+                    <p className="mt-2 text-gray-600 text-sm">{faq.answer}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
-    </main>
+        </section>
+      </main>
+      <Footer />
+    </div>
   );
 }

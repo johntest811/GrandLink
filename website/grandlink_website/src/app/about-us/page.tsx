@@ -73,6 +73,24 @@ export default function AboutUsPage() {
             </p>
           </div>
         </section>
+
+        {/* Company Brochure Section */}
+        <section className="w-full flex justify-center mt-8">
+          <div className="bg-[#2c3748] w-[90%] flex flex-col md:flex-row items-center justify-between px-8 py-10 rounded">
+            <h2 className="text-white text-2xl md:text-3xl font-bold mb-6 md:mb-0 max-w-xl">
+              Discover Grand East's top-tier aluminum and glass solutions — check
+              out our brochure for more details.
+            </h2>
+            <a
+              href="/brochure.pdf"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-[#8B1C1C] text-white font-bold px-10 py-5 rounded hover:bg-[#a83232] transition text-center"
+            >
+              COMPANY BROCHURE
+            </a>
+          </div>
+        </section>
       </main>
       <Footer />
     </div>
