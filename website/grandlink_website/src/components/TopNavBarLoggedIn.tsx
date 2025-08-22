@@ -99,7 +99,7 @@ export default function TopNavBarLoggedIn() {
             onMouseLeave={() => setHoveredDropdown(null)}
           >
             <Link
-              href="/products"
+              href="/Product"
               className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
             >
               Products <FaChevronDown className="text-xs mt-1" />

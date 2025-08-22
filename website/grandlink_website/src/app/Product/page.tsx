@@ -4,6 +4,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
+import Footer from "@/components/Footer";
 
 export default function ProductsPage() {
   // Sample products with slug for details page
@@ -36,47 +38,51 @@ export default function ProductsPage() {
       : products.filter((p) => p.category === selectedCategory);
 
   return (
-    <main className="bg-white p-6">
-      {/* Category Tabs */}
-      <section className="py-6 border-b">
-        <div className="flex flex-wrap justify-center gap-4 text-sm font-medium">
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-4 py-2 rounded transition ${
-                selectedCategory === cat
-                  ? "text-red-600 border-b-2 border-red-600"
-                  : "text-gray-700 hover:text-red-600"
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-      </section>
+    <div className="min-h-screen flex flex-col">
+      <TopNavBarLoggedIn />
+      <main className="flex-1 bg-white">
+        {/* Category Tabs */}
+        <section className="py-6 border-b">
+          <div className="flex flex-wrap justify-center gap-4 text-sm font-medium">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-4 py-2 rounded transition ${
+                  selectedCategory === cat
+                    ? "text-red-600 border-b-2 border-red-600"
+                    : "text-gray-700 hover:text-red-600"
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        </section>
 
-      {/* Product Grid */}
-      <section className="py-10 max-w-6xl mx-auto px-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
-          {filteredProducts.map((prod) => (
-            <Link
-              key={prod.id}
-              href={`/products/${prod.slug}`} // Goes to product details
-              className="border p-2 rounded hover:shadow-lg transition block"
-            >
-              <Image
-                src={prod.image}
-                alt={prod.name}
-                width={400}
-                height={300}
-                className="w-full h-40 object-cover rounded"
-              />
-              <p className="mt-2 text-center text-sm font-medium">{prod.name}</p>
-            </Link>
-          ))}
-        </div>
-      </section>
-    </main>
+        {/* Product Grid */}
+        <section className="py-10 max-w-6xl mx-auto px-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
+            {filteredProducts.map((prod) => (
+              <Link
+                key={prod.id}
+                href={`/products/${prod.slug}`} // Goes to product details
+                className="border p-2 rounded hover:shadow-lg transition block"
+              >
+                <Image
+                  src={prod.image}
+                  alt={prod.name}
+                  width={400}
+                  height={300}
+                  className="w-full h-40 object-cover rounded"
+                />
+                <p className="mt-2 text-center text-sm font-medium">{prod.name}</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      </main>
+      <Footer />
+    </div>
   );
 }
