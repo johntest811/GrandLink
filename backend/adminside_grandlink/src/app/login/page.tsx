@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Logo from '../components/Logo';
 
 export default function Login() {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -15,31 +15,23 @@ export default function Login() {
     e.preventDefault();
     setError('');
     setIsLoading(true);
-    
-    // Basic validation
-    if (!email || !password) {
+
+    if (!username || !password) {
       setError('Please fill in all fields');
       setIsLoading(false);
       return;
     }
-    
-    // In a real application, you would validate credentials against your backend
-    // For now, we'll just redirect to the dashboard
+
     try {
-      // Simulate API call delay
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Mock authentication - replace with actual API call
-      if (email === 'Usename' && password === 'admin123') {
-        // Successful login
+      if (username === 'admin' && password === 'admin123') {
         router.push('/dashboard');
       } else {
-        setError('Invalid email or password');
+        setError('Invalid username or password');
         setIsLoading(false);
       }
     } catch (err) {
       setError('An error occurred during login');
-      console.error(err);
       setIsLoading(false);
     }
   };
@@ -50,9 +42,9 @@ export default function Login() {
         <div className="flex justify-center mb-8">
           <Logo size="large" />
         </div>
-        
+
         <h1 className="text-2xl font-bold text-center text-gray-800 mb-6">Admin Login</h1>
-        
+
         {error && (
           <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded">
             <div className="flex">
@@ -67,23 +59,23 @@ export default function Login() {
             </div>
           </div>
         )}
-        
+
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-              User
+            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+              Username
             </label>
             <input
-              type="email"
-              id="email"
-              className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              type="text"
+              id="username"
+              className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-black"
               placeholder="Username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               required
             />
           </div>
-          
+
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
               Password
@@ -91,7 +83,7 @@ export default function Login() {
             <input
               type="password"
               id="password"
-              className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-black"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -99,26 +91,6 @@ export default function Login() {
             />
           </div>
 
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <input
-                id="remember-me"
-                name="remember-me"
-                type="checkbox"
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
-                Remember me
-              </label>
-            </div>
-
-            <div className="text-sm">
-              <a href="#" className="font-medium text-blue-600 hover:text-blue-500">
-                Forgot password?
-              </a>
-            </div>
-          </div>
-          
           <div>
             <button
               type="submit"
@@ -149,7 +121,7 @@ export default function Login() {
           </div>
         </div>
       </div>
-      
+
       <p className="mt-8 text-center text-sm text-gray-600">
         &copy; {new Date().getFullYear()} GrandLink Glass and Aluminium. All rights reserved.
       </p>
