@@ -12,4 +12,7 @@ Packages needs to Install
 **FOR REACT.JS**
 To run react.js
 - npm start
-- make sure to have installed 
+- make sure to have installed Expo Go
+
+To run in a Virtual environment
+- Download Android studio and go to (Go to 3 dots abovr> > > >)
