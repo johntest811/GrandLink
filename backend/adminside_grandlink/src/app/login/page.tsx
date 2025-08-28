@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { supabase } from '../Clients/Supabase/SupabaseClients';
 import Logo from '../components/Logo';
 
 export default function Login() {
@@ -23,11 +24,22 @@ export default function Login() {
     }
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      if (username === 'admin' && password === 'admin123') {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: username, // or use email field
+        password,
+      });
+
+      if (error) {
+        setError(error.message);
+        setIsLoading(false);
+        return;
+      }
+
+      // Optionally check if user is admin (e.g., user_metadata.role === 'admin')
+      if (data.user && data.user.user_metadata?.role === 'admin') {
         router.push('/dashboard');
       } else {
-        setError('Invalid username or password');
+        setError('You do not have admin access');
         setIsLoading(false);
       }
     } catch (err) {

@@ -13,25 +13,55 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
-  // Navigation items
-  const navItems = [
-    { name: 'Dashboard', path: '/dashboard', icon: '📊' },
-    { name: 'Users', path: '/dashboard/users', icon: '👥' },
-    { name: 'Products', path: '/dashboard/products', icon: '📦' },
-    { name: 'Orders', path: '/dashboard/orders', icon: '🛒' },
-    { name: 'Settings', path: '/dashboard/settings', icon: '⚙️' },
-  ];
+  // Helper for active nav item
+  const isActive = (path: string) => pathname === path;
 
-  // Check if a nav item is active
-  const isActive = (path: string) => {
-    return pathname === path;
-  };
+  // Dropdown state
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+
+  // Sidebar navigation structure
+  const navStructure = [
+    { name: 'Dashboard', path: '/dashboard', icon: '📊' },
+    { name: 'Announcement', path: '/dashboard/announcement', icon: '📢' },
+    {
+      name: 'Accounts',
+      icon: '👤',
+      dropdown: [
+        { name: 'User Accounts', path: '/dashboard/accounts/user-accounts' },
+        { name: 'Employee Account', path: '/dashboard/accounts/employee-account' },
+      ],
+    },
+    { name: 'Reports', path: '/dashboard/reports', icon: '📑' },
+    {
+      name: 'Inventory',
+      icon: '📦',
+      dropdown: [
+        { name: 'Update Products', path: '/dashboard/inventory/update-products' },
+        { name: 'Add Products', path: '/dashboard/inventory/add-products' },
+        { name: 'Inventory', path: '/dashboard/inventory' },
+      ],
+    },
+    { name: 'Employee Task', path: '/dashboard/employee-task', icon: '📝' },
+    { name: 'Orders', path: '/dashboard/orders', icon: '🛒' },
+    { name: 'Order Management', path: '/dashboard/order-management', icon: '📋' },
+    { name: 'Calendar', path: '/dashboard/calendar', icon: '📅' },
+    { name: 'Content Management', path: '/dashboard/content-management', icon: '🗂️' },
+    { name: 'Predictive', path: '/dashboard/predictive', icon: '🔮' },
+    {
+      name: 'Settings',
+      icon: '⚙️',
+      dropdown: [
+        { name: 'Settings', path: '/dashboard/settings' },
+        { name: 'Audit', path: '/dashboard/settings/audit' },
+      ],
+    },
+  ];
 
   return (
     <div className="flex min-h-screen bg-gray-50">
       {/* Mobile sidebar backdrop */}
       {isMobileSidebarOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-gray-600 bg-opacity-75 z-20 lg:hidden"
           onClick={() => setIsMobileSidebarOpen(false)}
         />
@@ -55,21 +85,56 @@ export default function DashboardLayout({
         </div>
         <div className="p-4">
           <nav className="space-y-1">
-            {navItems.map((item) => (
-              <Link
-                key={item.path}
-                href={item.path}
-                className={`
-                  flex items-center px-4 py-3 text-sm font-medium rounded-md transition-colors
-                  ${isActive(item.path) 
-                    ? 'bg-gray-900 text-white' 
-                    : 'text-gray-300 hover:bg-gray-700 hover:text-white'}
-                `}
-              >
-                <span className="mr-3">{item.icon}</span>
-                {item.name}
-              </Link>
-            ))}
+            {navStructure.map((item) =>
+              item.dropdown ? (
+                <div key={item.name} className="mb-2">
+                  <button
+                    type="button"
+                    className={`
+                      flex items-center w-full px-4 py-3 text-sm font-medium rounded-md transition-colors
+                      ${openDropdown === item.name ? 'bg-gray-900 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'}
+                    `}
+                    onClick={() => setOpenDropdown(openDropdown === item.name ? null : item.name)}
+                  >
+                    <span className="mr-3">{item.icon}</span>
+                    {item.name}
+                    <span className="ml-auto">{openDropdown === item.name ? '▲' : '▼'}</span>
+                  </button>
+                  {openDropdown === item.name && (
+                    <div className="ml-8 mt-1 flex flex-col gap-1">
+                      {item.dropdown.map((sub) => (
+                        <Link
+                          key={sub.path}
+                          href={sub.path}
+                          className={`
+                            px-3 py-2 text-xs rounded-md transition-colors
+                            ${isActive(sub.path)
+                              ? 'bg-gray-900 text-white'
+                              : 'text-gray-300 hover:bg-gray-700 hover:text-white'}
+                          `}
+                        >
+                          {sub.name}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Link
+                  key={item.path}
+                  href={item.path}
+                  className={
+    `flex items-center px-4 py-3 text-sm font-medium rounded-md transition-colors
+    ${isActive(item.path)
+      ? 'bg-gray-900 text-white'
+      : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`
+  }
+                >
+                  <span className="mr-3">{item.icon}</span>
+                  {item.name}
+                </Link>
+              )
+            )}
           </nav>
         </div>
         <div className="absolute bottom-0 w-full p-4 border-t border-gray-700">
