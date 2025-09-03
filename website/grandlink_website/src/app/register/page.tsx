@@ -1,7 +1,7 @@
 "use client";
 import { FaEnvelope, FaLock, FaUser } from "react-icons/fa";
 import Image from "next/image";
-import { supabase } from "../Clients/Supabase/SupabaseClients";
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { useState } from "react";
 import TopNavBar from "@/components/TopNavBar";
 
@@ -12,20 +12,18 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [popup, setPopup] = useState<{ success: boolean; message: string } | null>(null);
 
-  async function handleRegister(e: React.FormEvent) {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPopup(null);
     if (password !== confirmPassword) {
       setPopup({ success: false, message: "Passwords do not match." });
       return;
     }
-    // Use Supabase Auth to sign up (sends confirmation email automatically)
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { name },
-        emailRedirectTo: "http://localhost:3000/register/confirm" // or your deployed URL
+        emailRedirectTo: "http://localhost:3000/register/success",
+        data: { name }
       }
     });
     if (error) {
@@ -34,21 +32,16 @@ export default function RegisterPage() {
       setPopup({
         success: true,
         message:
-          "Please confirm the creation of your account. Check your Gmail (" +
-          email +
-          ") for the confirmation link."
+          `Please confirm your account creation. A confirmation email has been sent to ${email}. 
+          You must click the "Register Account" link in your Gmail inbox to activate your account. 
+          If you do not confirm within a certain time, the link will expire and become invalid.`
       });
       setName("");
       setEmail("");
       setPassword("");
       setConfirmPassword("");
     }
-
-    if (!data.user?.confirmed_at) {
-      setPopup({ success: false, message: "Please confirm your Gmail address before logging in. Check your inbox for the confirmation email." });
-      return;
-    }
-  }
+  };
 
   return (
     <div
