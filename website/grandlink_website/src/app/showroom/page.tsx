@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
+import Footer from "@/components/Footer";
 
 type Branch = {
   name: string;
@@ -88,50 +90,56 @@ export default function ShowroomPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-12">
-      <h2 className="text-center text-3xl font-extrabold leading-tight">
-        Visit us
-        <br />
-        <span className="inline-block mt-1">at our Showroom Locations</span>
-      </h2>
-      <div className="w-16 h-1 bg-red-600 mx-auto mt-3 mb-10 rounded-full" />
+    <div className="flex flex-col min-h-screen">
+      <TopNavBarLoggedIn />
+      <main className="flex-1">
+        <div className="max-w-7xl mx-auto px-6 py-12">
+          <h2 className="text-center text-3xl font-extrabold leading-tight">
+            Visit us
+            <br />
+            <span className="inline-block mt-1">at our Showroom Locations</span>
+          </h2>
+          <div className="w-16 h-1 bg-red-600 mx-auto mt-3 mb-10 rounded-full" />
 
-      {chunked.map((row, rowIdx) => (
-        <div key={rowIdx} className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start mb-10">
-          {row.map((b, i) => {
-            const id = `branch-${rowIdx}-${i}`;
-            const preview =
-              b.preview ?? (b.details.length > 110 ? b.details.slice(0, 110) + "…" : b.details);
-            const isOpen = openIndex === id;
+          {chunked.map((row, rowIdx) => (
+            <div key={rowIdx} className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start mb-10">
+              {row.map((b, i) => {
+                const id = `branch-${rowIdx}-${i}`;
+                const preview =
+                  b.preview ?? (b.details.length > 110 ? b.details.slice(0, 110) + "…" : b.details);
+                const isOpen = openIndex === id;
 
-            return (
-              <article
-                key={id}
-                className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden"
-              >
-                <img src={b.image} alt={b.name} className="w-full h-48 object-cover" />
-
-                <div className="p-4">
-                  <h3 className="text-center text-lg font-semibold">{b.name}</h3>
-
-                  <p className="mt-3 text-sm text-gray-700 min-h-[72px]">{preview}</p>
-
-                  <Expandable open={isOpen}>
-                    <p className="mt-2 text-sm text-gray-700">{b.details}</p>
-                  </Expandable>
-
-                  <button
-                    onClick={() => toggle(id)}
-                    className="mt-2 text-red-600 font-semibold text-sm hover:underline"
+                return (
+                  <article
+                    key={id}
+                    className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden"
                   >
-                    {isOpen ? "Show Less" : "Show More"}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
+                    <img src={b.image} alt={b.name} className="w-full h-48 object-cover" />
+
+                    <div className="p-4">
+                      <h3 className="text-center text-lg font-semibold">{b.name}</h3>
+
+                      <p className="mt-3 text-sm text-gray-700 min-h-[72px]">{preview}</p>
+
+                      <Expandable open={isOpen}>
+                        <p className="mt-2 text-sm text-gray-700">{b.details}</p>
+                      </Expandable>
+
+                      <button
+                        onClick={() => toggle(id)}
+                        className="mt-2 text-red-600 font-semibold text-sm hover:underline"
+                      >
+                        {isOpen ? "Show Less" : "Show More"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ))}
         </div>
-      ))}
+      </main>
+      <Footer />
     </div>
   );
 }

@@ -52,7 +52,7 @@ export default function TopNavBarLoggedIn() {
               >
                 {/* <Link href="/about-us" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">About Us</Link> */}
                 <Link href="/showroom" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Showroom</Link>
-                <Link href="/locations" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Locations</Link>
+                {/* <Link href="/locations" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Locations</Link> */}
               </div>
             )}
           </div>

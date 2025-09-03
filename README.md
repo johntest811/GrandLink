@@ -9,6 +9,12 @@ To run next.js properly
 - npm install embla-carousel-react
 - npm install react-icons
 
+**three.js**
+- npm install three
+- npm install three-stdlib
+- npm i --save-dev @types/three
+- npm install --save-dev @types/three
+
 **React Native.js**
 - npm install
 - npm install @react-navigation/native expo-font expo-router react-native-reanimated expo-status-bar
