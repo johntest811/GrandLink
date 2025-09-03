@@ -129,14 +129,14 @@ export default function FAQsPage() {
         <section
           className="relative h-72 flex items-center justify-center text-center"
           style={{
-            backgroundImage: "url('/images/.jpg')",
+            backgroundImage: "url('/faqs.avif')",
             backgroundSize: "cover",
             backgroundPosition: "center",
           }}
         >
-          <div className="bg-white bg-opacity-90 px-8 py-4 rounded-md shadow-md">
+          <div className="bg-white bg-opacity-90 px-8 py-4 rounded-md shadow-md text-black">
             <h1 className="text-3xl font-bold">FAQs</h1>
-            <p className="text-gray-600">
+            <p className="text-black-600">
               Got questions about Grand East’s services? Find quick answers to
               some of the most common inquiries we receive.
             </p>
@@ -146,7 +146,7 @@ export default function FAQsPage() {
         {/* FAQs Section */}
         <section className="bg-[#0a223d] py-12">
           <div className="bg-white max-w-3xl mx-auto p-8 shadow-lg rounded-md">
-            <h2 className="text-2xl font-bold text-center mb-8">
+            <h2 className="text-2xl font-bold text-center mb-8 text-black">
               Frequently Asked Questions
             </h2>
 

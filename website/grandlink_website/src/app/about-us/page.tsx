@@ -12,7 +12,7 @@ export default function AboutUsPage() {
         {/* Hero Section */}
         <div className="relative w-full h-56 md:h-64">
           <Image
-            src="/Ge Logo.avif"
+            src="/aboutus.avif"
             alt="About Us Hero"
             fill
             className="object-cover"

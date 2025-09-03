@@ -91,12 +91,12 @@ export default function ServicesPage() {
       <main className="flex-1 bg-white">
         <div className="w-full">
           <img
-            src="/services-hero.jpg"
-            alt="Services Hero"
+            src="/sevices.avif"
+            alt="services"
             className="w-full h-64 object-cover"
           />
         </div>
-        <section className="max-w-3xl mx-auto px-4 py-8 text-center">
+        <section className="max-w-3xl mx-auto px-4 py-8 text-center text-black">
           <h1 className="text-2xl md:text-3xl font-bold mb-4 border-b-2 border-black inline-block pb-1">
             Our Services
           </h1>
