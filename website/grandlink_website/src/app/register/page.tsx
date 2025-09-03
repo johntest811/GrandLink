@@ -10,32 +10,43 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [message, setMessage] = useState("");
+  const [popup, setPopup] = useState<{ success: boolean; message: string } | null>(null);
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
-    setMessage("");
+    setPopup(null);
     if (password !== confirmPassword) {
-      setMessage("Passwords do not match.");
+      setPopup({ success: false, message: "Passwords do not match." });
       return;
     }
-    // Use Supabase Auth to sign up
-    const { error } = await supabase.auth.signUp({
+    // Use Supabase Auth to sign up (sends confirmation email automatically)
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { name }
+        data: { name },
+        emailRedirectTo: "http://localhost:3000/register/confirm" // or your deployed URL
       }
     });
     if (error) {
-      setMessage("Registration failed: " + error.message);
+      setPopup({ success: false, message: "Registration failed: " + error.message });
     } else {
-      await supabase.from("users").insert([{ name, email, password }]);
-      setMessage("Registration successful! Please check your email to confirm your account.");
+      setPopup({
+        success: true,
+        message:
+          "Please confirm the creation of your account. Check your Gmail (" +
+          email +
+          ") for the confirmation link."
+      });
       setName("");
       setEmail("");
       setPassword("");
       setConfirmPassword("");
+    }
+
+    if (!data.user?.confirmed_at) {
+      setPopup({ success: false, message: "Please confirm your Gmail address before logging in. Check your inbox for the confirmation email." });
+      return;
     }
   }
 
@@ -48,7 +59,6 @@ export default function RegisterPage() {
       {/* Main Content */}
       <main className="flex-1 flex items-center justify-center">
         <div className="bg-white/95 rounded-xl shadow-lg px-8 py-10 w-full max-w-md flex flex-col items-center relative z-10 mt-12 mb-12">
-          {/* Added mt-12 for top space and mb-12 for bottom space */}
           <h1 className="text-3xl font-bold text-center mb-6 text-[#8B1C1C]">Register</h1>
           <form className="w-full flex flex-col gap-4" onSubmit={handleRegister}>
             <div>
@@ -125,9 +135,6 @@ export default function RegisterPage() {
             >
               REGISTER
             </button>
-            {message && (
-              <div className="text-center text-sm mt-2 text-red-600">{message}</div>
-            )}
           </form>
           <button className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition">
             <Image src="/google-icon.svg" alt="Google" width={20} height={20} />
@@ -139,10 +146,39 @@ export default function RegisterPage() {
               Login
             </a>
           </div>
+          {/* Popup for success or failure */}
+          {popup && (
+            <div className={`fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-40`}>
+              <div className={`bg-white rounded-lg shadow-lg p-6 min-w-[300px] text-center`}>
+                <h2 className={`text-xl font-bold mb-2 ${popup.success ? "text-green-600" : "text-red-600"}`}>
+                  {popup.success ? "Success!" : "Error"}
+                </h2>
+                <p className="mb-4">{popup.message}</p>
+                <button
+                  className="bg-[#232d3b] text-white px-4 py-2 rounded hover:bg-[#1a222e] transition"
+                  onClick={() => setPopup(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </main>
       {/* Optional: Overlay for background dimming */}
       <div className="absolute inset-0 bg-black/30 -z-0" aria-hidden="true"></div>
+    </div>
+  );
+}
+
+import { FaCheckCircle } from "react-icons/fa";
+
+export function RegisterConfirmPage() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-white">
+      <FaCheckCircle className="text-green-500 mb-4" size={80} />
+      <h2 className="text-2xl font-bold text-gray-800">You have successfully registered your account!</h2>
+      <p className="mt-2 text-gray-600">You may now log in.</p>
     </div>
   );
 }

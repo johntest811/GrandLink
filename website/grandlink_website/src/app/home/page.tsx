@@ -250,7 +250,7 @@ function ServicesSection() {
         </div>
         {/* Upper Right Quadrant - Services Text */}
         <div className="order-2 md:order-2 flex flex-col justify-center relative z-20 pl-4 pb-4">
-          <h2 className="text-3xl font-bold mb-4">
+          <h2 className="text-3xl font-bold mb-4 text-black">
             Service <br />
             We Offer
           </h2>
@@ -261,7 +261,7 @@ function ServicesSection() {
             designed to enhance both style and durability. Elevate your property
             with the perfect blend of innovation and elegance.
           </p>
-          <button className="border border-black px-4 py-2 font-medium hover:bg-gray-100 transition w-fit">
+          <button className="border border-black px-4 py-2 font-medium text-black hover:bg-gray-100 transition w-fit">
             Know More about Our Service
           </button>
         </div>
@@ -299,7 +299,7 @@ function ServicesSection() {
 
 function AboutSection() {
   return (
-    <section className="w-full bg-gray-200 py-8">
+    <section className="w-full bg-gray-200 py-8 text-black">
       <div className="max-w-screen-xl mx-auto">
         <h2 className="text-2xl font-bold mb-4">ABOUT GRAND EAST</h2>
         <p>We are specialists in quality aluminum and glass fabrication...</p>

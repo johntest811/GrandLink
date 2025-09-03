@@ -120,10 +120,13 @@ export default function TopNavBarLoggedIn() {
 
           <Link href="/FAQs" className="text-gray-700 hover:text-[#8B1C1C] font-medium">FAQs</Link>
         </nav>
+        
         <div className="flex items-center gap-4">
+          <Link href="/Inquire">
           <button className="bg-[#8B1C1C] text-white px-4 py-2 rounded font-semibold hover:bg-[#a83232] transition">
             INQUIRE NOW
           </button>
+          </Link>
           <FaUserCircle className="text-3xl text-gray-700" />
         </div>
       </header>

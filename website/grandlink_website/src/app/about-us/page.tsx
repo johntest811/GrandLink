@@ -12,7 +12,7 @@ export default function AboutUsPage() {
         {/* Hero Section */}
         <div className="relative w-full h-56 md:h-64">
           <Image
-            src="/services-hero.jpg"
+            src="/Ge Logo.avif"
             alt="About Us Hero"
             fill
             className="object-cover"
@@ -31,10 +31,10 @@ export default function AboutUsPage() {
         {/* Company Info */}
         <section className="bg-white px-4 py-8 flex flex-col items-center">
           <Image
-            src="/grand-east-logo.png"
+            src="/Ge Logo.avif"
             alt="Grand East Glass and Aluminum"
-            width={120}
-            height={60}
+            width={250}
+            height={150}
             className="mb-4"
           />
           <h3 className="text-xl font-bold mb-2 text-center text-black">
@@ -75,7 +75,7 @@ export default function AboutUsPage() {
         </section>
 
         {/* Company Brochure Section */}
-        <section className="w-full flex justify-center mt-8">
+        <section className="w-full flex justify-center mt-8 mb-10">
           <div className="bg-[#2c3748] w-[90%] flex flex-col md:flex-row items-center justify-between px-8 py-10 rounded">
             <h2 className="text-white text-2xl md:text-3xl font-bold mb-6 md:mb-0 max-w-xl">
               Discover Grand East's top-tier aluminum and glass solutions — check
