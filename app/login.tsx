@@ -75,7 +75,9 @@ export default function LoginScreen() {
 
               {/* Login Button */}
               <TouchableOpacity style={[styles.loginButton, { backgroundColor: '#000000ff' }]}>
+                 <Link href="/(tabs)/homepage">
                 <ThemedText style={styles.loginButtonText}>LOGIN</ThemedText>
+                </Link>
               </TouchableOpacity>
 
               {/* Google Sign In */}
@@ -203,6 +205,9 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  loginButtonPress: {
+    marginBottom: 10,
   },
   googleButton: {
     flexDirection: 'row',
