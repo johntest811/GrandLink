@@ -3,9 +3,29 @@ import { useRef, useEffect, useState } from "react";
 import * as THREE from "three";
 import { FBXLoader, OrbitControls } from "three-stdlib";
 
+const textureOptions = [
+  { name: "Default", url: null },
+  { name: "Wood", url: "/textures/wood.jpg" },
+  { name: "Metal", url: "/textures/metal.jpg" },
+  { name: "Glass", url: "/textures/glass.jpg" },
+];
+
+const colorOptions = [
+  { name: "Default", value: null },
+  { name: "White", value: "#ffffff" },
+  { name: "Black", value: "#222222" },
+  { name: "Red", value: "#c0392b" },
+  { name: "Blue", value: "#2980b9" },
+  { name: "Green", value: "#27ae60" },
+];
+
 export default function GlassDoorTestPage() {
   const mountRef = useRef<HTMLDivElement>(null);
   const [weather, setWeather] = useState<"sunny" | "rainy" | "windy" | "foggy">("sunny");
+  const [selectedTexture, setSelectedTexture] = useState(textureOptions[0]);
+  const [selectedColor, setSelectedColor] = useState(colorOptions[0]);
+  const modelRef = useRef<THREE.Group | null>(null);
+  const originalMaterialsRef = useRef<Map<number, THREE.Material>>(new Map());
 
   useEffect(() => {
     let renderer: THREE.WebGLRenderer;
@@ -56,7 +76,9 @@ export default function GlassDoorTestPage() {
               child.receiveShadow = true;
             }
           });
+          modelRef.current = object;
           scene.add(object);
+          applyTextureAndColor(object, selectedTexture, selectedColor);
         },
         undefined,
         (error) => {
@@ -217,6 +239,48 @@ export default function GlassDoorTestPage() {
     // eslint-disable-next-line
   }, [weather]);
 
+  // Apply texture and color when selection changes
+  useEffect(() => {
+    if (modelRef.current) {
+      applyTextureAndColor(modelRef.current, selectedTexture, selectedColor);
+    }
+  }, [selectedTexture, selectedColor]);
+
+  function applyTextureAndColor(
+    object: THREE.Object3D,
+    textureOpt: { name: string; url: string | null },
+    colorOpt: { name: string; value: string | null }
+  ) {
+    let texture: THREE.Texture | null = null;
+    if (textureOpt.url) {
+      const loader = new THREE.TextureLoader();
+      texture = loader.load(textureOpt.url);
+    }
+    object.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        if (colorOpt.value === null && !texture) {
+          // Use original material
+          // Do nothing, keep the original
+        } else if (texture) {
+          mesh.material = new THREE.MeshPhongMaterial({
+            map: texture,
+            color: colorOpt.value ?? 0xffffff,
+          });
+        } else {
+          mesh.material = new THREE.MeshPhongMaterial({
+            color: colorOpt.value ?? 0xffffff,
+          });
+        }
+        if (Array.isArray(mesh.material)) {
+          mesh.material.forEach((mat) => (mat.needsUpdate = true));
+        } else {
+          (mesh.material as THREE.Material).needsUpdate = true;
+        }
+      }
+    });
+  }
+
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col text-black">
       <div className="flex justify-center gap-4 py-4 bg-white shadow">
@@ -252,6 +316,42 @@ export default function GlassDoorTestPage() {
         >
           Foggy
         </button>
+      </div>
+      <div className="flex flex-wrap gap-4 justify-center py-4 bg-gray-50">
+        <div>
+          <label className="block font-semibold mb-1">Texture:</label>
+          <select
+            className="border rounded px-2 py-1"
+            value={selectedTexture.name}
+            onChange={(e) => {
+              const opt = textureOptions.find((t) => t.name === e.target.value);
+              if (opt) setSelectedTexture(opt);
+            }}
+          >
+            {textureOptions.map((t) => (
+              <option key={t.name} value={t.name}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block font-semibold mb-1">Color:</label>
+          <select
+            className="border rounded px-2 py-1"
+            value={selectedColor.name}
+            onChange={(e) => {
+              const opt = colorOptions.find((c) => c.name === e.target.value);
+              if (opt) setSelectedColor(opt);
+            }}
+          >
+            {colorOptions.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div ref={mountRef} className="flex-1" />
     </div>

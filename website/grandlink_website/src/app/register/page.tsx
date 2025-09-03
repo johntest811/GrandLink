@@ -1,5 +1,5 @@
 "use client";
-import { FaEnvelope, FaLock, FaUser } from "react-icons/fa";
+import { FaEnvelope, FaLock, FaUser, FaGoogle } from "react-icons/fa";
 import Image from "next/image";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { useState } from "react";
@@ -130,7 +130,7 @@ export default function RegisterPage() {
             </button>
           </form>
           <button className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition">
-            <Image src="/google-icon.svg" alt="Google" width={20} height={20} />
+            <FaGoogle className="text-[#4285F4] text-xl" />
             <span className="font-medium text-gray-700">Sign up with Google</span>
           </button>
           <div className="text-xs text-center mt-4 text-gray-600">

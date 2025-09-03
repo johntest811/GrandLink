@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FaEnvelope, FaLock } from "react-icons/fa";
+import { FaEnvelope, FaLock, FaGoogle } from "react-icons/fa";
 import Image from "next/image";
 import TopNavBar from "@/components/TopNavBar";
 import { useRouter } from "next/navigation";
@@ -104,7 +104,7 @@ export default function LoginPage() {
             )}
           </form>
           <button className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition">
-            <Image src="/google-icon.svg" alt="Google" width={20} height={20} />
+            <FaGoogle className="text-[#4285F4] text-xl" />
             <span className="font-medium text-gray-700">Sign in with Google</span>
           </button>
           <div className="text-xs text-center mt-4 text-gray-600">
