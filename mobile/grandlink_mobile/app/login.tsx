@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Image } from 'expo-image';
-import { StyleSheet, TextInput, TouchableOpacity, View, ScrollView } from 'react-native';
+import { StyleSheet, TextInput, TouchableOpacity, View, ScrollView, ImageBackground} from 'react-native';
 import { Link, Stack } from 'expo-router';
 
 import { ThemedText } from '@/components/ThemedText';
@@ -17,92 +17,106 @@ export default function LoginScreen() {
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-        <ThemedView style={styles.container}>
-      {/* Logo at the top */}
-      <View style={styles.logoContainer}>
-        <Image
-          source={require('@/assets/images/icon.png')}
-          style={styles.logo}
-          contentFit="contain"
-        />
-        <ThemedText type="title" style={styles.logoText}>GRAND EAST</ThemedText>
-        <ThemedText style={styles.logoSubtext}>GLASS AND ALUMINIUM</ThemedText>
-      </View>
+      <ImageBackground
+        source={require('@/assets/images/loginbg.png')} 
+        style={styles.background}
+        resizeMode="cover"
+      >
+        <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+          <ThemedView style={styles.container}>
 
-      {/* Login Card */}
-      <View style={styles.card}>
-        <ThemedText type="title" style={styles.loginTitle}>Login</ThemedText>
-        
-        {/* Email Input */}
-        <View style={styles.inputContainer}>
-          <ThemedText style={styles.inputLabel}>Gmail</ThemedText>
-          <View style={styles.inputWrapper}>
-            <TextInput
-              style={styles.input}
-              placeholder="Please Enter your Gmail Address"
-              placeholderTextColor="#999"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-        </View>
+            {/* Login Card */}
+            <View style={styles.card}>
+            {/* Logo at the top */}
+            <View style={styles.logoContainer}>
+              <Image
+                source={require('@/assets/images/GLLogo.png')}
+                style={styles.logo}
+                contentFit="contain"
+              />
+              <ThemedText type="title" style={styles.logoText}>GRAND EAST</ThemedText>
+              <ThemedText style={styles.logoSubtext}>GLASS AND ALUMINIUM</ThemedText>
+            </View>
+              <ThemedText type="title" style={styles.loginTitle}>Login</ThemedText>
+              
+              {/* Email Input */}
+              <View style={styles.inputContainer}>
+                <ThemedText style={styles.inputLabel}>Gmail</ThemedText>
+                <View style={styles.inputWrapper}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Please Enter your Gmail Address"
+                    placeholderTextColor="#696969ff"
+                    value={email}
+                    onChangeText={setEmail}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                  />
+                </View>
+              </View>
 
-        {/* Password Input */}
-        <View style={styles.inputContainer}>
-          <ThemedText style={styles.inputLabel}>Password</ThemedText>
-          <View style={styles.inputWrapper}>
-            <TextInput
-              style={styles.input}
-              placeholder="Please Enter your password"
-              placeholderTextColor="#999"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-          </View>
-          <TouchableOpacity style={styles.forgotPasswordContainer}>
-            <ThemedText style={[styles.forgotPassword, { color: tintColor }]}>Forgot Password</ThemedText>
-          </TouchableOpacity>
-        </View>
+              {/* Password Input */}
+              <View style={styles.inputContainer}>
+                <ThemedText style={styles.inputLabel}>Password</ThemedText>
+                <View style={styles.inputWrapper}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Please Enter your password"
+                    placeholderTextColor="#696969ff"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry
+                  />
+                </View>
+                <TouchableOpacity style={styles.forgotPasswordContainer}>
+                  <ThemedText style={[styles.forgotPassword]}>Forgot Password</ThemedText>
+                </TouchableOpacity>
+              </View>
 
-        {/* Login Button */}
-        <TouchableOpacity style={[styles.loginButton, { backgroundColor: '#333' }]}>
-          <ThemedText style={styles.loginButtonText}>LOGIN</ThemedText>
-        </TouchableOpacity>
+              {/* Login Button */}
+              <TouchableOpacity style={[styles.loginButton, { backgroundColor: '#000000ff' }]}>
+                 <Link href="/(tabs)/homepage">
+                <ThemedText style={styles.loginButtonText}>LOGIN</ThemedText>
+                </Link>
+              </TouchableOpacity>
 
-        {/* Google Sign In */}
-        <TouchableOpacity style={styles.googleButton}>
-          <Image
-            source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }}
-            style={styles.googleIcon}
-            contentFit="contain"
-          />
-          <ThemedText style={styles.googleButtonText}>Sign in with Google</ThemedText>
-        </TouchableOpacity>
+              {/* Google Sign In */}
+              <TouchableOpacity style={styles.googleButton}>
+                <Image
+                  source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }}
+                  style={styles.googleIcon}
+                  contentFit="contain"
+                />
+                <ThemedText style={styles.googleButtonText}>Sign in with Google</ThemedText>
+              </TouchableOpacity>
 
-        {/* Sign Up Link */}
-        <View style={styles.signupContainer}>
-          <ThemedText>Don't have an account yet? </ThemedText>
-          <Link href="/register">
-            <ThemedText style={[styles.signupLink, { color: tintColor }]}>Sign Up</ThemedText>
-          </Link>
-        </View>
-      </View>
-    </ThemedView>
-       </ScrollView>
+              {/* Sign Up Link */}
+              <View style={styles.signupContainer}>
+                <ThemedText style={[styles.signupText]}>Don't have an account yet?</ThemedText>
+                <Link href="/register">
+                  <ThemedText style={[styles.signupLink]}>Sign Up</ThemedText>
+                </Link>
+              </View>
+            </View>
+          </ThemedView>
+        </ScrollView>
+      </ImageBackground>
     </>
   );
 }
 
 const styles = StyleSheet.create({
+  background: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
   container: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+    backgroundColor: 'transparent', // Make container transparent
   },
   logoContainer: {
     alignItems: 'center',
@@ -116,16 +130,24 @@ const styles = StyleSheet.create({
   logoText: {
     fontSize: 24,
     fontWeight: 'bold',
+    color: '#803838ff', // White text for better contrast on background
+    textShadowColor: 'rgba(0, 0, 0, 0.75)', // Add text shadow for readability
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
   },
   logoSubtext: {
-    fontSize: 12,
+    fontSize: 14,
     textTransform: 'uppercase',
     letterSpacing: 1,
+    color: '#050505ff', // White text
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
   },
   card: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: 'white',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)', // Slightly transparent white
     borderRadius: 10,
     padding: 20,
     shadowColor: '#000',
@@ -137,7 +159,7 @@ const styles = StyleSheet.create({
   loginTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#8B0000', // Dark red color for "Login" text
+    color: '#8B0000',
     marginBottom: 20,
     textAlign: 'center',
   },
@@ -147,10 +169,11 @@ const styles = StyleSheet.create({
   inputLabel: {
     marginBottom: 5,
     fontWeight: '600',
+    color: '#080808ff',
   },
   inputWrapper: {
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#323232ff',
     borderRadius: 5,
     flexDirection: 'row',
     alignItems: 'center',
@@ -159,7 +182,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 10,
     paddingHorizontal: 15,
-    fontSize: 16,
+    fontSize: 13,
   },
   forgotPasswordContainer: {
     alignItems: 'flex-end',
@@ -167,9 +190,11 @@ const styles = StyleSheet.create({
   },
   forgotPassword: {
     fontSize: 14,
+    color: '#000000ff',
+    textDecorationLine: 'underline',
   },
   loginButton: {
-    backgroundColor: '#333',
+    backgroundColor: '#271414ff',
     borderRadius: 5,
     paddingVertical: 12,
     alignItems: 'center',
@@ -181,15 +206,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  loginButtonPress: {
+    marginBottom: 10,
+  },
   googleButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#000000ff',
     borderRadius: 5,
     paddingVertical: 10,
     marginBottom: 20,
+
   },
   googleIcon: {
     width: 20,
@@ -198,12 +227,20 @@ const styles = StyleSheet.create({
   },
   googleButtonText: {
     fontSize: 16,
+    color: '#000000ff',
   },
   signupContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
+    color: '#000000ff',
   },
   signupLink: {
     fontWeight: 'bold',
+    color: '#8f4545ff',
+  },
+  signupText: {
+    fontSize: 14,
+    color: '#000000ff',
+    marginRight: 8,
   },
 });
