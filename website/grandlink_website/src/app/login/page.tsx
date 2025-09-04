@@ -53,12 +53,21 @@ export default function LoginPage() {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: "http://localhost:3000/login/confirm", // or your deployed URL
+      },
+    });
+  };
+
   if (showSuccess) {
     return <LoadingSuccess />;
   }
 
   return (
-    <div className="relative min-h-screen font-sans bg-cover bg-center flex flex-col" style={{ backgroundImage: 'url("/background-login.jpg")' }}>
+    <div className="relative min-h-screen font-sans bg-cover bg-center flex flex-col" style={{ backgroundImage: 'url("/sevices.avif")' }}>
       <TopNavBar />
       {/* Main Content */}
       <main className="flex-1 flex items-center justify-center">
@@ -103,7 +112,11 @@ export default function LoginPage() {
               <div className="text-red-600 text-xs text-center mt-2">{error}</div>
             )}
           </form>
-          <button className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition">
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition"
+          >
             <FaGoogle className="text-[#4285F4] text-xl" />
             <span className="font-medium text-gray-700">Sign in with Google</span>
           </button>

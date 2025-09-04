@@ -46,7 +46,7 @@ export default function RegisterPage() {
   return (
     <div
       className="relative min-h-screen font-sans bg-cover bg-center flex flex-col"
-      style={{ backgroundImage: 'url("/background-login.jpg")' }}
+      style={{ backgroundImage: 'url("/sevices.avif")' }}
     >
       <TopNavBar />
       {/* Main Content */}

@@ -20,6 +20,9 @@ To run next.js properly
 - npm install @react-navigation/native expo-font expo-router react-native-reanimated expo-status-bar
 - npm install react-native-screens react-native-safe-area-context
 - npm install @react-navigation/native expo-router
+- npx expo install expo-av
+- npm install react-native-paper react-native-vector-icons
+- npm install @react-native-picker/picker
 
 **FOR REACT.JS**
 To run react.js
