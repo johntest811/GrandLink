@@ -57,7 +57,7 @@ export default function LoginPage() {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: "http://localhost:3000/login/confirm", // or your deployed URL
+        redirectTo: "http://localhost:3000/home", // or your deployed URL
       },
     });
   };

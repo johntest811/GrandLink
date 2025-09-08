@@ -27,7 +27,7 @@ export default function DashboardLayout({
       name: 'Accounts',
       icon: '👤',
       dropdown: [
-        { name: 'User Accounts', path: '/dashboard/accounts/user-accounts' },
+        { name: 'User Accounts', path: '/dashboard/user-accounts' },
         { name: 'Employee Account', path: '/dashboard/accounts/employee-account' },
       ],
     },

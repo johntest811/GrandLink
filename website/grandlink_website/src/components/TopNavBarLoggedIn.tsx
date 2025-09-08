@@ -5,8 +5,17 @@ import Image from "next/image";
 import { FaEnvelope, FaThumbsUp, FaPhone, FaUserCircle, FaChevronDown } from "react-icons/fa";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 
 export default function TopNavBarLoggedIn() {
+  const [user, setUser] = useState<any>(null);
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setUser(data?.user || null);
+    };
+    fetchUser();
+  }, []);
   const [hoveredDropdown, setHoveredDropdown] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -155,11 +164,28 @@ export default function TopNavBarLoggedIn() {
           </button>
           </Link>
           <div className="relative" ref={dropdownRef}>
-            <FaUserCircle
-              className="text-3xl text-gray-700 cursor-pointer hover:text-[#8B1C1C] transition"
+            <div
+              className="flex items-center gap-2 cursor-pointer group"
               onMouseEnter={() => setOpen(true)}
               onClick={() => setOpen((prev) => !prev)}
-            />
+            >
+              {user?.user_metadata?.avatar_url ? (
+                <Image
+                  src={user.user_metadata.avatar_url}
+                  alt="Profile"
+                  width={40}
+                  height={40}
+                  className="rounded-full border border-gray-300 group-hover:border-[#8B1C1C] transition"
+                />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-700 group-hover:text-[#8B1C1C] border border-gray-300 group-hover:border-[#8B1C1C] transition">
+                  {user?.email ? user.email[0].toUpperCase() : <FaUserCircle />}
+                </div>
+              )}
+              {user?.email && (
+                <span className="text-sm font-medium text-gray-700 group-hover:text-[#8B1C1C] transition">{user.email}</span>
+              )}
+            </div>
             {open && (
               <div
                 className="absolute right-0 mt-2 w-40 bg-white rounded shadow-lg border z-50"

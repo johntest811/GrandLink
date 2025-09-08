@@ -2,6 +2,11 @@
 **FOR NEXT.JS only**
 To run next.js properly
 - npm run dev
+- npm install next
+- mpm run audit
+
+**Next.js Admin**
+- npm install bcryptjs
 
 **Packages needs to Install Next.js**
 - npm install framer-motion

@@ -7,6 +7,15 @@ import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import TopNavBar from "@/components/TopNavBar";
 
 export default function ResetPasswordPage() {
+  // Google OAuth login
+  const handleGoogleLogin = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: "http://localhost:3000/home", // or your deployed URL
+      },
+    });
+  };
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -65,7 +74,11 @@ export default function ResetPasswordPage() {
             {error && <p className="mt-4 text-red-600 text-center">{error}</p>}
             {message && <p className="mt-4 text-green-600 text-center">{message}</p>}
           </form>
-          <button className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition">
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition"
+          >
             <FaGoogle className="text-[#4285F4] text-xl" />
             <span className="font-medium text-gray-700">Sign in with Google</span>
           </button>

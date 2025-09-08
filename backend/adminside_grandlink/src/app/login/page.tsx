@@ -23,27 +23,32 @@ export default function Login() {
       return;
     }
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: username, // or use email field
-        password,
-      });
+    // Query admins table for username
+    const { data, error } = await supabase
+      .from('admins')
+      .select('*')
+      .eq('username', username)
+      .single();
+    console.log('Supabase admin data:', data, error); // Debug log
 
-      if (error) {
-        setError(error.message);
-        setIsLoading(false);
-        return;
-      }
+    if (error || !data) {
+      setError('Invalid username or password');
+      setIsLoading(false);
+      return;
+    }
 
-      // Optionally check if user is admin (e.g., user_metadata.role === 'admin')
-      if (data.user && data.user.user_metadata?.role === 'admin') {
-        router.push('/dashboard');
-      } else {
-        setError('You do not have admin access');
-        setIsLoading(false);
-      }
-    } catch (err) {
-      setError('An error occurred during login');
+    // Compare password as plain text
+    if (password !== data.password_hash) {
+      setError('Invalid username or password');
+      setIsLoading(false);
+      return;
+    }
+
+    // Check role
+    if (data.role === 'admin' || data.role === 'manager' || data.role === 'superadmin') {
+      router.push('/dashboard');
+    } else {
+      setError('You do not have admin access');
       setIsLoading(false);
     }
   };

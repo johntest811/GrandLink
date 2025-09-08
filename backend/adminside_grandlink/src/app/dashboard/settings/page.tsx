@@ -3,6 +3,35 @@
 import React, { useState } from 'react';
 
 export default function SettingsPage() {
+  // Superadmin registration form state
+  const [newUsername, setNewUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState("admin");
+  const [regMessage, setRegMessage] = useState("");
+  const { supabase } = require("@/app/Clients/Supabase/SupabaseClients");
+
+  const handleSuperadminRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegMessage("");
+    if (!newUsername || !newPassword) {
+      setRegMessage("Username and password are required.");
+      return;
+    }
+    // Store password as plain text
+    const { error } = await supabase.from("admins").insert({
+      username: newUsername,
+      password_hash: newPassword,
+      role: newRole,
+    });
+    if (error) {
+      setRegMessage("Error: " + error.message);
+    } else {
+      setRegMessage("Admin account created successfully!");
+      setNewUsername("");
+      setNewPassword("");
+      setNewRole("admin");
+    }
+  };
   // State for form values
   const [generalSettings, setGeneralSettings] = useState({
     siteName: 'GrandLink Glass and Aluminium',
@@ -307,6 +336,32 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      </div>
+      {/* Superadmin Registration Form */}
+      <div className="bg-white shadow rounded-lg p-6 mt-8">
+        <h2 className="text-xl font-semibold mb-4">Create Admin/Manager Account</h2>
+        <form className="flex flex-col gap-4 w-80" onSubmit={handleSuperadminRegister}>
+          <input
+            type="text"
+            placeholder="Username"
+            value={newUsername}
+            onChange={e => setNewUsername(e.target.value)}
+            className="border px-3 py-2 rounded"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={newPassword}
+            onChange={e => setNewPassword(e.target.value)}
+            className="border px-3 py-2 rounded"
+          />
+          <select value={newRole} onChange={e => setNewRole(e.target.value)} className="border px-3 py-2 rounded">
+            <option value="admin">Admin</option>
+            <option value="manager">Manager</option>
+          </select>
+          <button type="submit" className="bg-[#232d3b] text-white py-2 rounded font-semibold">Create Account</button>
+          {regMessage && <div className="text-center text-red-600 mt-2">{regMessage}</div>}
+        </form>
       </div>
     </div>
   );

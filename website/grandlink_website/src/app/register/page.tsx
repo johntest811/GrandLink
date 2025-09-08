@@ -1,16 +1,25 @@
 "use client";
 import { FaEnvelope, FaLock, FaUser, FaGoogle } from "react-icons/fa";
-import Image from "next/image";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { useState } from "react";
 import TopNavBar from "@/components/TopNavBar";
+import { ReactNode } from "react";
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [popup, setPopup] = useState<{ success: boolean; message: string } | null>(null);
+  const [popup, setPopup] = useState<{ success: boolean; message: ReactNode } | null>(null);
+  // Google OAuth registration
+  const handleGoogleRegister = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: "http://localhost:3000/home", // or your deployed URL
+      },
+    });
+  };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,10 +40,18 @@ export default function RegisterPage() {
     } else {
       setPopup({
         success: true,
-        message:
-          `Please confirm your account creation. A confirmation email has been sent to ${email}. 
-          You must click the "Register Account" link in your Gmail inbox to activate your account. 
-          If you do not confirm within a certain time, the link will expire and become invalid.`
+        message: (
+          <div className="flex flex-col items-center justify-center">
+            <FaCheckCircle className="text-green-500 mb-4" size={80} />
+            <h2 className="text-2xl font-bold text-[#232d3b] text-center mb-2">Registration Confirmed!</h2>
+            <p className="text-gray-700 text-center text-base mb-2">
+              Please confirm your account creation.<br />
+              A confirmation email has been sent to <span className="font-semibold text-[#8B1C1C]">{email}</span>.<br />
+              You must click the <span className="font-semibold">"Register Account"</span> link in your Gmail inbox to activate your account.<br />
+              If you do not confirm within a certain time, the link will expire and become invalid.
+            </p>
+          </div>
+        )
       });
       setName("");
       setEmail("");
@@ -129,7 +146,11 @@ export default function RegisterPage() {
               REGISTER
             </button>
           </form>
-          <button className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition">
+          <button
+            type="button"
+            onClick={handleGoogleRegister}
+            className="flex items-center gap-2 bg-gray-100 border border-gray-300 rounded px-4 py-2 mt-4 w-full justify-center hover:bg-gray-200 transition"
+          >
             <FaGoogle className="text-[#4285F4] text-xl" />
             <span className="font-medium text-gray-700">Sign up with Google</span>
           </button>
@@ -142,13 +163,15 @@ export default function RegisterPage() {
           {/* Popup for success or failure */}
           {popup && (
             <div className={`fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-40`}>
-              <div className={`bg-white rounded-lg shadow-lg p-6 min-w-[300px] text-center`}>
-                <h2 className={`text-xl font-bold mb-2 ${popup.success ? "text-green-600" : "text-red-600"}`}>
-                  {popup.success ? "Success!" : "Error"}
-                </h2>
-                <p className="mb-4">{popup.message}</p>
+              <div className={`bg-white rounded-lg shadow-lg p-8 min-w-[350px] text-center flex flex-col items-center`}>
+                {popup.success ? popup.message : (
+                  <>
+                    <h2 className="text-xl font-bold mb-2 text-red-600">Error</h2>
+                    <p className="mb-4">{popup.message}</p>
+                  </>
+                )}
                 <button
-                  className="bg-[#232d3b] text-white px-4 py-2 rounded hover:bg-[#1a222e] transition"
+                  className="bg-[#232d3b] text-white px-4 py-2 rounded hover:bg-[#1a222e] transition mt-4"
                   onClick={() => setPopup(null)}
                 >
                   Close
