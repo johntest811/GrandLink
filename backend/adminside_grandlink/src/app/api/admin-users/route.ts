@@ -14,14 +14,11 @@ export async function GET() {
   return NextResponse.json({ users: data.users });
 }
 
-export async function POST(request: Request) {
-  const { email, password } = await request.json();
-  if (!email || !password) {
-    return NextResponse.json({ error: "Email and password required" }, { status: 400 });
-  }
-  const { data, error } = await supabase.auth.admin.createUser({ email, password });
+export async function DELETE(request: Request) {
+  const { userId } = await request.json();
+  const { error } = await supabase.auth.admin.deleteUser(userId);
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ user: data.user });
+  return NextResponse.json({ success: true });
 }

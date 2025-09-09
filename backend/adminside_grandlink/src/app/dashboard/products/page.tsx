@@ -223,6 +223,8 @@ export default function ProductsAdminPage() {
   return (
     <div className="min-h-screen bg-[#e7eaef] flex items-center justify-center">
       <div className="max-w-5xl w-full p-8 rounded-lg shadow-lg bg-white/80 flex flex-col space-y-6">
+        {/* Title */}
+        <h1 className="text-4xl font-bold text-[#505A89] mb-2 tracking-tight">ADD PRODUCTS</h1>
         {/* Popup */}
         {showPopup && (
           <div className="fixed top-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-6 py-3 rounded shadow-lg z-50 transition-opacity duration-300">
