@@ -1,142 +1,134 @@
-import React from 'react';
+"use client";
+import React, { useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+import { createClient } from '@supabase/supabase-js';
 
-export default function ProductsPage() {
-  // Mock product data - in a real application, this would come from an API
-  const products = [
-    { id: 1, name: 'Aluminum Window Frame', category: 'Frames', price: 149.99, stock: 25, status: 'In Stock' },
-    { id: 2, name: 'Tempered Glass Panel', category: 'Glass', price: 89.99, stock: 15, status: 'In Stock' },
-    { id: 3, name: 'Sliding Door System', category: 'Doors', price: 299.99, stock: 8, status: 'Low Stock' },
-    { id: 4, name: 'Shower Enclosure', category: 'Bathroom', price: 349.99, stock: 0, status: 'Out of Stock' },
-    { id: 5, name: 'Glass Balustrade', category: 'Railings', price: 199.99, stock: 12, status: 'In Stock' },
-  ];
+const supabase = createClient(
+  "https://gijnybivawnsilzqegik.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdpam55Yml2YXduc2lsenFlZ2lrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQyODAyMjUsImV4cCI6MjA2OTg1NjIyNX0.-gO8DcuK9-Q7nQmHRGnKJX3j8W0xHk925KlALBth1gU"
+);
+
+const uploadFile = async (file: File, folder: string) => {
+  const fileExt = file.name.split('.').pop();
+  const fileName = `${uuidv4()}.${fileExt}`;
+  const { data, error } = await supabase.storage
+    .from('products')
+    .upload(`${folder}/${fileName}`, file);
+
+  if (error) throw error;
+  return supabase.storage.from('products').getPublicUrl(`${folder}/${fileName}`).data.publicUrl;
+};
+
+export default function ProductsAdminPage() {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("");
+  const [images, setImages] = useState<File[]>([]);
+  const [fbxFile, setFbxFile] = useState<File | null>(null);
+  const [message, setMessage] = useState("");
+  const [carouselIndex, setCarouselIndex] = useState(0);
+
+  // Example: handle product creation (replace with your API logic)
+  const handleAddProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage("");
+    try {
+      // Upload images
+      const imageUrls = [];
+      for (const img of images) {
+        const url = await uploadFile(img, 'images');
+        imageUrls.push(url);
+      }
+
+      // Upload FBX file
+      let fbxUrl = "";
+      if (fbxFile) {
+        fbxUrl = await uploadFile(fbxFile, 'fbx');
+      }
+
+      // Insert product into Supabase
+      const { error } = await supabase
+        .from('products')
+        .insert([{
+          name,
+          description,
+          price: Number(price),
+          images: imageUrls,
+          fbx_url: fbxUrl,
+        }]);
+
+      if (error) throw error;
+      setMessage("Product added successfully!");
+      setName("");
+      setDescription("");
+      setPrice("");
+      setImages([]);
+      setFbxFile(null);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+    }
+  };
+
+  // Carousel logic
+  const handlePrev = () => setCarouselIndex((i) => (i === 0 ? images.length - 1 : i - 1));
+  const handleNext = () => setCarouselIndex((i) => (i === images.length - 1 ? 0 : i + 1));
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Products Management</h1>
-        <button className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-          Add New Product
-        </button>
-      </div>
+    <div className="max-w-2xl mx-auto p-6 bg-white rounded shadow">
+      <h2 className="text-xl font-bold mb-4">Add Product</h2>
+      <form onSubmit={handleAddProduct} className="space-y-4">
+        <input
+          type="text"
+          placeholder="Product Name"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          className="w-full border p-2 rounded"
+          required
+        />
+        <textarea
+          placeholder="Description"
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          className="w-full border p-2 rounded"
+        />
+        <input
+          type="number"
+          placeholder="Price"
+          value={price}
+          onChange={e => setPrice(e.target.value)}
+          className="w-full border p-2 rounded"
+          required
+        />
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={e => setImages(Array.from(e.target.files || []))}
+        />
+        <input
+          type="file"
+          accept=".fbx"
+          onChange={e => setFbxFile(e.target.files?.[0] || null)}
+        />
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">Add Product</button>
+      </form>
+      {message && <div className="mt-4 text-green-600">{message}</div>}
 
-      {/* Search and Filter */}
-      <div className="mb-6 flex gap-4">
-        <div className="flex-1">
-          <input
-            type="text"
-            placeholder="Search products..."
-            className="w-full p-2 border border-gray-300 rounded"
-          />
+      {/* Carousel Preview */}
+      {images.length > 0 && (
+        <div className="mt-6">
+          <h3 className="font-semibold mb-2">Image Carousel Preview</h3>
+          <div className="flex items-center space-x-4">
+            <button onClick={handlePrev}>&lt;</button>
+            <img
+              src={URL.createObjectURL(images[carouselIndex])}
+              alt={`Product Image ${carouselIndex + 1}`}
+              className="w-40 h-40 object-cover rounded"
+            />
+            <button onClick={handleNext}>&gt;</button>
+          </div>
         </div>
-        <select className="p-2 border border-gray-300 rounded">
-          <option value="">All Categories</option>
-          <option value="frames">Frames</option>
-          <option value="glass">Glass</option>
-          <option value="doors">Doors</option>
-          <option value="bathroom">Bathroom</option>
-          <option value="railings">Railings</option>
-        </select>
-        <select className="p-2 border border-gray-300 rounded">
-          <option value="">All Status</option>
-          <option value="in-stock">In Stock</option>
-          <option value="low-stock">Low Stock</option>
-          <option value="out-of-stock">Out of Stock</option>
-        </select>
-      </div>
-
-      {/* Products Table */}
-      <div className="bg-white shadow rounded-lg overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Product
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Category
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Price
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Stock
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {products.map((product) => (
-              <tr key={product.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0 h-10 w-10 bg-gray-100 rounded flex items-center justify-center">
-                      <span className="text-gray-500 text-xs">IMG</span>
-                    </div>
-                    <div className="ml-4">
-                      <div className="text-sm font-medium text-gray-900">{product.name}</div>
-                      <div className="text-sm text-gray-500">ID: {product.id}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm text-gray-900">{product.category}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm text-gray-900">${product.price.toFixed(2)}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {product.stock}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <span 
-                    className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${product.status === 'In Stock' ? 'bg-green-100 text-green-800' : product.status === 'Low Stock' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}
-                  >
-                    {product.status}
-                  </span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                  <button className="text-blue-600 hover:text-blue-900 mr-3">Edit</button>
-                  <button className="text-red-600 hover:text-red-900">Delete</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      <div className="flex items-center justify-between mt-6">
-        <div className="text-sm text-gray-700">
-          Showing <span className="font-medium">1</span> to <span className="font-medium">5</span> of <span className="font-medium">5</span> results
-        </div>
-        <div className="flex-1 flex justify-end">
-          <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
-            <a
-              href="#"
-              className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
-            >
-              Previous
-            </a>
-            <a
-              href="#"
-              className="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              1
-            </a>
-            <a
-              href="#"
-              className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
-            >
-              Next
-            </a>
-          </nav>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

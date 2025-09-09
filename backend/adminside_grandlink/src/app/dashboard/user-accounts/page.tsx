@@ -8,7 +8,6 @@ type SupabaseUser = {
   status?: string;
   last_login?: string;
 };
-// import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 
 export default function UsersPage() {
   const [users, setUsers] = useState<SupabaseUser[]>([]);
@@ -23,7 +22,6 @@ export default function UsersPage() {
         const res = await fetch("/api/admin-users");
         const result = await res.json();
         if (res.ok) {
-          // For demo, add mock role/status/last_login fields to match design
           const mockUsers = (result.users || []).map((u: SupabaseUser, i: number) => ({
             ...u,
             role: "User",
@@ -77,6 +75,28 @@ export default function UsersPage() {
     }
   };
 
+  // Delete user handler
+  const handleDeleteUser = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this user?")) return;
+    setMessage("");
+    try {
+      const res = await fetch("/api/admin-users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const result = await res.json();
+      if (res.ok) {
+        setUsers(prev => prev.filter(u => u.id !== id));
+        setMessage("User deleted successfully.");
+      } else {
+        setMessage("Error deleting user: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      setMessage("Error deleting user: " + (err as Error).message);
+    }
+  };
+
   return (
     <div className="min-h-screen p-8 bg-gray-50">
       <div className="flex items-center mb-8">
@@ -99,7 +119,6 @@ export default function UsersPage() {
           type="text"
           placeholder="Search users..."
           className="border px-3 py-2 rounded w-1/3"
-          // Add search logic if needed
         />
         <select className="border px-3 py-2 rounded text-gray-500" disabled>
           <option>All Roles</option>
@@ -133,15 +152,19 @@ export default function UsersPage() {
                 </td>
                 <td className="p-2 border">{user.email}</td>
                 <td className="p-2 border">
-                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${user.role === "Admin" ? "bg-blue-100 text-blue-600" : user.role === "Manager" ? "bg-purple-100 text-purple-600" : "bg-gray-100 text-gray-600"}`}>{user.role}</span>
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">{user.role}</span>
                 </td>
                 <td className="p-2 border">
                   <span className={`px-3 py-1 rounded-full text-xs font-semibold ${user.status === "Active" ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"}`}>{user.status}</span>
                 </td>
                 <td className="p-2 border">{user.last_login}</td>
                 <td className="p-2 border">
-                  <span className="text-blue-600 cursor-pointer hover:underline mr-2">Edit</span>
-                  <span className="text-red-600 cursor-pointer hover:underline">Delete</span>
+                  <span
+                    className="text-red-600 cursor-pointer hover:underline"
+                    onClick={() => handleDeleteUser(user.id)}
+                  >
+                    Delete
+                  </span>
                 </td>
               </tr>
             ))}
