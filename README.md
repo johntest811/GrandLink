@@ -9,6 +9,9 @@ To run next.js properly
 - npm install bcryptjs
 - npm install uuid
 - npm install --save-dev @types/uuid
+- npm install three
+- npm install --save-dev @types/three
+- npm install three-stdlib
 
 **Packages needs to Install Next.js**
 - npm install framer-motion

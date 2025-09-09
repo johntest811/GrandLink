@@ -37,7 +37,7 @@ export default function DashboardLayout({
       icon: '📦',
       dropdown: [
         { name: 'Update Products', path: '/dashboard/inventory/update-products' },
-        { name: 'Add Products', path: '/dashboard/inventory/add-products' },
+        { name: 'Add Products', path: '/dashboard/products' },
         { name: 'Inventory', path: '/dashboard/inventory' },
       ],
     },
