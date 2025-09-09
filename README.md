@@ -7,6 +7,8 @@ To run next.js properly
 
 **Next.js Admin**
 - npm install bcryptjs
+- npm install uuid
+- npm install --save-dev @types/uuid
 
 **Packages needs to Install Next.js**
 - npm install framer-motion
