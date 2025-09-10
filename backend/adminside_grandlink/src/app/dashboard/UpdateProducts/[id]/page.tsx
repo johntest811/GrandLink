@@ -20,6 +20,8 @@ type Product = {
   width?: number;
   thickness?: number;
   fbx_url?: string;
+  fullproductname?: string;
+  additionalfeatures?: string;
 };
 
 const supabase = createClient(
@@ -116,6 +118,18 @@ export default function EditProductPage() {
             required
           />
         </div>
+
+        {/* Full product name (moved above description) */}
+        <div>
+          <label className="block font-medium mb-1 text-black">Full Product Name</label>
+          <input
+            type="text"
+            value={product.fullproductname || ""}
+            onChange={e => handleChange("fullproductname", e.target.value)}
+            className="border px-3 py-2 rounded w-full text-black bg-white"
+          />
+        </div>
+
         <div>
           <label className="block font-medium mb-1 text-black">Description</label>
           <textarea
@@ -124,6 +138,18 @@ export default function EditProductPage() {
             className="border px-3 py-2 rounded w-full text-black bg-white"
           />
         </div>
+
+        <div>
+          <label className="block font-medium mb-1 text-black">Additional Features</label>
+          <textarea
+            value={product.additionalfeatures || ""}
+            onChange={e => handleChange("additionalfeatures", e.target.value)}
+            className="border px-3 py-2 rounded w-full text-black bg-white"
+            rows={4}
+            placeholder="Enter additional features (one per line or free text)"
+          />
+        </div>
+
         <div>
           <label className="block font-medium mb-1 text-black">Price</label>
           <input

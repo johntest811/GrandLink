@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
 import { createClient } from "@supabase/supabase-js";
+import { useSearchParams, useRouter } from "next/navigation";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,6 +17,9 @@ const supabase = createClient(
 export default function ProductsPage() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
   useEffect(() => {
     const fetchProducts = async () => {
@@ -41,7 +45,7 @@ export default function ProductsPage() {
   const categories = [
     "All Products",
     "Doors",
-    "Window",
+    "Windows",
     "Enclosure",
     "Casement",
     "Sliding",
@@ -51,6 +55,31 @@ export default function ProductsPage() {
   ];
 
   const [selectedCategory, setSelectedCategory] = useState("All Products");
+
+  // Set selected category from query param on mount / param change
+  useEffect(() => {
+    const param = searchParams?.get("category");
+    if (param && categories.includes(param)) {
+      setSelectedCategory(param);
+    } else {
+      setSelectedCategory("All Products");
+    }
+  }, [searchParams]);
+
+  // when clicking category buttons update the url param
+  const selectCategory = (cat: string) => {
+    setSelectedCategory(cat);
+    const url = new URL(window.location.href);
+    if (cat === "All Products") {
+      url.searchParams.delete("category");
+    } else {
+      url.searchParams.set("category", cat);
+    }
+    router.push(url.pathname + url.search);
+  };
+
+  // search state
+  const [search, setSearch] = useState("");
 
   // Helper to get the first available image from product table
   const getProductImage = (prod: any) => {
@@ -64,23 +93,42 @@ export default function ProductsPage() {
     );
   };
 
-  // Filter products by category
-  const filteredProducts =
-    selectedCategory === "All Products"
-      ? products
-      : products.filter((p) => (p.category || "") === selectedCategory);
+  // Filter products by category + search
+  const filteredProducts = products.filter((p) => {
+    const matchesCategory =
+      selectedCategory === "All Products" || (p.category || "") === selectedCategory;
+    const q = search.trim().toLowerCase();
+    if (!q) return matchesCategory;
+    const inName = (p.name || "").toLowerCase().includes(q);
+    const inDesc = (p.description || "").toLowerCase().includes(q);
+    const inCategory = (p.category || "").toLowerCase().includes(q);
+    return matchesCategory && (inName || inDesc || inCategory);
+  });
 
   return (
     <div className="min-h-screen flex flex-col">
       <TopNavBarLoggedIn />
       <main className="flex-1 bg-white">
+        {/* Search bar */}
+        <div className="py-6">
+          <div className="max-w-6xl mx-auto px-4 flex justify-center text-black">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search products by name, description or category..."
+              className="w-full max-w-md border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-red-600"
+            />
+          </div>
+        </div>
+
         {/* Category Tabs */}
         <section className="py-6 border-b">
           <div className="flex flex-wrap justify-center gap-4 text-sm font-medium">
             {categories.map((cat) => (
               <button
                 key={cat}
-                onClick={() => setSelectedCategory(cat)}
+                onClick={() => selectCategory(cat)}
                 className={`px-4 py-2 rounded transition ${
                   selectedCategory === cat
                     ? "text-red-600 border-b-2 border-red-600"
@@ -114,9 +162,12 @@ export default function ProductsPage() {
                       className="w-full h-40 object-cover rounded"
                     />
                   )}
-                  <p className="mt-2 text-center text-sm font-medium">
+                  <p className="mt-2 text-center text-base md:text-lg font-medium text-black">
                     {prod.name}
                   </p>
+
+                  {/* small underline below product name */}
+                  <div className="w-6 h-0.5 bg-red-600 mx-auto mt-1" aria-hidden="true" />
                 </Link>
               ))}
             </div>

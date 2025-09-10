@@ -37,36 +37,39 @@ export default function HomePage() {
         {/* Hero Section */}
         <HeroSlider slides={slides} />
 
-        {/* Product Categories */}
-        <section className="max-w-screen-xl mx-auto py-8">
-          <ProductCategory
-            title="Newest Products"
-            identifier="newest"
-            items={["GE 103", "GE 79", "GE 116"]}
-          />
-          <ProductCategory
-            title="Most Viewed"
-            identifier="most-viewed"
-            items={["GE 120", "GE 77", "GE 08"]}
-          />
-          <ProductCategory
-            title="Most Purchased"
-            identifier="most-purchased"
-            items={["Shower Enclosure", "GE 79", "Modish 180"]}
-          />
-        </section>
+        {/* make background below the carousel white */}
+        <div className="w-full bg-white">
+          {/* Product Categories */}
+          <section className="max-w-screen-xl mx-auto py-8">
+            <ProductCategory
+              title="Newest Products"
+              identifier="newest"
+              items={["GE 103", "GE 79", "GE 116"]}
+            />
+            <ProductCategory
+              title="Most Viewed"
+              identifier="most-viewed"
+              items={["GE 120", "GE 77", "GE 08"]}
+            />
+            <ProductCategory
+              title="Most Purchased"
+              identifier="most-purchased"
+              items={["Shower Enclosure", "GE 79", "Modish 180"]}
+            />
+          </section>
 
-        {/* Explore Section */}
-        <ExploreSection />
+          {/* Explore Section */}
+          <ExploreSection />
 
-        {/* Featured Projects */}
-        <FeaturedProjects />
+          {/* Featured Projects */}
+          <FeaturedProjects />
 
-        {/* Services */}
-        <ServicesSection />
+          {/* Services */}
+          <ServicesSection />
 
-        {/* About */}
-        <AboutSection />
+          {/* About */}
+          <AboutSection />
+        </div>
       </main>
       <Footer />
     </div>
@@ -179,7 +182,7 @@ function ExploreSection() {
   return (
     <section className="w-full bg-gray-100 py-8">
       <div className="max-w-screen-xl mx-auto">
-        <h2 className="text-2xl font-bold mb-4">Explore Our Products</h2>
+        <h2 className="text-2xl font-semibold text-black">Explore Our Products</h2>
         <div className="grid grid-cols-3 gap-4">
           {categories.map((cat) => (
             <div key={cat} className="bg-white shadow p-4">
@@ -299,10 +302,40 @@ function ServicesSection() {
 
 function AboutSection() {
   return (
-    <section className="w-full bg-gray-200 py-8 text-black">
-      <div className="max-w-screen-xl mx-auto">
-        <h2 className="text-2xl font-bold mb-4">ABOUT GRAND EAST</h2>
-        <p>We are specialists in quality aluminum and glass fabrication...</p>
+    <section className="w-full bg-[#0f2a44] py-8 text-white">
+      <div className="max-w-screen-xl mx-auto px-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+          <div>
+            <h2 className="text-2xl font-bold mb-4 text-white">ABOUT GRAND EAST</h2>
+            <p className="text-white mb-6">
+              We are specialists in quality aluminum and glass fabrication...
+            </p>
+          </div>
+
+          {/* Right-aligned inquire button with Call us centered under the button */}
+          <div className="flex-shrink-0 flex flex-col items-center md:items-end">
+            <div className="relative">
+              <a
+                href="/contact"
+                className="inline-flex items-center justify-center bg-[#8b1e1e] hover:bg-[#7a1a18] text-white px-8 py-3 rounded shadow-md font-semibold gap-3"
+                aria-label="Inquire Now"
+              >
+                <span>INQUIRE NOW</span>
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.86 19.86 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3A2 2 0 0 1 9.2 3.08c.12.54.28 1.08.48 1.6a2 2 0 0 1-.45 2.11L8.7 8.7a16 16 0 0 0 6 6l1.91-1.04a2 2 0 0 1 2.11-.45c.52.2 1.06.36 1.6.48A2 2 0 0 1 22 16.92z"/>
+                </svg>
+              </a>
+
+              {/* centered under the button */}
+              <a
+                href="tel:+630000000000"
+                className="absolute left-1/2 transform -translate-x-1/2 top-full mt-2 text-white underline text-sm"
+              >
+                Call us
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );

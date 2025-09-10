@@ -21,7 +21,13 @@ export default function ProductDetailsPage() {
       if (!productId) return;
       const res = await fetch(`/api/products?id=${productId}`);
       const data = await res.json();
-      setProduct(data);
+
+      // normalize additionalfeatures: accept string or string[]; fall back to features[]
+      const additionalfeatures = Array.isArray(data?.additionalfeatures)
+        ? data.additionalfeatures.join("\n")
+        : (data?.additionalfeatures ?? (data?.features?.length ? data.features.join("\n") : ""));
+
+      setProduct({ ...data, additionalfeatures });
     };
     fetchProduct();
   }, [productId]);
@@ -89,10 +95,18 @@ export default function ProductDetailsPage() {
           </div>
           {/* Product Info */}
           <div className="mt-10">
-            <h2 className="text-4xl font-bold">{product.name}</h2>
-            <h3 className="text-2xl font-semibold text-gray-600">{product.subtitle || product.series}</h3>
-            <p className="text-gray-700 text-lg mt-4">{product.description}</p>
+            <h2 className="text-4xl font-bold text-black">{product.name}</h2>
+
+            {/* Full product name below main name */}
+            {product.fullproductname ? (
+              <div className="text-2xl text-gray-600 mt-1">{product.fullproductname}</div>
+            ) : null}
+
+            <h3 className="text-2xl font-semibold text-gray-600 mt-2">{product.subtitle || product.series}</h3>
+
+            {/* description moved to Key Features section */}
           </div>
+          
           {/* Actions */}
           <div className="flex gap-8 mt-10">
             <button
@@ -112,24 +126,49 @@ export default function ProductDetailsPage() {
           </div>
           {/* Key Features */}
           <div className="mt-12 border-t pt-8">
+            {/* Labeled description placed at top of Key Features */}
+            <div className="mb-6">
+              <label className="block text-lg font-semibold text-gray-700 mb-2">Product Description</label>
+              <p className="text-gray-800 text-sm md:text-base leading-relaxed">
+                {product.description}
+              </p>
+            </div>
+
             <h4 className="text-red-700 font-bold mb-4 text-xl">Key Features</h4>
-            <ul className="text-lg text-gray-700 list-disc pl-8">
-              {product.features?.length
-                ? product.features.map((f: string, i: number) => <li key={i}>{f}</li>)
-                : (
-                  <>
-                    <li><b>Single pane (5-10mm):</b> Optimal for natural light and ventilation.</li>
-                    <li><b>Double pane (5-6mm):</b> Enhanced energy efficiency and sound insulation.</li>
-                    <li><b>French option (7×15, 5-6mm):</b> Adds a unique, stylish touch.</li>
-                    <li><b>3-track design:</b> Allows maximum airflow.</li>
-                    <li><b>Sliding with fixed panel:</b> Functional with a modern aesthetic.</li>
-                    <li><b>Wall Allowance:</b> 11mm</li>
-                    <li><b>Aluminum Thickness:</b> 1.1mm</li>
-                    <li><b>Optional screen:</b> Customizable for your preference.</li>
-                  </>
-                )
-              }
-            </ul>
+
+            {/* Dimensions & Material summary */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
+              <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
+                <div className="text-sm text-gray-500">Height</div>
+                <div className="text-lg font-semibold text-gray-500">{product.height ?? "—"}</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
+                <div className="text-sm text-gray-500">Width</div>
+                <div className="text-lg font-semibold text-gray-500">{product.width ?? "—"}</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
+                <div className="text-sm text-gray-500">Thickness</div>
+                <div className="text-lg font-semibold text-gray-500">{product.thickness ?? "—"}</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
+                <div className="text-sm text-gray-500">Material</div>
+                <div className="text-lg font-semibold text-gray-500">{product.material ?? "Wood"}</div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded border col-span-2 sm:col-span-1 flex flex-col items-center justify-center text-center">
+                <div className="text-sm text-gray-500">Type</div>
+                <div className="text-lg font-semibold text-gray-500">{product.type ?? "Clear"}</div>
+              </div>
+            </div>
+
+            {/* Feature list - replaced with additionalfeatures column */}
+            <div className="mt-2">
+              <h5 className="text-lg font-semibold text-red-700 mb-2">Additional Features</h5>
+              <div className="text-lg text-gray-700 whitespace-pre-line">
+                {product.additionalfeatures
+                  ?? (product.features?.length ? product.features.join("\n") : "")
+                }
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -137,15 +176,20 @@ export default function ProductDetailsPage() {
 
       {/* 3D Viewer Modal */}
       {show3D && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-3xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-6xl max-h-[90vh] bg-white rounded-lg shadow-lg p-4 relative flex flex-col">
             <button
-              className="absolute top-2 right-2 text-gray-400 hover:text-gray-600 text-2xl"
+              className="absolute top-3 right-3 text-gray-600 hover:text-gray-900 text-2xl z-20"
               onClick={() => setShow3D(false)}
+              aria-label="Close 3D viewer"
             >
               &times;
             </button>
-            <ThreeDFBXViewer fbxUrl={product.fbx_url} width={1200} height={700} />
+
+            {/* make viewer fill the modal and center content */}
+            <div className="flex-1 w-full flex items-center justify-center overflow-hidden">
+              <ThreeDFBXViewer fbxUrl={product.fbx_url} />
+            </div>
           </div>
         </div>
       )}

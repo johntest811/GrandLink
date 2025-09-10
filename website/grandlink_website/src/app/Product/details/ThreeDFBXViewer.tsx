@@ -184,16 +184,20 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
   return (
     <div className="relative" style={{ width, height }}>
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
-      <div className="absolute top-4 left-4 flex gap-2 z-10">
-        {["sunny", "rainy", "windy", "foggy"].map(w => (
-          <button
-            key={w}
-            className={`px-4 py-2 rounded ${weather === w ? "bg-black text-white" : "bg-gray-200 text-gray-700"}`}
-            onClick={() => setWeather(w as any)}
-          >
-            {w.charAt(0).toUpperCase() + w.slice(1)}
-          </button>
-        ))}
+
+      {/* centered top controls */}
+      <div className="absolute left-0 right-0 top-4 flex justify-center z-10 pointer-events-none">
+        <div className="flex gap-2 pointer-events-auto">
+          {["sunny", "rainy", "windy", "foggy"].map(w => (
+            <button
+              key={w}
+              className={`px-4 py-2 rounded ${weather === w ? "bg-black text-white" : "bg-gray-200 text-gray-700"}`}
+              onClick={() => setWeather(w as any)}
+            >
+              {w.charAt(0).toUpperCase() + w.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

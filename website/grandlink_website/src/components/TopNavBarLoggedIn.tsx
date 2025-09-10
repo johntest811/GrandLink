@@ -144,12 +144,12 @@ export default function TopNavBarLoggedIn() {
                     : 500,
                 }}
               >
-                <Link href="/products/doors" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Doors</Link>
-                <Link href="/products/enclosures" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Enclosures</Link>
-                <Link href="/products/windows" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Windows</Link>
-                <Link href="/products/railings" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Railings</Link>
-                <Link href="/products/canopy" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Canopy</Link>
-                <Link href="/products/curtain-wall" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Curtain Wall</Link>
+                <Link href="/Product?category=Doors" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Doors</Link>
+                <Link href="/Product?category=Enclosure" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Enclosures</Link>
+                <Link href="/Product?category=Windows" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Windows</Link>
+                <Link href="/Product?category=Railings" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Railings</Link>
+                <Link href="/Product?category=Canopy" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Canopy</Link>
+                <Link href="/Product?category=Curtain Wall" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Curtain Wall</Link>
               </div>
             )}
           </div>

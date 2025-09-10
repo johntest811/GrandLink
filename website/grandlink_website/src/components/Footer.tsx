@@ -41,7 +41,7 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="/projects"
+                  href="/Featured"
                   className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
                 >
                   Featured Projects
@@ -62,7 +62,15 @@ export default function Footer() {
             <ul>
               <li>
                 <a
-                  href="/products/doors"
+                  href="/Product"
+                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
+                >
+                  All Products
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/Product?category=Doors"
                   className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
                 >
                   Doors
@@ -70,15 +78,7 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="/products/enclosures"
-                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
-                >
-                  Enclosures
-                </a>
-              </li>
-              <li>
-                <a
-                  href="/products/windows"
+                  href="/Product?category=Windows"
                   className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
                 >
                   Windows
@@ -86,7 +86,31 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="/products/railings"
+                  href="/Product?category=Enclosure"
+                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
+                >
+                  Enclosure
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/Product?category=Casement"
+                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
+                >
+                  Casement
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/Product?category=Sliding"
+                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
+                >
+                  Sliding
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/Product?category=Railings"
                   className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
                 >
                   Railings
@@ -94,7 +118,7 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="/products/canopy"
+                  href="/Product?category=Canopy"
                   className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
                 >
                   Canopy
@@ -102,16 +126,38 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="/products/curtain-wall"
+                  href="/Product?category=Curtain Wall"
                   className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
                 >
                   Curtain Wall
                 </a>
               </li>
+            <ul>
+              <li>
+                <a
+                  href="/FAQs"
+                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
+                >
+                  FAQs
+                </a>
+              </li>
+                </ul>
             </ul>
           </div>
           <div>
-            <h3 className="font-bold mb-2 text-black">FAQs</h3>
+             <div>
+          <ul>
+              <h3 className="font-bold mb-2 text-black">FAQs</h3>
+              <li>
+                <a
+                  href="/FAQs"
+                  className="text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer"
+                >
+                  FAQs
+                </a>
+              </li>
+                </ul>
+                </div>
           </div>
         </div>
       </div>

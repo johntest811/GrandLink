@@ -24,10 +24,13 @@ const uploadFile = async (file: File, folder: string) => {
 export default function ProductsAdminPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [fullProductName, setFullProductName] = useState("");
+  const [additionalFeatures, setAdditionalFeatures] = useState("");
   const [price, setPrice] = useState("");
   const [images, setImages] = useState<File[]>([]);
   const [fbxFile, setFbxFile] = useState<File | null>(null);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [category, setCategory] = useState("");
   const [height, setHeight] = useState("");
@@ -135,6 +138,7 @@ export default function ProductsAdminPage() {
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
+    setLoading(true);
     try {
       // Upload images (max 5)
       const imageUrls: string[] = [];
@@ -156,6 +160,8 @@ export default function ProductsAdminPage() {
         .from('products')
         .insert([{
           name,
+          fullproductname: fullProductName,
+          additionalfeatures: additionalFeatures,
           description,
           price: Number(price),
           category,
@@ -175,7 +181,9 @@ export default function ProductsAdminPage() {
       if (error) throw error;
       setMessage("Product added successfully!");
       setName("");
+      setFullProductName("");
       setDescription("");
+      setAdditionalFeatures("");
       setPrice("");
       setImages([]);
       setFbxFile(null);
@@ -188,6 +196,8 @@ export default function ProductsAdminPage() {
       setCarouselIndex(0);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -260,6 +270,19 @@ export default function ProductsAdminPage() {
                 className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
                 required
               />
+
+              {/* Full product name (moved above description) */}
+              <div className="mt-2">
+                <label className="block text-[#233a5e] font-semibold mb-1">Full Product Name</label>
+                <input
+                  type="text"
+                  placeholder="Full Product Name"
+                  value={fullProductName}
+                  onChange={e => setFullProductName(e.target.value)}
+                  className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
+                />
+              </div>
+
               <label className="block text-[#233a5e] font-semibold mb-1">Product Description</label>
               <textarea
                 placeholder="Product Description"
@@ -267,6 +290,18 @@ export default function ProductsAdminPage() {
                 onChange={e => setDescription(e.target.value)}
                 className="w-full border border-gray-300 p-2 rounded bg-white text-black"
               />
+
+              {/* Additional features (below full product name) */}
+              <div className="mt-4">
+                <label className="block text-[#233a5e] font-semibold mb-1">Additional Features</label>
+                <textarea
+                  placeholder="One feature per line or free text"
+                  value={additionalFeatures}
+                  onChange={e => setAdditionalFeatures(e.target.value)}
+                  className="w-full border border-gray-300 p-2 rounded bg-white text-black"
+                  rows={3}
+                />
+              </div>
             </div>
             {/* Product Details */}
             <div className="bg-white/80 rounded-lg p-6">
@@ -438,9 +473,23 @@ export default function ProductsAdminPage() {
           <div className="flex justify-end">
             <button
               type="submit"
-              className="bg-blue-600 text-white px-6 py-2 rounded font-semibold transition-colors duration-200 hover:bg-blue-800"
+              disabled={loading}
+              className={`flex items-center justify-center gap-2 px-6 py-2 rounded font-semibold transition-colors duration-200 ${
+                loading ? "bg-blue-600 opacity-70 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-800"
+              } text-white`}
+              aria-busy={loading}
             >
-              Add Product
+              {loading ? (
+                <>
+                  <svg className="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
+                  </svg>
+                  Adding...
+                </>
+              ) : (
+                "Add Product"
+              )}
             </button>
           </div>
           {/* Message */}
