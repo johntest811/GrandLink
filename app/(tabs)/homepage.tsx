@@ -1,7 +1,7 @@
 import { ThemedText } from '@/components/ThemedText';
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button} from 'react-native';
-import { Video as ExpoVideo} from "expo-av";
+import { Video, ResizeMode } from "expo-av";
 import { blue } from 'react-native-reanimated/lib/typescript/Colors';
 
 const images = [
@@ -14,7 +14,6 @@ const images = [
 
 export default function Homescreen() {  
     const [index, setIndex] = useState(0);
-    const Video: any = ExpoVideo;
 
   const nextImage = () => setIndex((prev) => (prev + 1) % images.length);
   const prevImage = () => setIndex((prev) => (prev - 1 + images.length) % images.length);
@@ -44,7 +43,7 @@ export default function Homescreen() {
           <Image
             source={images[index]}
             style={styles.slideshowImage}
-            resizeMode="cover"
+            resizeMode="contain"
           />
           <TouchableOpacity onPress={nextImage} style={styles.arrow}>
             <Image source={require('@/assets/images/right-arrow.png')} style={styles.arrowIcon} />
@@ -62,7 +61,7 @@ export default function Homescreen() {
           <Image
             source={require('@/assets/images/DoorsButton.png')}
             style={styles.imageButtonImage}
-            resizeMode="cover"
+            resizeMode="contain"
           />
           <View style={styles.imageButtonOverlay}>
             <Text style={styles.imageButtonTitle}>Doors</Text>
@@ -76,7 +75,7 @@ export default function Homescreen() {
           <Image
             source={require('@/assets/images/railingsbutton.png')}
             style={styles.imageButtonImage}
-            resizeMode="cover"
+            resizeMode="contain"
           />
           <View style={styles.imageButtonOverlay}>
             <Text style={styles.imageButtonTitle}>Railings</Text>
@@ -90,7 +89,7 @@ export default function Homescreen() {
           <Image
             source={require('@/assets/images/enclosuresbutton.png')}
             style={styles.imageButtonImage}
-            resizeMode="cover"
+            resizeMode="contain"
           />
           <View style={styles.imageButtonOverlay}>
             <Text style={styles.imageButtonTitle}>Enclosures</Text>
@@ -104,7 +103,7 @@ export default function Homescreen() {
           <Image
             source={require('@/assets/images/windowsbutton.png')}
             style={styles.imageButtonImage}
-            resizeMode="cover"
+            resizeMode="contain"
           />
           <View style={styles.imageButtonOverlay}>
             <Text style={styles.imageButtonTitle}>Windows</Text>
@@ -124,7 +123,7 @@ export default function Homescreen() {
           <Video
             source={require("@/assets/videos/testvideo.mp4")}
             useNativeControls
-            resizeMode="cover"
+            resizeMode={ResizeMode.COVER}
             style={{
               width: "95%",
               height: 200,
@@ -144,18 +143,18 @@ export default function Homescreen() {
           </ThemedText>
 
           <Video
-            source={require("@/assets/videos/testvideo.mp4")}
-            useNativeControls
-            resizeMode="cover"
-            style={{
-              width: "95%",
-              height: 200,
-              alignSelf: "center",
-              marginVertical: 15,
-              borderRadius: 12,
-              backgroundColor: "black",
-            }}
-          />
+              source={require("../../assets/videos/testvideo.mp4")}
+              useNativeControls
+              resizeMode={ResizeMode.COVER}
+              style={{
+                width: "95%",
+                height: 200,
+                alignSelf: "center",
+                marginVertical: 15,
+                borderRadius: 12,
+                backgroundColor: "black",
+              }}
+            />
 
           <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
             Solenn Heusaff ft. Grand East Products
@@ -198,8 +197,99 @@ export default function Homescreen() {
                   />
                 </TouchableOpacity>
               </View>
-
         </View>
+
+         <View style={styles.serviceContainer}>
+            <ThemedText style={styles.sectionTitle}>Service We Offer</ThemedText>
+            <ThemedText style={styles.serviceText}>
+              Grand East brings you top-tier aluminum and glass solutions, expertly
+              crafted for both residential and commercial spaces. From sleek
+              windows and doors to stunning facades, our services are designed to enhance
+              both style and durability. Elevate your property with the perfect blend of
+              innovation and elegance.
+            </ThemedText>
+            <View style={styles.redLineA} />
+      </View>
+
+      <View style={styles.blueBoxB}>
+        <View style={styles.logoTitleB}>
+              <Image
+            source={require('@/assets/images/grandeastlogo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+          </View>
+          <ThemedText style={styles.sectionTitleB}>ABOUT</ThemedText>
+          <ThemedText style={styles.sectionTitleB}>GRAND EAST</ThemedText>
+          <View style={styles.redLine} />
+          <ThemedText style={styles.aboutGrandEast}>
+            At Grand East, we specialize in creating modern, durable, 
+            and stylish solutions that redefine residential and 
+            commercial spaces. With a passion for precision and a 
+            commitment to quality, our expert team delivers exceptional 
+            aluminum and glass installations that stand the test of time. 
+            Whether you're upgrading your home or transforming your business, 
+            we provide innovative designs that combine functionality with 
+            aesthetic appeal, ensuring your vision becomes a reality. </ThemedText>
+
+            <View style={{ position: 'relative', width: 500, height: 200, marginTop: 20 }}>
+              <Image
+                source={require('@/assets/images/inquireNOW.png')}
+                style={styles.inquireNOW}
+                resizeMode="contain"
+              />
+              <View style={{
+                position: 'absolute',
+                top: 30,
+                left: 0,
+                width: '100%',
+                alignItems: 'center',
+              }}>
+                <Text style={{ color: '#a81d1d', fontSize: 24, fontWeight: 'bold', textAlign: 'center' }}>
+                  Ready to elevate your space?
+                </Text>
+                <Text style={{ color: '#fff', fontSize: 18, fontStyle: 'italic', textAlign: 'center', marginTop: 2 }}>
+                  Inquire now for a custom solution!
+                </Text>
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#a81d1d',
+                    borderRadius: 4,
+                    paddingVertical: 12,
+                    paddingHorizontal: 32,
+                    marginTop: 24,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                  }}
+                  onPress={() => {
+                    // TODO: Add your action here (e.g., navigation or modal)
+                    alert('Inquire Now button pressed!');
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 22, fontWeight: 'bold', marginRight: 10 }}>
+                    INQUIRE NOW
+                  </Text>
+                  <Text style={{ color: '#fff', fontSize: 22 }}>📞</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            <View style={{
+               backgroundColor: '#2c3848',
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginTop: 30,
+                borderRadius: 0,
+                width: '100%',
+                alignSelf: 'stretch'
+              }}>
+                <Text style={{ fontSize: 22, color: '#fff', marginRight: 8 }}>📞</Text>
+                <Text style={{ fontSize: 18, color: '#fff' }}>
+                  Smart || 09082810586  Globe | (Viber) || 09277640475
+                </Text>
+              </View>
+          </View>
+
+        
 
       </ScrollView>
       <View style={styles.redLowerBar}>
@@ -270,7 +360,7 @@ whitebackground: {
     width: 200,
   },
   blueBox: {
-    height: '12%',
+    height: '8%',
     backgroundColor: '#1c202aff',
     width: '100%',
     justifyContent: 'center',
@@ -283,6 +373,80 @@ whitebackground: {
         justifyContent: 'space-between',
         alignItems: 'center',
         paddingHorizontal: 20,
+  },
+  serviceContainer: {
+    padding: 20,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    margin: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  sectionTitle: {
+    fontSize: 27,
+    fontWeight: 'bold',
+    marginBottom: 16,
+    textAlign: 'center',
+    color: '#a81d1dff',
+  },
+  aboutGrandEast: {
+    fontSize: 18,
+    lineHeight: 20,
+    color: '#ffffffff',
+    textAlign: 'left',
+    marginTop: 20,
+  },
+  inquireNOW: {
+    marginTop: 20,
+    height: 200,
+    width: 500,
+  },
+  redLine: {
+    width: 120, 
+    height: 7,
+    backgroundColor: '#a02c2cff', 
+    marginTop: 8,
+    marginBottom: 5,
+    textAlign: 'left',
+    alignSelf: 'flex-start',
+  },
+  redLineA: {
+    width: 120, 
+    height: 7,
+    backgroundColor: '#a02c2cff', 
+    marginTop: 20,
+    textAlign: 'right',
+    alignSelf: 'flex-end',
+  },
+  logoTitleB: {
+    padding: 3,
+    backgroundColor: '#fff',
+    borderRadius: 9,
+    margin: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  sectionTitleB: {
+    fontSize: 25,
+    fontWeight: 'bold',
+    marginTop : 6,
+    marginBottom: 10,
+    textAlign: 'left',
+    color: '#ffffffff',
+    alignSelf: 'flex-start',
+  },
+  serviceText: {
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#3a3a3aff',
   },
   arrow: {
     padding: 10,
