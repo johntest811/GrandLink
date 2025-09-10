@@ -1,24 +1,64 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Image } from 'expo-image';
-import { StyleSheet, TextInput, TouchableOpacity, View, ScrollView, ImageBackground} from 'react-native';
-import { Link, Stack } from 'expo-router';
-
+import { StyleSheet, TextInput, TouchableOpacity, View, ScrollView, ImageBackground, Alert } from 'react-native';
+import { Link, Stack, useRouter } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { supabase } from './supabaseClient';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const colorScheme = useColorScheme() ?? 'light';
   const tintColor = Colors[colorScheme].tint;
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) {
+      Alert.alert('Login Failed', error.message);
+    } else {
+      router.replace('/(tabs)/homepage');
+    }
+  };
+
+  useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) {
+        router.replace('/(tabs)/homepage');
+      }
+    });
+    return () => {
+      authListener?.subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleGoogleLogin = async () => {
+  const redirectTo = 'https://auth.expo.io/@your-username/your-app-slug'; // Replace with your Expo redirect URI
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo }
+  });
+
+  if (data?.url) {
+    await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+  }
+  if (error) {
+    Alert.alert('Google Login Failed', error.message);
+  }
+};
 
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <ImageBackground
-        source={require('@/assets/images/loginbg.png')} 
+        source={require('@/assets/images/loginbg.png')}
         style={styles.background}
         resizeMode="cover"
       >
@@ -27,18 +67,18 @@ export default function LoginScreen() {
 
             {/* Login Card */}
             <View style={styles.card}>
-            {/* Logo at the top */}
-            <View style={styles.logoContainer}>
-              <Image
-                source={require('@/assets/images/GLLogo.png')}
-                style={styles.logo}
-                contentFit="contain"
-              />
-              <ThemedText type="title" style={styles.logoText}>GRAND EAST</ThemedText>
-              <ThemedText style={styles.logoSubtext}>GLASS AND ALUMINIUM</ThemedText>
-            </View>
+              {/* Logo at the top */}
+              <View style={styles.logoContainer}>
+                <Image
+                  source={require('@/assets/images/GLLogo.png')}
+                  style={styles.logo}
+                  contentFit="contain"
+                />
+                <ThemedText type="title" style={styles.logoText}>GRAND EAST</ThemedText>
+                <ThemedText style={styles.logoSubtext}>GLASS AND ALUMINIUM</ThemedText>
+              </View>
               <ThemedText type="title" style={styles.loginTitle}>Login</ThemedText>
-              
+
               {/* Email Input */}
               <View style={styles.inputContainer}>
                 <ThemedText style={styles.inputLabel}>Gmail</ThemedText>
@@ -74,14 +114,18 @@ export default function LoginScreen() {
               </View>
 
               {/* Login Button */}
-              <TouchableOpacity style={[styles.loginButton, { backgroundColor: '#000000ff' }]}>
-                 <Link href="/(tabs)/homepage">
-                <ThemedText style={styles.loginButtonText}>LOGIN</ThemedText>
-                </Link>
+              <TouchableOpacity
+                style={[styles.loginButton, { backgroundColor: '#000000ff' }]}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                <ThemedText style={styles.loginButtonText}>
+                  {loading ? 'Logging in...' : 'LOGIN'}
+                </ThemedText>
               </TouchableOpacity>
 
               {/* Google Sign In */}
-              <TouchableOpacity style={styles.googleButton}>
+              <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin}>
                 <Image
                   source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }}
                   style={styles.googleIcon}

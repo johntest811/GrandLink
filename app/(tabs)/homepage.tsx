@@ -1,7 +1,9 @@
 import { ThemedText } from '@/components/ThemedText';
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button} from 'react-native';
-import { Video, ResizeMode } from "expo-av";
+import { Video, ResizeMode } from 'expo-av';
+import { router, useRouter } from 'expo-router';
+import { supabase } from '../supabaseClient'; 
 import { blue } from 'react-native-reanimated/lib/typescript/Colors';
 
 const images = [
@@ -14,16 +16,17 @@ const images = [
 
 export default function Homescreen() {  
     const [index, setIndex] = useState(0);
+    const router = useRouter();
 
   const nextImage = () => setIndex((prev) => (prev + 1) % images.length);
   const prevImage = () => setIndex((prev) => (prev - 1 + images.length) % images.length);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setIndex((prev) => (prev + 1) % images.length);
-    }, 3000); 
-    return () => clearInterval(interval);
-  }, []);
+  const getUser = async () => {
+    const { data } = await supabase.auth.getUser();
+  };
+  getUser();
+}, []);
 
   return (
     <View style={styles.whitebackground}>
@@ -35,6 +38,16 @@ export default function Homescreen() {
             style={styles.logo}
             resizeMode="contain"
           />
+          <TouchableOpacity
+            style={styles.profileButton}
+            onPress={() => router.push('../profile')}
+          >
+            <Image
+              source={require('@/assets/images/profileicon.png')} 
+              style={styles.profileIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
         </View>
         <View style={styles.blueBox}>
           <TouchableOpacity onPress={prevImage} style={styles.arrow}>
@@ -121,18 +134,18 @@ export default function Homescreen() {
             </TouchableOpacity>
           </View>
           <Video
-            source={require("@/assets/videos/testvideo.mp4")}
-            useNativeControls
-            resizeMode={ResizeMode.COVER}
-            style={{
-              width: "95%",
-              height: 200,
-              alignSelf: "center",
-              marginVertical: 15,
-              borderRadius: 12,
-              backgroundColor: "black",
-            }}
-          />
+              source={require("@/assets/videos/testvideo.mp4")}
+              useNativeControls
+              resizeMode={ResizeMode.COVER}
+              style={{
+                width: "95%",
+                height: 200,
+                alignSelf: "center",
+                marginVertical: 15,
+                borderRadius: 12,
+                backgroundColor: "black",
+              }}
+            />
           <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
             Mikey Bustos ft. Grand East Products
           </ThemedText>
@@ -309,13 +322,16 @@ export default function Homescreen() {
             />
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.circleButton}>
-          <Image
-            source={require('@/assets/images/catalogbutton.png')}
-            style={styles.catalogIcon}
-            resizeMode="contain"
-          />
-        </TouchableOpacity>
+        <TouchableOpacity
+            style={styles.circleButton}
+            onPress={() => router.push('../shop')}
+          >
+            <Image
+              source={require('@/assets/images/catalogbutton.png')}
+              style={styles.catalogIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
         <View style={styles.sideIconsContainer}>
           <TouchableOpacity style={styles.sideIconButton}>
             <Image
@@ -373,6 +389,22 @@ whitebackground: {
         justifyContent: 'space-between',
         alignItems: 'center',
         paddingHorizontal: 20,
+  },
+  profileButton: {
+  position: 'absolute',
+  right: 15,
+  top: '50%',
+  transform: [{ translateY: -20 }],
+  width: 40,
+  height: 40,
+  justifyContent: 'center',
+  alignItems: 'center',
+  },
+  profileIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#eee',
   },
   serviceContainer: {
     padding: 20,
