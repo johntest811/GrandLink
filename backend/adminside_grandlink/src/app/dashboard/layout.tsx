@@ -19,6 +19,9 @@ export default function DashboardLayout({
   // Dropdown state
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
 
+  // Top nav "Site" dropdown
+  const [openTopMenu, setOpenTopMenu] = useState(false);
+
   // Sidebar navigation structure
   const navStructure = [
     { name: 'Dashboard', path: '/dashboard', icon: '📊' },
@@ -45,7 +48,20 @@ export default function DashboardLayout({
     { name: 'Orders', path: '/dashboard/orders', icon: '🛒' },
     { name: 'Order Management', path: '/dashboard/order-management', icon: '📋' },
     { name: 'Calendar', path: '/dashboard/calendar', icon: '📅' },
-    { name: 'Content Management', path: '/dashboard/content-management', icon: '🗂️' },
+    {
+      name: 'Content Management',
+      icon: '🗂️',
+      dropdown: [
+        { name: 'Home', path: '/' },
+        { name: 'About Us', path: '/about' },
+        { name: 'Showrooms', path: '/showrooms' },
+        { name: 'Services We Offer', path: '/services' },
+        { name: 'Featured Projects', path: '/featured-projects' },
+        { name: 'Delivery & Ordering Process', path: '/delivery-ordering' },
+        { name: 'Products', path: '/Product' },
+        { name: 'FAQs', path: '/faqs' },
+      ],
+    },
     { name: 'Predictive', path: '/dashboard/predictive', icon: '🔮' },
     {
       name: 'Settings',
@@ -55,6 +71,18 @@ export default function DashboardLayout({
         { name: 'Audit', path: '/dashboard/settings/audit' },
       ],
     },
+  ];
+
+  // Top nav site links
+  const siteLinks = [
+    { name: 'Home', href: '/' },
+    { name: 'About Us', href: '/about' },
+    { name: 'Showrooms', href: '/showrooms' },
+    { name: 'Services We Offer', href: '/services' },
+    { name: 'Featured Projects', href: '/featured-projects' },
+    { name: 'Delivery & Ordering Process', href: '/delivery-ordering' },
+    { name: 'Products', href: '/Product' },
+    { name: 'FAQs', href: '/faqs' },
   ];
 
   return (
@@ -162,7 +190,37 @@ export default function DashboardLayout({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            <div className="flex items-center">
+
+            <div className="flex items-center space-x-4">
+              {/* Site dropdown */}
+              <div className="relative">
+                <button
+                  aria-haspopup="true"
+                  aria-expanded={openTopMenu}
+                  onClick={() => setOpenTopMenu((s) => !s)}
+                  className="px-3 py-2 rounded text-sm font-medium text-gray-700 hover:bg-gray-100"
+                >
+                  Site <span className="ml-1 text-xs">▾</span>
+                </button>
+
+                {openTopMenu && (
+                  <div className="absolute right-0 mt-2 w-56 bg-white border rounded shadow-md z-40">
+                    <div className="py-2">
+                      {siteLinks.map((l) => (
+                        <Link
+                          key={l.href}
+                          href={l.href}
+                          onClick={() => setOpenTopMenu(false)}
+                          className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          {l.name}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="ml-3 relative">
                 <div className="flex items-center">
                   <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center">
@@ -172,6 +230,7 @@ export default function DashboardLayout({
                 </div>
               </div>
             </div>
+
           </div>
         </div>
 
