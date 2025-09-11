@@ -2,8 +2,9 @@
 
 import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { createClient } from "@supabase/supabase-js";
 import {
   FaCogs,
   FaColumns,
@@ -16,118 +17,67 @@ import {
   FaDoorOpen,
   FaArrowsAltH,
   FaWarehouse,
-  FaBorderAll,
+  FaBorderAll, 
+  
 } from "react-icons/fa";
+import * as FaIcons from "react-icons/fa";
 
-const SERVICES = [
-  {
-    icon: <FaCogs size={36} />,
-    label: "Heavy Duty",
-    info: "Heavy-duty aluminum and glass solutions for robust applications.",
-  },
-  {
-    icon: <FaColumns size={36} />,
-    label: "Sliding",
-    info: "Smooth and space-saving sliding window and door systems.",
-  },
-  {
-    icon: <FaWindowMaximize size={36} />,
-    label: "Awning",
-    info: "Awning windows for ventilation and modern style.",
-  },
-  {
-    icon: <FaThLarge size={36} />,
-    label: "Casement",
-    info: "Casement windows for classic looks and easy operation.",
-  },
-  {
-    icon: <FaWindowRestore size={36} />,
-    label: "Top Hung",
-    info: "Top hung windows for versatile airflow and design.",
-  },
-  {
-    icon: <FaGripHorizontal size={36} />,
-    label: "Bi-folding",
-    info: "Bi-folding doors for wide openings and seamless transitions.",
-  },
-  {
-    icon: <FaBuilding size={36} />,
-    label: "Facade",
-    info: "Modern glass facades for commercial and residential buildings.",
-  },
-  {
-    icon: <FaThList size={36} />,
-    label: "Curtain Wall",
-    info: "Curtain wall systems for sleek, expansive glass exteriors.",
-  },
-  {
-    icon: <FaDoorOpen size={36} />,
-    label: "Canopy",
-    info: "Stylish and functional canopies for entrances and walkways.",
-  },
-  {
-    icon: <FaArrowsAltH size={36} />,
-    label: "Glass Railing",
-    info: "Glass railings for safety and unobstructed views.",
-  },
-  {
-    icon: <FaWarehouse size={36} />,
-    label: "Shower Enclosure",
-    info: "Custom glass shower enclosures for modern bathrooms.",
-  },
-  {
-    icon: <FaBorderAll size={36} />,
-    label: "Glass Partition",
-    info: "Glass partitions for open, light-filled interiors.",
-  },
-];
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+type Service = {
+  id: number;
+  name: string;
+  short_description: string;
+  long_description: string;
+  icon?: string; // icon name
+};
 
 export default function ServicesPage() {
+  const [services, setServices] = useState<Service[]>([]);
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetchServices();
+  }, []);
+
+  const fetchServices = async () => {
+    const { data, error } = await supabase.from("services").select("*");
+    if (error) console.error(error);
+    else setServices(data || []);
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
       <TopNavBarLoggedIn />
       <main className="flex-1 bg-white">
         <div className="w-full">
-          <img
-            src="/sevices.avif"
-            alt="services"
-            className="w-full h-64 object-cover"
-          />
+          <img src="/sevices.avif" alt="services" className="w-full h-64 object-cover" />
         </div>
         <section className="max-w-3xl mx-auto px-4 py-8 text-center text-black">
           <h1 className="text-2xl md:text-3xl font-bold mb-4 border-b-2 border-black inline-block pb-1">
             Our Services
           </h1>
           <p className="text-gray-700 mt-4 mb-8 underline underline-offset-2 decoration-[#232d3b]">
-            We offer a comprehensive range of services tailored to meet the needs of
-            both residential and commercial clients. From precision-crafted aluminum
-            windows and doors to custom glass installations, our expertise spans
-            across all facets of design, fabrication, and installation. Explore our
-            full list of services below and discover how we can help transform your
-            space with top-tier craftsmanship and innovative solutions built for
-            style, durability, and performance.
+            Explore our full range of services, expertly designed to meet both residential and commercial needs.
           </p>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            {SERVICES.map((service, idx) => (
-              <ServiceCard
-                key={service.label}
-                icon={service.icon}
-                label={service.label}
-                info={service.info}
-                flipped={flippedIndex === idx}
-                onClick={() =>
-                  setFlippedIndex(flippedIndex === idx ? null : idx)
-                }
-              />
-            ))}
-          </div>
-          <div className="flex flex-col items-center mt-6">
-            <div className="bg-[#232d3b] text-white rounded-full w-16 h-16 flex items-center justify-center mb-2">
-              <FaCogs size={32} />
-            </div>
-            <span className="font-semibold text-[#232d3b]">Custom Design</span>
+            {services.map((s, idx) => {
+              const IconComponent = s.icon ? (FaIcons as any)[s.icon] || FaIcons.FaCogs : FaIcons.FaCogs;
+              return (
+                <ServiceCard
+                  key={s.id}
+                  icon={<IconComponent size={36} />}
+                  label={s.name}
+                  info={s.short_description}
+                  flipped={flippedIndex === idx}
+                  onClick={() => setFlippedIndex(flippedIndex === idx ? null : idx)}
+                />
+              );
+            })}
           </div>
         </section>
       </main>
@@ -167,9 +117,7 @@ function ServiceCard({
         {/* Back */}
         <div
           className={`absolute inset-0 flex flex-col items-center justify-center bg-white text-[#232d3b] rounded shadow-lg backface-hidden`}
-          style={{
-            transform: "rotateY(180deg)",
-          }}
+          style={{ transform: "rotateY(180deg)" }}
         >
           <span className="font-semibold mb-2">{label}</span>
           <p className="text-xs mb-3 px-2 text-center">{info}</p>

@@ -1,118 +1,121 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
+import { supabase } from "@/lib/supabaseClient";
 import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
 
-// Sample 
-const projects = [
-  {
-    id: 1,
-    name: "Modern Glass House",
-    img: "/projects/p1.jpg",
-    link: "https://example.com/project1",
-    details: "A sleek modern glass house with premium aluminum framing."
-  },
-  {
-    id: 2,
-    name: "Luxury Villa",
-    img: "/projects/p2.jpg",
-    link: "https://example.com/project2",
-    details: "A luxury villa featuring wide sliding doors and open living spaces."
-  },
-  {
-    id: 3,
-    name: "Commercial Building",
-    img: "/projects/p3.jpg",
-    link: "https://example.com/project3",
-    details: "High-rise commercial building with energy-efficient windows."
-  },
-  // add more
-];
+interface Project {
+  id: number;
+  title: string;
+  description: string;
+  image_url?: string;
+  link_url?: string;
+}
 
-export default function FeaturedProjects() {
-  const [selected, setSelected] = useState<any>(null);
+export default function FeaturedProjects({ withLayout = true }: { withLayout?: boolean }) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selected, setSelected] = useState<Project | null>(null);
 
-  return (
-    <div className="flex flex-col min-h-screen bg-[#232d3b]">
-      <TopNavBarLoggedIn />
-      <main className="flex-1">
-        <div className="py-10">
-          <h2 className="text-3xl font-bold text-center mb-6 text-white">Featured Projects</h2>
-          <p className="text-center text-gray-300 max-w-2xl mx-auto mb-10">
-            Explore our showcase of premium residential and commercial installations.
-            Each project is a testament to our craftsmanship and client satisfaction.
-          </p>
+  useEffect(() => {
+    async function fetchProjects() {
+      const { data, error } = await supabase.from("featured_projects").select("*");
+      if (error) console.error(error);
+      else setProjects(data || []);
+    }
+    fetchProjects();
+  }, []);
 
-          {/* Responsive Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 px-4">
-            {projects.map((p) => (
-              <motion.div
-                key={p.id}
-                whileHover={{ scale: 1.05 }}
-                className="cursor-pointer bg-white rounded-lg shadow"
-                onClick={() => setSelected(p)}
-              >
-                <Image
-                  src={p.img}
-                  alt={p.name}
-                  width={400}
-                  height={300}
-                  className="w-full h-40 object-cover rounded-lg"
-                />
-              </motion.div>
-            ))}
-          </div>
-        </div>
+  const content = (
+    <div className="py-10">
+      <h2 className="text-3xl font-bold text-center mb-6 text-white">Featured Projects</h2>
+      <p className="text-center text-gray-300 max-w-2xl mx-auto mb-10">
+        Explore our showcase of premium residential and commercial installations.
+        Each project is a testament to our craftsmanship and client satisfaction.
+      </p>
 
-        {/* Modal Preview */}
-        <AnimatePresence>
-          {selected && (
+      {/* Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 px-4">
+        {projects.map((p) => (
+          <motion.div
+            key={p.id}
+            whileHover={{ scale: 1.05 }}
+            className="cursor-pointer bg-white rounded-lg shadow"
+            onClick={() => setSelected(p)}
+          >
+            <Image
+              src={p.image_url || "/placeholder.jpg"}
+              alt={p.title}
+              width={400}
+              height={300}
+              className="w-full h-40 object-cover rounded-lg"
+            />
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Modal */}
+      <AnimatePresence>
+        {selected && (
+          <motion.div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelected(null)}
+          >
             <motion.div
-              className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSelected(null)}
+              className="bg-white rounded-xl shadow-xl max-w-lg w-full p-5 relative"
+              initial={{ scale: 0.8 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.8 }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <motion.div
-                className="bg-white rounded-xl shadow-xl max-w-lg w-full p-5 relative"
-                initial={{ scale: 0.8 }}
-                animate={{ scale: 1 }}
-                exit={{ scale: 0.8 }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Image
-                  src={selected.img}
-                  alt={selected.name}
-                  width={600}
-                  height={400}
-                  className="rounded-lg mb-4 w-full object-cover"
-                />
-                <h3 className="text-xl font-bold">{selected.name}</h3>
-                <p className="text-gray-600 my-2">{selected.details}</p>
+              <Image
+                src={selected.image_url || "/placeholder.jpg"}
+                alt={selected.title}
+                width={600}
+                height={400}
+                className="rounded-lg mb-4 w-full object-cover"
+              />
+              <h3 className="text-xl font-bold">{selected.title}</h3>
+              <p className="text-gray-600 my-2">{selected.description}</p>
+              {selected.link_url && (
                 <a
-                  href={selected.link}
+                  href={selected.link_url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-blue-600 font-semibold underline"
                 >
                   View Project
                 </a>
-                <button
-                  onClick={() => setSelected(null)}
-                  className="absolute top-2 right-2 text-gray-600 hover:text-red-500 text-lg"
-                >
-                  ✕
-                </button>
-              </motion.div>
+              )}
+              <button
+                onClick={() => setSelected(null)}
+                className="absolute top-2 right-2 text-gray-600 hover:text-red-500 text-lg"
+              >
+                ✕
+              </button>
             </motion.div>
-          )}
-        </AnimatePresence>
-      </main>
-      <Footer />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
+
+  
+  if (withLayout) {
+    return (
+      <div className="flex flex-col min-h-screen bg-[#232d3b]">
+        <TopNavBarLoggedIn />
+        <main className="flex-1">{content}</main>
+        <Footer />
+      </div>
+    );
+  }
+
+
+  return <section className="bg-[#232d3b] text-white">{content}</section>;
 }
