@@ -25,6 +25,8 @@ export default function AdminInquiriesPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Inquiry | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -53,18 +55,30 @@ export default function AdminInquiriesPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return inquiries;
-    return inquiries.filter((i) => {
-      return (
-        i.first_name.toLowerCase().includes(q) ||
-        i.last_name.toLowerCase().includes(q) ||
-        (i.email ?? "").toLowerCase().includes(q) ||
-        (i.phone ?? "").toLowerCase().includes(q) ||
-        i.inquiry_type.toLowerCase().includes(q) ||
-        (i.message ?? "").toLowerCase().includes(q)
-      );
-    });
-  }, [inquiries, query]);
+    let result = inquiries;
+    if (q) {
+      result = result.filter((i) => {
+        return (
+          i.first_name.toLowerCase().includes(q) ||
+          i.last_name.toLowerCase().includes(q) ||
+          (i.email ?? "").toLowerCase().includes(q) ||
+          (i.phone ?? "").toLowerCase().includes(q) ||
+          i.inquiry_type.toLowerCase().includes(q) ||
+          (i.message ?? "").toLowerCase().includes(q)
+        );
+      });
+    }
+    if (dateFrom) {
+      result = result.filter((i) => new Date(i.created_at) >= new Date(dateFrom));
+    }
+    if (dateTo) {
+      // Add one day to include the end date
+      const endDate = new Date(dateTo);
+      endDate.setDate(endDate.getDate() + 1);
+      result = result.filter((i) => new Date(i.created_at) < endDate);
+    }
+    return result;
+  }, [inquiries, query, dateFrom, dateTo]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this inquiry? This action cannot be undone.")) return;
@@ -84,20 +98,38 @@ export default function AdminInquiriesPage() {
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Inquiries</h1>
+        <h1 className="text-2xl font-semibold text-black">Inquiries</h1>
         <div className="flex items-center gap-3">
           <Link href="/dashboard" className="text-sm px-3 py-1 rounded bg-gray-100">Back</Link>
         </div>
       </header>
 
       <div className="bg-white p-4 rounded shadow">
-        <div className="flex gap-3 mb-4">
+        <div className="flex gap-3 mb-4 items-center">
           <input
-            className="flex-1 border rounded px-3 py-2"
+            className="flex-1 border rounded px-3 py-2 text-gray-700"
             placeholder="Search name, email, phone, type or message"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          <label className="text-black text-sm flex items-center gap-1">
+            From:
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              className="border rounded px-2 py-1 text-black"
+            />
+          </label>
+          <label className="text-black text-sm flex items-center gap-1">
+            To:
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              className="border rounded px-2 py-1 text-black"
+            />
+          </label>
         </div>
 
         {loading ? (

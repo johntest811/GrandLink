@@ -2,6 +2,7 @@
 import { useState } from "react";
 import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
+import { supabase } from "../Clients/Supabase/SupabaseClients"; // Use your shared Supabase client
 
 export default function ReservationForm() {
   const [formData, setFormData] = useState({
@@ -20,6 +21,7 @@ export default function ReservationForm() {
     address: "",
     agree: false,
   });
+  const [submitting, setSubmitting] = useState(false);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
@@ -32,9 +34,126 @@ export default function ReservationForm() {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log(formData);
+    if (submitting) return;
+
+    // Basic validation
+    if (
+      !formData.name.trim() ||
+      !formData.lastName.trim() ||
+      !formData.phone.trim() ||
+      !formData.email.trim() ||
+      !formData.storeBranch ||
+      !formData.typeOfProduct ||
+      !formData.agree
+    ) {
+      alert("Please fill all required fields and agree to the terms.");
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      // Get current user
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = (userData as any)?.user?.id ?? null;
+
+      if (!userId) {
+        alert("You must be logged in to reserve.");
+        setSubmitting(false);
+        return;
+      }
+
+      // 1. Create user_item (reserve)
+      const { data: userItemData, error: userItemErr } = await supabase
+        .from("user_items")
+        .insert([
+          {
+            user_id: userId,
+            product_id: null, // You may want to link to a product if available
+            item_type: "reserve",
+            status: "active",
+            quantity: 1,
+            meta: {
+              name: `${formData.name} ${formData.lastName}`,
+              phone: formData.phone,
+              email: formData.email,
+              storeBranch: formData.storeBranch,
+              typeOfProduct: formData.typeOfProduct,
+              productModel: formData.productModel,
+              width: formData.width,
+              height: formData.height,
+              thickness: formData.thickness,
+              construction: formData.construction,
+              remarks: formData.remarks,
+              address: formData.address,
+            },
+          },
+        ])
+        .select()
+        .maybeSingle();
+
+      if (userItemErr || !userItemData) {
+        alert("Could not save reservation. Please try again.");
+        setSubmitting(false);
+        return;
+      }
+
+      // 2. Create reservation row linked to user_items
+      const { error: reservationErr } = await supabase
+        .from("reservations")
+        .insert([
+          {
+            user_id: userId,
+            user_item_id: userItemData.id,
+            name: formData.name,
+            last_name: formData.lastName,
+            phone: formData.phone,
+            email: formData.email,
+            store_branch: formData.storeBranch,
+            type_of_product: formData.typeOfProduct,
+            product_model: formData.productModel,
+            width: formData.width ? Number(formData.width) : null,
+            height: formData.height ? Number(formData.height) : null,
+            thickness: formData.thickness ? Number(formData.thickness) : null,
+            construction: formData.construction,
+            remarks: formData.remarks,
+            address: formData.address,
+            agree: formData.agree,
+          },
+        ]);
+
+      if (reservationErr) {
+        alert("Could not save reservation details. Please try again.");
+        setSubmitting(false);
+        return;
+      }
+
+      alert("Reservation submitted successfully! You can view it in your profile's reserve page.");
+      setFormData({
+        name: "",
+        lastName: "",
+        phone: "",
+        email: "",
+        storeBranch: "",
+        typeOfProduct: "",
+        productModel: "",
+        width: "",
+        height: "",
+        thickness: "",
+        construction: "",
+        remarks: "",
+        address: "",
+        agree: false,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Reservation error", err);
+      alert("Unexpected error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -226,8 +345,9 @@ export default function ReservationForm() {
                 <button
                   type="submit"
                   className="bg-red-700 text-white px-8 py-3 rounded-lg hover:bg-red-800"
+                  disabled={submitting}
                 >
-                  SUBMIT
+                  {submitting ? "Submitting..." : "SUBMIT"}
                 </button>
               </div>
             </form>

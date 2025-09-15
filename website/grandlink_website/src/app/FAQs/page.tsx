@@ -58,19 +58,19 @@ export default function FAQsPage() {
           }}
         >
           <div className="bg-white bg-opacity-90 px-8 py-4 rounded-md">
-            <h1 className="text-3xl font-bold">FAQs</h1>
+            <h1 className="text-3xl font-bold text-black">FAQs</h1>
           </div>
         </section>
 
         {/* FAQs Section */}
         <section className="bg-[#0a223d] py-12">
           <div className="bg-white max-w-4xl mx-auto p-8 shadow-lg rounded-md">
-            <h2 className="text-2xl font-bold text-center mb-6">
+            <h2 className="text-2xl font-bold text-center mb-6 text-black">
               Frequently Asked Questions
             </h2>
 
             {/* Categories Tabs */}
-            <div className="flex flex-wrap justify-center gap-6 mb-8 border-b pb-3">
+            <div className="flex flex-wrap justify-center gap-6 mb-8 border-b pb-3 text-black">
               {categories.map((cat) => (
                 <button
                   key={cat.id}
@@ -99,7 +99,7 @@ export default function FAQsPage() {
                       onClick={() =>
                         setOpenQuestion(openQuestion === q.id ? null : q.id)
                       }
-                      className="w-full flex justify-between text-left font-semibold py-3"
+                      className="w-full flex justify-between text-left font-semibold py-3 text-black"
                     >
                       <span>{q.question}</span>
                       <span className="text-red-600">
