@@ -6,9 +6,12 @@ import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
 import { FaUserCircle, FaMapMarkerAlt, FaBell, FaCog, FaQuestionCircle } from "react-icons/fa";
 import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
+import React from "react";
 
 export default function ProfileLayout({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<any>(null);
+  const pathname = usePathname() || "";
   useEffect(() => {
     const fetchUser = async () => {
       const { data } = await import("@/app/Clients/Supabase/SupabaseClients").then(mod => mod.supabase.auth.getUser());
@@ -76,7 +79,41 @@ export default function ProfileLayout({ children }: { children: React.ReactNode 
         </aside>
         {/* Page Content */}
         <section className="flex-1 flex flex-col">
-          {children}
+          {/* Tabs (shared for all profile sub-pages) */}
+          <div className="px-8 py-6 border-b bg-gray-50">
+            <nav className="flex gap-2">
+              {[
+                { label: "All", href: "/profile" },
+                { label: "My List", href: "/profile/my-list" },
+                { label: "Reserve", href: "/profile/reserve" },
+                { label: "Order", href: "/profile/order" },
+                { label: "Completed", href: "/profile/completed" },
+                { label: "Cancelled", href: "/profile/cancelled" },
+              ].map((t) => {
+                const active =
+                  t.href === "/profile"
+                    ? pathname === "/profile" || pathname === "/profile/"
+                    : pathname.startsWith(t.href);
+                return (
+                  <Link
+                    key={t.href}
+                    href={t.href}
+                    className={
+                      (active
+                        ? "px-6 py-2 border rounded bg-[#8B1C1C] text-white font-semibold"
+                        : "px-6 py-2 border rounded bg-white text-gray-700 font-semibold")
+                    }
+                  >
+                    {t.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+
+          <div className="flex-1">
+            {children}
+          </div>
         </section>
       </main>
       <Footer />

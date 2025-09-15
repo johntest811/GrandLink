@@ -53,7 +53,7 @@ export default function HomePage() {
         const { data, error } = await supabaseClient
           .from("products")
           .select("id, name, description, price, images, image1, image2, image3, image4, image5, created_at")
-          .order("created_at", { ascending: false, nulls: "last" })
+          .order("created_at", { ascending: false })
           .limit(3);
 
         if (error) {
@@ -260,7 +260,7 @@ function ProductCategory({
 
   return (
     <div className="mb-8" id={identifier}>
-      <h2 className="text-2xl font-bold mb-4">{title}</h2>
+      <h2 className="text-2xl font-bold mb-4 text-black">{title}</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {list.length
           ? list.map((item: any, idx: number) => {
@@ -271,7 +271,7 @@ function ProductCategory({
                     <div className="h-40 bg-gray-200 flex items-center justify-center">
                       <span className="text-gray-500">Image</span>
                     </div>
-                    <h3 className="mt-2 font-semibold text-center">{item}</h3>
+                    <h3 className="mt-2 font-semibold text-center text-black">{item}</h3>
                     <button className="mt-2 bg-red-600 text-white px-3 py-1 rounded w-full">View Now</button>
                   </div>
                 );
@@ -294,7 +294,7 @@ function ProductCategory({
 
                   <div className="flex-1 flex flex-col justify-between mt-2">
                     <div>
-                      <h3 className="font-semibold text-center">{displayTitle}</h3>
+                      <h3 className="font-semibold text-center text-black">{displayTitle}</h3>
                       {shortDesc ? <p className="text-sm text-gray-600 mt-1 text-center">{shortDesc}</p> : null}
                       {dateLabel ? <div className="text-xs text-gray-500 text-center mt-2">{dateLabel}</div> : null}
                     </div>
@@ -302,11 +302,15 @@ function ProductCategory({
                     <div className="mt-3">
                       {/* link to product page if id exists, otherwise no-op */}
                       {item.id ? (
-                        <Link href={`/products/${item.id}`} className="block text-center bg-red-600 text-white px-3 py-1 rounded">
+                        // navigate to the details page and pass id as a query param so the details page can read it
+                        <Link href={`/Product/details?id=${item.id}`} className="block text-center bg-red-600 text-white px-3 py-1 rounded">
                           View Now
                         </Link>
                       ) : (
-                        <button className="w-full bg-red-600 text-white px-3 py-1 rounded">View Now</button>
+                        // fallback: go to Product listing if no id available
+                        <Link href="/Product" className="w-full block text-center bg-red-600 text-white px-3 py-1 rounded">
+                          View Now
+                        </Link>
                       )}
                     </div>
                   </div>
@@ -315,14 +319,14 @@ function ProductCategory({
             })
           : // fallback placeholders
             ["GE 103", "GE 79", "GE 116"].map((t) => (
-              <div key={t} className="border shadow p-4">
-                <div className="h-40 bg-gray-200 flex items-center justify-center">
-                  <span className="text-gray-500">Image</span>
-                </div>
-                <h3 className="mt-2 font-semibold text-center">{t}</h3>
-                <button className="mt-2 bg-red-600 text-white px-3 py-1 rounded w-full">View Now</button>
-              </div>
-            ))}
+               <div key={t} className="border shadow p-4">
+                 <div className="h-40 bg-gray-200 flex items-center justify-center">
+                   <span className="text-gray-500">Image</span>
+                 </div>
+                <h3 className="mt-2 font-semibold text-center text-black">{t}</h3>
+                 <button className="mt-2 bg-red-600 text-white px-3 py-1 rounded w-full">View Now</button>
+               </div>
+             ))}
       </div>
     </div>
   );
@@ -342,7 +346,7 @@ function ExploreSection({ items }: { items?: Array<any> }) {
                 <div className="h-32 bg-gray-200 flex items-center justify-center">
                   {img ? <img src={img} alt={cat.title || ""} className="h-full object-cover" /> : <span className="text-gray-500">Image</span>}
                 </div>
-                <h3 className="font-semibold text-lg mt-2">{cat.title}</h3>
+                <h3 className="font-semibold text-lg mt-2 text-black">{cat.title}</h3>
                 <button className="mt-2 bg-red-600 text-white px-3 py-1 rounded">View More</button>
               </div>
             );
@@ -480,12 +484,12 @@ function ServicesSection({ services, about }: { services?: any; about?: any }) {
         <div className="order-4 md:order-4 relative z-20 pr-4 pt-4">
           <div className="bg-[#0f2a44] text-white p-5 min-h-[160px] flex flex-col justify-between rounded">
             <div>
-              <h3 className="text-xl md:text-2xl font-bold mb-2">ABOUT GRAND EAST</h3>
+              <h3 className="text-xl md:text-2xl font-bold mb-2">{a.title ?? "ABOUT GRAND EAST"}</h3>
               <div className="h-1 w-12 bg-red-600 mb-3" />
               <p className="text-sm mb-4 leading-relaxed">
                 {a.description ??
                   serv.aboutDescription ??
-                  "At Grand East, we specialize in creating modern, durable, and stylish solutions that redefine residential and commercial spaces."}
+                  "At Grand East, we specialize in creating modern, durable, and stylish solutions that redefine residential and commercial spaces. With a passion for precision and a commitment to quality, our expert team delivers exceptional aluminum and glass installations that stand the test of time. Whether you're upgrading your home or transforming your business, we provide innovative designs that combine functionality with aesthetic appeal, ensuring your vision becomes a reality."}
               </p>
             </div>
             <div>

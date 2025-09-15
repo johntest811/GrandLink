@@ -52,7 +52,7 @@ export default function DashboardLayout({
       name: 'Content Management',
       icon: '🗂️',
       dropdown: [
-        { name: 'Home', path: '/' },
+        { name: 'Home', path: '/dashboard/content/home' },
         { name: 'About Us', path: '/about' },
         { name: 'Showrooms', path: '/showrooms' },
         { name: 'Services We Offer', path: '/services' },
