@@ -12,6 +12,8 @@ To run next.js properly
 - npm install three
 - npm install --save-dev @types/three
 - npm install three-stdlib
+- npm install lucide-react
+- npm install @radix-ui/react-slot class-variance-authority
 
 **Packages needs to Install Next.js**
 - npm install framer-motion

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase } from "../Clients/Supabase/SupabaseClients";
 import TopNavBarLoggedIn from '@/components/TopNavBarLoggedIn';
 import Footer from '@/components/Footer';
 import Link from 'next/link';
