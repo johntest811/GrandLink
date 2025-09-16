@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../Clients/Supabase/SupabaseClients";
 import bcrypt from "bcryptjs";
 
 type Admin = {
@@ -15,19 +15,6 @@ type Admin = {
   last_login?: string | null;
   user_metadata?: any;
 };
-
-function getSupabaseClient() {
-  const url =
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    process.env.SUPABASE_URL;
-  const key =
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) return null;
-  return createClient(url, key);
-}
 
 export default function AdminsPage() {
   const [admins, setAdmins] = useState<Admin[]>([]);
@@ -55,9 +42,7 @@ export default function AdminsPage() {
   }, []);
 
   async function fetchAdmins() {
-    const supabase = getSupabaseClient();
     if (!supabase) {
-      console.error("Supabase env vars missing (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).");
       setEnvMissing(true);
       setAdmins([]);
       return;
@@ -73,7 +58,6 @@ export default function AdminsPage() {
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("fetch admins error:", JSON.stringify(error, null, 2), "status:", status);
         setAdmins([]);
       } else {
         const adminsWithLogin = ((data as Admin[]) || []).map((a) => {
@@ -88,7 +72,6 @@ export default function AdminsPage() {
         setAdmins(adminsWithLogin);
       }
     } catch (err) {
-      console.error("unexpected fetchAdmins error:", err);
       setAdmins([]);
     } finally {
       setLoading(false);
@@ -113,29 +96,21 @@ export default function AdminsPage() {
 
   async function handleDelete(id: string, skipConfirm = false) {
     if (!skipConfirm && !confirm("Delete this admin?")) return;
-    const supabase = getSupabaseClient();
     if (!supabase) return alert("Cannot delete: Supabase not configured.");
     setActionLoading(true);
     const { error } = await supabase.from("admins").delete().eq("id", id);
-    if (error) console.error("delete admin error:", error);
     await fetchAdmins();
-    // remove from selected if present
     setSelected((prev) => prev.filter((s) => s !== id));
     setActionLoading(false);
   }
 
-  // Bulk delete selected items
   async function handleBulkDelete() {
     if (selected.length === 0) return;
     if (!confirm(`Delete ${selected.length} selected admin(s)?`)) return;
-    const supabase = getSupabaseClient();
     if (!supabase) return alert("Cannot delete: Supabase not configured.");
     setActionLoading(true);
     const { error } = await supabase.from("admins").delete().in("id", selected);
-    if (error) {
-      console.error("bulk delete error:", error);
-      alert("Failed to delete selected admins.");
-    } else {
+    if (!error) {
       setSelected([]);
       await fetchAdmins();
     }

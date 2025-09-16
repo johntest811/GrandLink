@@ -1,14 +1,9 @@
 "use client";
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../Clients/Supabase/SupabaseClients';
 // Add these imports for Three.js and FBXLoader
 import * as THREE from 'three';
-
-const supabase = createClient(
-  "https://gijnybivawnsilzqegik.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdpam55Yml2YXduc2lsenFlZ2lrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQyODAyMjUsImV4cCI6MjA2OTg1NjIyNX0.-gO8DcuK9-Q7nQmHRGnKJX3j8W0xHk925KlALBth1gU"
-);
 
 const uploadFile = async (file: File, folder: string) => {
   const fileExt = file.name.split('.').pop();

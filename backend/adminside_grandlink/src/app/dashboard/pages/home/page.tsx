@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../../Clients/Supabase/SupabaseClients";
 
 type HomeContent = {
   carousel?: Array<{ image?: string; title?: string; buttonText?: string; buttonLink?: string }>;
@@ -11,11 +12,6 @@ type HomeContent = {
   about?: { logo?: string; title?: string; description?: string; buttonText?: string; buttonLink?: string };
   [k: string]: any;
 };
-
-// Supabase client (client-side; uses public anon key)
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // bucket name - change to your bucket
 const BUCKET_NAME = "uploads";
@@ -72,7 +68,7 @@ export default function HomeEditor() {
     // load images from supabase storage (public bucket expected)
     const loadImages = async () => {
       try {
-        const { data, error } = await supabaseClient.storage.from(BUCKET_NAME).list("", { limit: 200 });
+        const { data, error } = await supabase.storage.from(BUCKET_NAME).list("", { limit: 200 });
         if (error) {
           console.error("storage.list error:", error);
           return;
@@ -81,7 +77,7 @@ export default function HomeEditor() {
         const makePublicUrl = (fileName: string) => {
           // Build a safe encoded public storage URL directly to avoid StorageApiError
           // (do not call getPublicUrl() on the client - it can throw for some keys)
-          const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || SUPABASE_URL || "").replace(/\/$/, "");
+          const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
           return `${base}/storage/v1/object/public/${BUCKET_NAME}/${encodeURIComponent(fileName)}`;
         };
 
@@ -107,7 +103,7 @@ export default function HomeEditor() {
     try {
       // create a unique filename - you may want to include folder names
       const filePath = `${Date.now()}_${file.name}`;
-      const { data: uploadData, error: uploadError } = await supabaseClient.storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
         .from(BUCKET_NAME)
         .upload(filePath, file, { upsert: true });
 
@@ -119,7 +115,7 @@ export default function HomeEditor() {
       }
 
       // get public url
-      const { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(filePath);
+      const { data: urlData } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
       const publicUrl = urlData?.publicUrl || "";
 
       // prepend new image to list and automatically select it (optional)

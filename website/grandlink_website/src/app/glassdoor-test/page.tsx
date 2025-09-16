@@ -259,17 +259,32 @@ export default function GlassDoorTestPage() {
     object.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
-        if (colorOpt.value === null && !texture) {
-          // Use original material
-          // Do nothing, keep the original
+        // Detect glass by mesh or material name (adjust as needed)
+        const isGlass =
+          mesh.name.toLowerCase().includes("glass") ||
+          ((mesh.material as any)?.name ?? "").toLowerCase().includes("glass");
+        if (isGlass) {
+          mesh.material = new THREE.MeshPhysicalMaterial({
+            color: colorOpt.value ?? 0xffffff,
+            map: texture ?? null,
+            transparent: true,
+            opacity: 0.5,
+            transmission: 0.9,
+            roughness: 0.1,
+            metalness: 0,
+            ior: 1.5,
+            thickness: 0.2,
+            clearcoat: 1,
+            clearcoatRoughness: 0.1,
+          });
         } else if (texture) {
           mesh.material = new THREE.MeshPhongMaterial({
             map: texture,
             color: colorOpt.value ?? 0xffffff,
           });
-        } else {
+        } else if (colorOpt.value) {
           mesh.material = new THREE.MeshPhongMaterial({
-            color: colorOpt.value ?? 0xffffff,
+            color: colorOpt.value,
           });
         }
         if (Array.isArray(mesh.material)) {

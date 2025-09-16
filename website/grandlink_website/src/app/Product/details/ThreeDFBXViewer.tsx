@@ -254,29 +254,8 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
     loader.load(
       fbxUrl,
       (object) => {
-        object.traverse(function (child) {
-          if ((child as THREE.Mesh).isMesh) {
-            (child as THREE.Mesh).castShadow = true;
-            (child as THREE.Mesh).receiveShadow = true;
-            // a bit of roughness to catch light correctly
-            const mat = (child as THREE.Mesh).material as any;
-            if (mat && mat.color) {
-              mat.needsUpdate = true;
-            }
-          }
-        });
         scene.add(object);
-
-        // Point the sun at the model center so shadows "point" correctly
-        // ensure sunLight.target exists in scene
-        sunLight.target.position.set(object.position.x || 0, object.position.y || 0, object.position.z || 0);
-        scene.add(sunLight.target);
-
-        // Move sunMesh to match sunLight
-        sunMesh.position.copy(sunLight.position);
-
-        // center controls on model
-        controls.target.set(object.position.x || 0, object.position.y || 90, object.position.z || 0);
+        applyGlassMaterial(object);
       },
       undefined,
       (err) => {
@@ -358,6 +337,34 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
       }
     };
   }, [fbxUrl, width, height, weather]);
+
+  // Apply glass material to loaded object
+  function applyGlassMaterial(object: THREE.Object3D) {
+    object.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        // Detect glass by mesh or material name (adjust as needed)
+        const isGlass =
+          mesh.name.toLowerCase().includes("glass") ||
+          ((mesh.material as any)?.name ?? "").toLowerCase().includes("glass");
+        if (isGlass) {
+          mesh.material = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.5,
+            transmission: 0.95,
+            roughness: 0.1,
+            metalness: 0,
+            ior: 1.5,
+            thickness: 0.2,
+            clearcoat: 1,
+            clearcoatRoughness: 0.1,
+          });
+          mesh.material.needsUpdate = true;
+        }
+      }
+    });
+  }
 
   return (
     <div className="relative" style={{ width, height }}>

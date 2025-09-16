@@ -6,8 +6,15 @@ import Link from "next/link";
 import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
 import dynamic from "next/dynamic";
+import { createClient } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
 
 const ThreeDFBXViewer = dynamic(() => import("./ThreeDFBXViewer"), { ssr: false });
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export default function ProductDetailsPage() {
   const searchParams = useSearchParams();
@@ -15,6 +22,7 @@ export default function ProductDetailsPage() {
   const [product, setProduct] = useState<any>(null);
   const [carouselIdx, setCarouselIdx] = useState(0);
   const [show3D, setShow3D] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -42,6 +50,62 @@ export default function ProductDetailsPage() {
 
   const handlePrev = () => setCarouselIdx((idx) => (idx === 0 ? images.length - 1 : idx - 1));
   const handleNext = () => setCarouselIdx((idx) => (idx === images.length - 1 ? 0 : idx + 1));
+
+  // Add to Wishlist with confirmation
+  const handleAddToWishlist = async () => {
+    if (!window.confirm("Add this product to your wishlist?")) return;
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = (userData as any)?.user?.id;
+    if (!userId) {
+      alert("Please log in to add to wishlist.");
+      return;
+    }
+    const { error } = await supabase
+      .from("user_items")
+      .insert([
+        {
+          user_id: userId,
+          product_id: product.id,
+          item_type: "my-list",
+          status: "active",
+          quantity: 1,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    if (error) {
+      alert("Could not add to wishlist.");
+      return;
+    }
+    router.push("/profile/my-list");
+  };
+
+  // Reserve Now with confirmation
+  const handleReserveNow = async () => {
+    if (!window.confirm("Reserve this product now?")) return;
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = (userData as any)?.user?.id;
+    if (!userId) {
+      alert("Please log in to reserve.");
+      return;
+    }
+    const { error } = await supabase
+      .from("user_items")
+      .insert([
+        {
+          user_id: userId,
+          product_id: product.id,
+          item_type: "reserve",
+          status: "reserved",
+          quantity: 1,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    if (error) {
+      alert("Could not reserve product.");
+      return;
+    }
+    router.push("/profile/reserve");
+  };
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -112,17 +176,29 @@ export default function ProductDetailsPage() {
             <button
               disabled={!product.fbx_url}
               onClick={() => setShow3D(true)}
-              className={`flex flex-col items-center px-6 py-4 rounded border ${product.fbx_url ? "bg-black text-white" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
+              className={`flex flex-col items-center px-6 py-4 rounded border transition-all duration-200
+                ${product.fbx_url
+                  ? "bg-black text-white hover:bg-gray-900 hover:scale-105"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                }`}
               title="View 3D"
             >
               <span className="font-bold text-base">3D</span>
               <span className="text-base">3D View</span>
             </button>
-            <button className="flex flex-col items-center px-6 py-4 rounded border bg-gray-100 text-gray-700">
+            <button
+              onClick={handleAddToWishlist}
+              className="flex flex-col items-center px-6 py-4 rounded border bg-gray-100 text-gray-700 transition-all duration-200 hover:bg-red-100 hover:text-red-700 hover:scale-105"
+            >
               <span className="font-bold text-base">♥</span>
               <span className="text-base">Add to Wishlist</span>
             </button>
-            <button className="bg-red-600 text-white px-8 py-4 rounded font-semibold text-xl">Reserve Now</button>
+            <button
+              onClick={handleReserveNow}
+              className="bg-red-600 text-white px-8 py-4 rounded font-semibold text-xl transition-all duration-200 hover:bg-red-700 hover:scale-105"
+            >
+              Reserve Now
+            </button>
           </div>
           {/* Key Features */}
           <div className="mt-12 border-t pt-8">

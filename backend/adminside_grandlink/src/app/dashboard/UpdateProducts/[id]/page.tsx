@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../../Clients/Supabase/SupabaseClients";
 
 type Product = {
   id: string;
@@ -23,11 +23,6 @@ type Product = {
   fullproductname?: string;
   additionalfeatures?: string;
 };
-
-const supabase = createClient(
-  "https://gijnybivawnsilzqegik.supabase.co",
-  "your-real-anon-key-here"
-);
 
 export default function EditProductPage() {
   const router = useRouter();
@@ -77,7 +72,7 @@ export default function EditProductPage() {
     const file = e.target.files[0];
     const filePath = `products/${field}/${product.id}_${file.name}`;
     const { data, error } = await supabase.storage
-      .from("public")
+      .from("products") // <-- use correct bucket name
       .upload(filePath, file, { upsert: true });
     if (error) {
       setMessage(`Error uploading file: ${error.message}`);
@@ -163,7 +158,7 @@ export default function EditProductPage() {
         <div>
           <label className="block font-medium mb-1 text-black">Category</label>
           <select
-            value={product.category}
+            value={product.category ?? ""}
             onChange={e => handleChange("category", e.target.value)}
             className="border px-3 py-2 rounded w-full text-black bg-white"
             required
