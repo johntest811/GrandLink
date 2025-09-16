@@ -1,87 +1,220 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Image, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Image, TextInput, TouchableOpacity, ScrollView, StyleSheet, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
 
-export default function ShopScreen() {
-    const router = useRouter();
-    const [data, setData] = useState<any[]>([]);
-    const [error, setError] = useState<string | null>(null);
+const filterOptions = [
+  'Doors',
+  'Windows',
+  'Enclosure',
+  'Casement',
+  'Sliding',
+  'Curtain Wall',
+  'Rails',
+  'Canopy',
+];
 
-    useEffect(() => {
+export default function ShopScreen() {
+  const router = useRouter();
+  const [data, setData] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [filterVisible, setFilterVisible] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+
+  useEffect(() => {
     const fetchData = async () => {
       const { data, error } = await supabase
-        .from('your_table')
+        .from('products') 
         .select('*');
       if (error) setError(error.message);
       else setData(data || []);
     };
     fetchData();
   }, []);
-  
+
+  // Filter products by selectedCategory
+  const filteredData =
+    selectedCategory === 'All'
+      ? data
+      : data.filter(product => product.category === selectedCategory);
+
   return (
-    <ScrollView style={styles.container}>
-      {/* Logo and Title */}
-      <View style={styles.logoRow}>
-        <Image
-          source={require('@/assets/images/GLLogo.png')}
-          style={styles.logoImage}
-          resizeMode="contain"
-        />
-        <View>
-          <Text style={styles.logoTitle}>GRAND EAST</Text>
-          <Text style={styles.logoSubtitle}>GLASS AND ALUMINUM</Text>
-        </View>
-      </View>
-
-      {/* Blue Bar */}
-      <View style={styles.blueBar} />
-
-      {/* Search and Filter */}
-      <View style={styles.searchRow}>
-        <View style={styles.searchBox}>
-          <Ionicons name="search" size={20} color="#888" />
-          <TextInput
-            placeholder="Search"
-            style={styles.searchInput}
-            placeholderTextColor="#888"
+    <View style={{ flex: 1 }}>
+      <ScrollView style={styles.container}>
+        {/* Logo and Title */}
+        <View style={styles.logoRow}>
+          <Image
+            source={require('@/assets/images/GLLogo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
           />
+          <View>
+            <Text style={styles.logoTitle}>GRAND EAST</Text>
+            <Text style={styles.logoSubtitle}>GLASS AND ALUMINUM</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.profileButton}
+            onPress={() => router.push('../profile')}
+          >
+            <Image
+              source={require('@/assets/images/profileicon.png')} 
+              style={styles.profileIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.filterButton}>
-          <Ionicons name="filter" size={24} color="#222" />
-        </TouchableOpacity>
-      </View>
+        <View style={styles.blueBar} />
+        <View style={styles.searchRow}>
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={20} color="#888" />
+            <TextInput
+              placeholder="Search"
+              style={styles.searchInput}
+              placeholderTextColor="#888"
+            />
+          </View>
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setFilterVisible(true)}
+          >
+            <Ionicons name="filter" size={24} color="#222" />
+          </TouchableOpacity>
+        </View>
 
-      {/* Category Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tabsRow}
-      >
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={styles.tabText}>All</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={[styles.tabText, styles.tabActive]}>Doors</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={styles.tabText}>Windows</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={styles.tabText}>Enclosure</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={styles.tabText}>Canopy</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={styles.tabText}>Railings</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('../shop')}>
-          <Text style={styles.tabText}>Curtain Wall</Text>
-        </TouchableOpacity>
+        {/* Category Tabs */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabsRow}
+        >
+          <TouchableOpacity onPress={() => setSelectedCategory('All')}>
+            <Text style={[styles.tabText, selectedCategory === 'All' && styles.tabActive]}>All</Text>
+          </TouchableOpacity>
+          {filterOptions.map(option => (
+            <TouchableOpacity key={option} onPress={() => setSelectedCategory(option)}>
+              <Text style={[styles.tabText, selectedCategory === option && styles.tabActive]}>{option}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* Products */}
+        <View style={styles.productsContainer}>
+          {filteredData.map(product => (
+            <TouchableOpacity
+              key={product.id}
+              style={styles.productBox}
+              activeOpacity={0.85}
+              onPress={() => router.push({ pathname: '/(tabs)/product', params: { id: product.id } })}
+            >
+              <Image
+                source={
+                  product.image1
+                    ? { uri: product.image1 }
+                    : require('@/assets/images/placeholder.png')
+                }
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+              <Text style={styles.productName}>{product.name}</Text>
+              <View style={{ width: '100%', alignItems: 'center' }}>
+                <Text style={[styles.productDesc, { maxWidth: 440, paddingHorizontal: 16 }]}>
+                  {product.description}
+                </Text>
+              </View>
+              <Text style={styles.productPrice}>₱{product.price}</Text>
+              {/* You can add more info here, e.g. material, type, etc. */}
+            </TouchableOpacity>
+          ))}
+        </View>
       </ScrollView>
-    </ScrollView>
+
+      {/* Filter Modal */}
+      <Modal
+        visible={filterVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setFilterVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.filterModal}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Ionicons name="filter" size={24} color="#2563eb" />
+              <Text style={{ fontWeight: 'bold', fontSize: 18, marginLeft: 8, color: '#2563eb' }}>Filter</Text>
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 }}>
+              {filterOptions.map(option => (
+                <TouchableOpacity
+                  key={option}
+                  style={styles.radioRow}
+                  onPress={() => setSelectedCategory(option)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.radioOuter}>
+                    {selectedCategory === option && <View style={styles.radioInner} />}
+                  </View>
+                  <Text style={styles.radioLabel}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <TouchableOpacity style={styles.dropdown}>
+                <Text>Colors ▼</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.applyButton} onPress={() => setFilterVisible(false)}>
+                <Text style={{ color: '#fff', fontWeight: 'bold' }}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Bottom Bar */}
+      <View style={styles.redLowerBar}>
+        <View style={styles.sideIconsContainer}>
+          <TouchableOpacity style={styles.sideIconButton} onPress={() => router.push('../homepage')}>
+            <Image
+              source={require('@/assets/images/home.png')}
+              style={styles.sideIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.sideIconButton}>
+            <Image
+              source={require('@/assets/images/inquire.png')}
+              style={styles.sideIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity
+          style={styles.circleButton}
+          onPress={() => router.push('../shop')}
+        >
+          <Image
+            source={require('@/assets/images/catalogbutton.png')}
+            style={styles.catalogIcon}
+            resizeMode="contain"
+          />
+        </TouchableOpacity>
+        <View style={styles.sideIconsContainer}>
+          <TouchableOpacity style={styles.sideIconButton}>
+            <Image
+              source={require('@/assets/images/service.png')}
+              style={styles.sideIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.sideIconButton}>
+            <Image
+              source={require('@/assets/images/settings.png')}
+              style={styles.sideIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -150,5 +283,165 @@ const styles = StyleSheet.create({
   tabActive: {
     color: '#a81d1d',
     fontWeight: 'bold',
+  },
+  redLowerBar: {
+    height: '9%',
+    width: '100%',
+    backgroundColor: '#860e0eff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  sideIconsContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+  },
+  sideIconButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sideIcon: {
+    width: 50,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  circleButton: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -25 }, { translateY: -25 }],
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    zIndex: 1,
+  },
+  catalogIcon: {
+    width: 32,
+    height: 32,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  filterModal: {
+    width: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    elevation: 5,
+  },
+  radioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '45%',
+    marginBottom: 12,
+    marginRight: 12,
+  },
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#222',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    backgroundColor: '#fff',
+  },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#2563eb',
+  },
+  radioLabel: {
+    fontSize: 15,
+    color: '#222',
+  },
+  dropdown: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#222',
+    borderRadius: 8,
+    padding: 10,
+    minWidth: 100,
+    marginRight: 12,
+  },
+  applyButton: {
+    backgroundColor: '#a81d1d',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+  },
+  productsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    padding: 8,
+  },
+  productBox: {
+    width: 320,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    margin: 16,
+    padding: 20,
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+  },
+  productImage: {
+    width: 280,
+    height: 280,
+    borderRadius: 8,
+    marginBottom: 8,
+    backgroundColor: '#eee',
+  },
+  productName: {
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginBottom: 4,
+    color: '#222',
+  },
+  productDesc: {
+    fontSize: 13,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  productPrice: {
+    fontSize: 15,
+    color: '#a81d1d',
+    fontWeight: 'bold',
+  },
+  profileButton: {
+    position: 'absolute',
+    right: 15,
+    top: '50%',
+    transform: [{ translateY: -20 }],
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#eee',
   },
 });
