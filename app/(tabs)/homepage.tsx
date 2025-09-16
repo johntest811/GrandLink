@@ -129,7 +129,10 @@ export default function Homescreen() {
         <View style={styles.blueBoxB}>
           <View style={{ flexDirection: "row", paddingLeft: 10, paddingTop: 20, alignItems: "center" }}>
             <Text style={styles.featuredText}>Featured Projects</Text>
-            <TouchableOpacity style={styles.viewMoreProjectButton}>
+            <TouchableOpacity
+              style={styles.viewMoreProjectButton}
+              onPress={() => router.push('../shop')}
+            >
               <Text style={styles.viewMoreProjectButtonText}>View More Projects</Text>
             </TouchableOpacity>
           </View>
@@ -391,14 +394,14 @@ whitebackground: {
         paddingHorizontal: 20,
   },
   profileButton: {
-  position: 'absolute',
-  right: 15,
-  top: '50%',
-  transform: [{ translateY: -20 }],
-  width: 40,
-  height: 40,
-  justifyContent: 'center',
-  alignItems: 'center',
+    position: 'absolute',
+    right: 15,
+    top: '50%',
+    transform: [{ translateY: -20 }],
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   profileIcon: {
     width: 36,
@@ -531,7 +534,7 @@ whitebackground: {
   height: '100%',
   },
   imageButtonImage: {
-    width: '100%',
+    width: 500,
     height: '100%',
     position: 'absolute',
   },

@@ -18,15 +18,16 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) {
-      Alert.alert('Login Failed', error.message);
-    } else {
-      router.replace('/(tabs)/homepage');
-    }
-  };
+  setLoading(true);
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  setLoading(false);
+  if (error) {
+    console.log(error); // <-- Add this line for debugging
+    Alert.alert('Login Failed', error.message);
+  } else {
+    router.replace('/(tabs)/homepage');
+  }
+};
 
   useEffect(() => {
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
