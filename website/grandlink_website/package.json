@@ -9,7 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
     "@supabase/supabase-js": "^2.57.2",
+    "@types/twilio": "^3.19.2",
     "embla-carousel": "^8.6.0",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.23.12",
@@ -19,7 +21,8 @@
     "react-icons": "^5.5.0",
     "react-responsive-carousel": "^3.2.23",
     "three": "^0.180.0",
-    "three-stdlib": "^2.36.0"
+    "three-stdlib": "^2.36.0",
+    "twilio": "^5.9.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

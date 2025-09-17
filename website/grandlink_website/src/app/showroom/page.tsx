@@ -37,7 +37,6 @@ function Expandable({ open, children }: { open: boolean; children: React.ReactNo
   );
 }
 
-
 export default function ShowroomPage() {
   const [showrooms, setShowrooms] = useState<Showroom[]>([]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
@@ -70,30 +69,41 @@ export default function ShowroomPage() {
           <div className="w-16 h-1 bg-red-600 mx-auto mt-3 mb-10 rounded-full" />
 
           {chunked.map((row, rowIdx) => (
-            <div key={rowIdx} className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start mb-10">
+            <div key={rowIdx} className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch mb-10">
               {row.map((s) => {
-                const preview =
-                  s.description.length > 110
-                    ? s.description.slice(0, 110) + "…"
-                    : s.description;
+                const preview = s.description;
                 const isOpen = openIndex === s.id;
                 return (
                   <article
                     key={s.id}
-                    className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden"
+                    className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden flex flex-col h-[600px] max-w-[350px] mx-auto"
                   >
-                    {s.image && (
-                      <img
-                        src={s.image}
-                        alt={s.title}
-                        className="w-full h-48 object-cover"
-                      />
-                    )}
-                    <div className="p-4">
-                      <h3 className="text-center text-lg font-semibold">{s.title}</h3>
-                      <p className="mt-3 text-sm text-gray-700 min-h-[72px]">{preview}</p>
-                      <Expandable open={isOpen}>
-                        <p className="mt-2 text-sm text-gray-700">{s.description}</p>
+                    <div className="w-full h-[350px] flex items-center justify-center bg-gray-100">
+                      {s.image && (
+                        <img
+                          src={s.image}
+                          alt={s.title}
+                          className="w-full h-full object-cover object-center"
+                          style={{ aspectRatio: "4/3" }}
+                        />
+                      )}
+                    </div>
+                    <div className="p-4 flex-1 flex flex-col items-center justify-start">
+                      <h3 className="text-center text-lg font-bold text-[#B11C1C] mb-2">{s.title}</h3>
+                      <p className="text-center text-base text-black mb-2">{s.address}</p>
+                      {!isOpen ? (
+                        <div
+                          className="mt-1 text-lg text-gray-700 min-h-[72px] line-clamp-4"
+                          dangerouslySetInnerHTML={{ __html: s.description }}
+                        />
+                      ) : (
+                        <div
+                          className="mt-1 text-lg text-black min-h-[72px]"
+                          dangerouslySetInnerHTML={{ __html: s.description }}
+                        />
+                      )}
+                      <Expandable open={isOpen} children={undefined}>
+                        {/* You can add more details here if needed */}
                       </Expandable>
                       <button
                         onClick={() => toggle(s.id)}

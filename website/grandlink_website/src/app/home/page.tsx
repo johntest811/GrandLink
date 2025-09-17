@@ -333,21 +333,56 @@ function ProductCategory({
 }
 
 function ExploreSection({ items }: { items?: Array<any> }) {
-  const categories = items && items.length ? items : [{ title: "Aluminum" }, { title: "Glass" }, { title: "Cabinets" }];
+  // fallback categories if none provided
+  const categories = items && items.length ? items : [
+    { title: "Doors", buttonText: "View More Products", image: "/doors.jpg" },
+    { title: "Enclosures", buttonText: "View More Products", image: "/enclosures.jpg" },
+    { title: "Windows", buttonText: "View More Products", image: "/windows.jpg" },
+    { title: "Railings", buttonText: "View More Products", image: "/railings.jpg" },
+  ];
+
   return (
-    <section className="w-full bg-gray-100 py-8">
+    <section className="w-full bg-white py-12">
       <div className="max-w-screen-xl mx-auto">
-        <h2 className="text-2xl font-semibold text-black">Explore Our Products</h2>
-        <div className="grid grid-cols-3 gap-4">
+        <h2 className="text-5xl font-bold text-center text-[#444] mb-2">Explore Our Products</h2>
+        <div className="h-1 w-20 bg-[#8B1C1C] mx-auto mb-6" />
+        <p className="text-center text-xl italic text-[#444] mb-10">
+          Explore innovative designs and durable materials<br />
+          that redefine elegance in every space.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {categories.map((cat, i) => {
             const img = getImageUrl(cat.image);
             return (
-              <div key={i} className="bg-white shadow p-4">
-                <div className="h-32 bg-gray-200 flex items-center justify-center">
-                  {img ? <img src={img} alt={cat.title || ""} className="h-full object-cover" /> : <span className="text-gray-500">Image</span>}
+              <div
+                key={i}
+                className="relative group h-[320px] md:h-[340px] rounded overflow-hidden flex items-center justify-center"
+                style={{ minHeight: "320px" }}
+              >
+                {/* Background image */}
+                {img ? (
+                  <img
+                    src={img}
+                    alt={cat.title || ""}
+                    className="absolute inset-0 w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 bg-gray-200" />
+                )}
+                {/* Overlay */}
+                <div className="absolute inset-0 bg-black/30 group-hover:bg-black/40 transition" />
+                {/* Centered content */}
+                <div className="relative z-10 flex flex-col items-center justify-center w-full h-full">
+                  <h3 className="font-bold text-3xl md:text-4xl text-white mb-6 text-center drop-shadow">
+                    {cat.title}
+                  </h3>
+                  <a
+                    href={cat.buttonLink ?? "#"}
+                    className="px-6 py-2 border-2 border-white text-white text-lg rounded bg-transparent hover:bg-white hover:text-[#8B1C1C] transition font-normal"
+                  >
+                    {cat.buttonText ?? "View More Products"}
+                  </a>
                 </div>
-                <h3 className="font-semibold text-lg mt-2 text-black">{cat.title}</h3>
-                <button className="mt-2 bg-red-600 text-white px-3 py-1 rounded">View More</button>
               </div>
             );
           })}
@@ -358,26 +393,69 @@ function ExploreSection({ items }: { items?: Array<any> }) {
 }
 
 function FeaturedProjects({ projects }: { projects?: Array<any> }) {
-  const list = projects && projects.length ? projects : [{ title: "Project 1" }, { title: "Project 2" }, { title: "Project 3" }];
+  const list = projects && projects.length ? projects : [
+    { title: "Project 1", image: "/project1.jpg", description: "Description for Project 1" },
+    { title: "Project 2", image: "/project2.jpg", description: "Description for Project 2" },
+    { title: "Project 3", image: "/project3.jpg", description: "Description for Project 3" },
+  ];
+
+  // Track which card is flipped
+  const [flipped, setFlipped] = useState<number | null>(null);
+
   return (
-    <section className="w-full bg-slate-800 text-white py-8">
+    <section className="w-full bg-[#232d3b] py-12">
       <div className="max-w-screen-xl mx-auto">
-        <h2 className="text-2xl font-bold mb-4">Featured Projects</h2>
-        <div className="grid grid-cols-3 gap-4">
+        {/* Header row */}
+        <div className="flex flex-col md:flex-row items-center justify-between mb-8">
+          <div>
+            <h2 className="text-5xl font-bold text-white mb-2">Featured Projects</h2>
+            <div className="h-2 w-56 bg-[#8B1C1C] mt-2" />
+          </div>
+          <a
+            href="/Featured"
+            className="bg-[#8B1C1C] text-white font-bold px-10 py-5 rounded text-lg mt-6 md:mt-0 shadow-lg hover:bg-[#a82c2c] transition"
+          >
+            VIEW MORE PROJECTS
+          </a>
+        </div>
+        {/* Projects grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 px-4">
           {list.map((p, i) => {
             const img = getImageUrl(p.image);
+            const isFlipped = flipped === i;
             return (
-              <div key={i} className="bg-slate-700 p-4">
-                <div className="h-32 bg-gray-500 flex items-center justify-center mb-2">
-                  {img ? <img src={img} alt={p.title || ""} className="h-full object-cover" /> : <span className="text-gray-300">Image</span>}
+              <div
+                key={i}
+                className="relative group h-[420px] cursor-pointer perspective"
+                onClick={() => setFlipped(flipped === i ? null : i)}
+              >
+                <div className={`transition-transform duration-500 h-full w-full [transform-style:preserve-3d] ${isFlipped ? "[transform:rotateY(180deg)]" : ""}`}>
+                  {/* Front Side */}
+                  <div className="absolute inset-0 h-full w-full rounded overflow-hidden [backface-visibility:hidden] shadow-2xl">
+                    {img ? (
+                      <img src={img} alt={p.title || ""} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full bg-gray-300" />
+                    )}
+                    {/* Shadow overlay in front */}
+                    <div className="absolute inset-0 bg-black/20 pointer-events-none" />
+                  </div>
+                  {/* Back Side */}
+                  <div className="absolute inset-0 h-full w-full rounded bg-white flex flex-col items-center justify-center px-6 [transform:rotateY(180deg)] [backface-visibility:hidden] shadow-2xl">
+                    <h3 className="text-2xl font-bold mb-4 text-[#8B1C1C] text-center">{p.title}</h3>
+                    <p className="text-gray-700 text-center text-base">{p.description}</p>
+                  </div>
                 </div>
-                <h3 className="text-lg font-semibold">{p.title || `Project ${i + 1}`}</h3>
-                <p className="text-sm mt-2">{p.description || "Description or testimonial goes here..."}</p>
               </div>
             );
           })}
         </div>
       </div>
+      <style>{`
+        .perspective {
+          perspective: 1200px;
+        }
+      `}</style>
     </section>
   );
 }

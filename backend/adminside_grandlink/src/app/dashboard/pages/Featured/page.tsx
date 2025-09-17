@@ -20,6 +20,7 @@ export default function AdminFeaturedProjects() {
   });
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     fetchProjects();
@@ -72,6 +73,42 @@ export default function AdminFeaturedProjects() {
     }
   };
 
+  // Handle image upload
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+    const { data, error } = await supabase.storage
+      .from("featured-projects-images")
+      .upload(fileName, file);
+
+    if (error) {
+      alert("Image upload failed.");
+      setUploading(false);
+      return;
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from("featured-projects-images")
+      .getPublicUrl(fileName);
+
+    setNewProject({ ...newProject, image_url: urlData?.publicUrl || "" });
+    setUploading(false);
+  };
+
+  // Handle form submit
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { error } = await supabase.from("featured_projects").insert([newProject]);
+    if (!error) {
+      alert("Featured project added!");
+      setNewProject({ title: "", description: "", image_url: "", link_url: "" });
+    }
+  };
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <h1 className="text-2xl font-bold mb-6 text-black">Admin Featured Projects</h1>
@@ -95,12 +132,14 @@ export default function AdminFeaturedProjects() {
           className="border p-2 w-full mb-2 rounded text-gray-800"
         />
         <input
-          type="text"
-          placeholder="Image URL"
-          value={newProject.image_url}
-          onChange={(e) => setNewProject({ ...newProject, image_url: e.target.value })}
-          className="border p-2 w-full mb-2 rounded text-gray-800"
+          type="file"
+          accept="image/*"
+          onChange={handleImageUpload}
+          className="border rounded p-2 text-gray-800"
         />
+        {newProject.image_url && (
+          <img src={newProject.image_url} alt="Preview" className="h-32 w-full object-cover rounded" />
+        )}
         <input
           type="text"
           placeholder="Link URL"
@@ -201,13 +240,43 @@ export default function AdminFeaturedProjects() {
               }
               className="border p-2 w-full mb-2 rounded text-gray-800"
             />
+            {/* Image preview */}
+            {editingProject.image_url && (
+              <img
+                src={editingProject.image_url}
+                alt="Preview"
+                className="h-32 w-full object-cover rounded mb-2"
+              />
+            )}
+            {/* Image upload for replacement */}
             <input
-              type="text"
-              value={editingProject.image_url}
-              onChange={(e) =>
-                setEditingProject({ ...editingProject, image_url: e.target.value })
-              }
-              className="border p-2 w-full mb-2 rounded text-gray-800"
+              type="file"
+              accept="image/*"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setUploading(true);
+                const fileExt = file.name.split('.').pop();
+                const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+                const { data, error } = await supabase.storage
+                  .from("featured-projects-images")
+                  .upload(fileName, file);
+
+                if (error) {
+                  alert("Image upload failed.");
+                  setUploading(false);
+                  return;
+                }
+
+                // Get public URL
+                const { data: urlData } = supabase.storage
+                  .from("featured-projects-images")
+                  .getPublicUrl(fileName);
+
+                setEditingProject({ ...editingProject, image_url: urlData?.publicUrl || "" });
+                setUploading(false);
+              }}
+              className="border rounded p-2 text-gray-800 mb-2"
             />
             <input
               type="text"

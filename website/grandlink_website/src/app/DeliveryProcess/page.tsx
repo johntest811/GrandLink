@@ -44,7 +44,7 @@ export default function DeliveryPage() {
       {/* Steps */}
       <section
         className="relative py-12 px-6 bg-cover bg-center"
-        style={{ backgroundImage: "url('/building-bg.jpg')" }} // replace with your background
+        style={{ backgroundImage: "url('/Delivery&Ordering.avif')" }} // replace with your background
       >
         <div className="bg-white/90 max-w-4xl mx-auto rounded-lg shadow-lg p-8">
           <div className="grid md:grid-cols-2 gap-6">

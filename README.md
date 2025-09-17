@@ -4,6 +4,11 @@ To run next.js properly
 - npm run dev
 - npm install next
 - mpm run audit
+- npm install react-quill --legacy-peer-deps
+- npm install @tiptap/react@latest @tiptap/starter-kit@latest --legacy-peer-deps
+- npm install twilio @types/twilio
+- npm install @sendgrid/mail
+- npm install --save-dev @types/sendgrid__mail
 
 **Next.js Admin**
 - npm install bcryptjs
@@ -14,6 +19,11 @@ To run next.js properly
 - npm install three-stdlib
 - npm install lucide-react
 - npm install @radix-ui/react-slot class-variance-authority
+- npm install @fullcalendar/timegrid
+- npm install @fullcalendar/interaction
+- npm install @fullcalendar/list
+- npm install @fullcalendar/react @fullcalendar/daygrid @fullcalendar/timegrid @fullcalendar/list @fullcalendar/interaction
+- npm install --save-dev @types/fullcalendar__react
 
 **Packages needs to Install Next.js**
 - npm install framer-motion

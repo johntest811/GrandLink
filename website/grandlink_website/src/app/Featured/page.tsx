@@ -30,10 +30,15 @@ export default function FeaturedProjects({ withLayout = true }: { withLayout?: b
 
   const content = (
     <div className="py-10">
-      <h2 className="text-3xl font-bold text-center mb-6 text-white">Featured Projects</h2>
+      <h2 className="text-3xl font-bold text-center mb-2 text-white">Featured Projects</h2>
+      <div className="h-1 w-20 bg-[#B11C1C] mx-auto mb-6" />
       <p className="text-center text-gray-300 max-w-2xl mx-auto mb-10">
-        Explore our showcase of premium residential and commercial installations.
-        Each project is a testament to our craftsmanship and client satisfaction.
+        Our featured projects showcase the quality, precision, and innovation that define Grand East .
+        From sleek residential transformations to large-scale commercial installations, 
+        these projects highlight our commitment to delivering exceptional results. 
+        Each project is a testament to our craftsmanship, attention to detail, 
+        and dedication to client satisfaction. Explore the success stories we’re 
+        proud to share and see how we’ve helped bring our clients' visions to life.
       </p>
 
       {/* Grid */}
@@ -80,7 +85,7 @@ export default function FeaturedProjects({ withLayout = true }: { withLayout?: b
                 height={400}
                 className="rounded-lg mb-4 w-full object-cover"
               />
-              <h3 className="text-xl font-bold">{selected.title}</h3>
+              <h3 className="text-xl font-bold text-gray-800">{selected.title}</h3>
               <p className="text-gray-600 my-2">{selected.description}</p>
               {selected.link_url && (
                 <a

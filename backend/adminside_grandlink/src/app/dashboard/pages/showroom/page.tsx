@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
+import dynamic from "next/dynamic";
+const RichTextEditor = dynamic(() => import("./RichTextEditor"), { ssr: false });
+import React from "react";
 
 type Showroom = {
   id: number;
@@ -10,17 +13,32 @@ type Showroom = {
   image?: string;
 };
 
+type ShowroomFormProps = {
+  form: any;
+  setForm: React.Dispatch<React.SetStateAction<any>>;
+};
+
+const ShowroomForm: React.FC<ShowroomFormProps> = ({ form, setForm }) => {
+  // You can add custom fields here if needed
+  return null;
+};
+
 export default function AdminShowroomsPage() {
   const [showrooms, setShowrooms] = useState<Showroom[]>([]);
   const [form, setForm] = useState<Partial<Showroom>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [editorKey, setEditorKey] = useState(0);
 
   useEffect(() => {
     fetchShowrooms();
   }, []);
 
   const fetchShowrooms = async () => {
-    const { data, error } = await supabase.from("showrooms").select("*").order("id", { ascending: true });
+    const { data, error } = await supabase
+      .from("showrooms")
+      .select("*")
+      .order("id", { ascending: true });
     if (error) console.error("Error fetching showrooms:", error.message);
     else setShowrooms(data || []);
   };
@@ -29,27 +47,49 @@ export default function AdminShowroomsPage() {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
+  // Handle image upload
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+    const { data, error } = await supabase.storage
+      .from("showroom-images")
+      .upload(fileName, file);
+
+    if (error) {
+      alert("Image upload failed.");
+      setUploading(false);
+      return;
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from("showroom-images")
+      .getPublicUrl(fileName);
+
+    setForm({ ...form, image: urlData?.publicUrl || "" });
+    setUploading(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingId) {
-      const { error } = await supabase.from("showrooms").update(form).eq("id", editingId);
-      if (!error) {
-        fetchShowrooms();
-        setEditingId(null);
-        setForm({});
-      }
-    } else {
-      const { error } = await supabase.from("showrooms").insert([form]);
-      if (!error) {
-        fetchShowrooms();
-        setForm({});
-      }
+    const { error } = editingId
+      ? await supabase.from("showrooms").update(form).eq("id", editingId)
+      : await supabase.from("showrooms").insert([form]);
+    if (!error) {
+      fetchShowrooms();
+      setEditingId(null);
+      setForm({});
+      setEditorKey(prev => prev + 1); // <-- Always reset editor after add or update
     }
   };
 
   const handleEdit = (s: Showroom) => {
     setForm(s);
     setEditingId(s.id);
+    setEditorKey(prev => prev + 1); // <-- Reset editor for edit too!
   };
 
   const handleDelete = async (id: number) => {
@@ -82,14 +122,7 @@ export default function AdminShowroomsPage() {
             onChange={handleChange}
             className="w-full p-2 border rounded-md text-gray-800"
           />
-          <textarea
-            name="description"
-            placeholder="Description"
-            value={form.description || ""}
-            onChange={handleChange}
-            className="w-full p-2 border rounded-md min-h-[100px] text-gray-800"
-            required
-          />
+          <ShowroomForm form={form} setForm={setForm} />
           <input
             type="text"
             name="image"
@@ -98,9 +131,24 @@ export default function AdminShowroomsPage() {
             onChange={handleChange}
             className="w-full p-2 border rounded-md text-gray-800"
           />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="w-full p-2 border rounded-md text-gray-800"
+          />
+          {form.image && (
+            <img src={form.image} alt="Preview" className="h-20 w-32 object-cover rounded mt-2" />
+          )}
+          <RichTextEditor
+            key={editorKey}
+            value={form.description || ""}
+            onChange={desc => setForm({ ...form, description: desc })}
+          />
           <button
             type="submit"
             className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 w-fit text-gray-800"
+            disabled={uploading}
           >
             {editingId ? "Update Showroom" : "Add Showroom"}
           </button>

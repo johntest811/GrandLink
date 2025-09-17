@@ -1,14 +1,17 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Image from "next/image";
-import { FaEnvelope, FaThumbsUp, FaPhone, FaUserCircle, FaChevronDown } from "react-icons/fa";
+import { FaEnvelope, FaThumbsUp, FaPhone, FaUserCircle, FaChevronDown, FaBell } from "react-icons/fa";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 
 export default function TopNavBarLoggedIn() {
   const [user, setUser] = useState<any>(null);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [notifOpen, setNotifOpen] = useState(false);
   useEffect(() => {
     const fetchUser = async () => {
       const { data } = await supabase.auth.getUser();
@@ -16,12 +19,86 @@ export default function TopNavBarLoggedIn() {
     };
     fetchUser();
   }, []);
+
+  useEffect(() => {
+    if (user?.id) fetchNotifications();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   const [hoveredDropdown, setHoveredDropdown] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const navRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const notifRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  // fetch notifications for current user
+  async function fetchNotifications() {
+    if (!user?.id) return;
+    const { data, error } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("recipient_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) {
+      console.error("fetch notifications error", error);
+      return;
+    }
+    setNotifications(data ?? []);
+    setUnreadCount((data ?? []).filter((n: any) => !n.is_read).length);
+  }
+
+  // mark a single notification as read
+  async function markAsRead(id: number) {
+    if (!user?.id) return;
+    const { error } = await supabase
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("id", id)
+      .eq("recipient_id", user.id);
+    if (error) {
+      console.error("mark read error", error);
+    }
+    fetchNotifications();
+  }
+
+  // mark all as read
+  async function markAllRead() {
+    if (!user?.id) return;
+    const { error } = await supabase
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("recipient_id", user.id)
+      .eq("is_read", false);
+    if (error) {
+      console.error("mark all read error", error);
+    }
+    fetchNotifications();
+  }
+
+  // Toggle notifications dropdown (useCallback to stabilize ref)
+  const toggleNotif = useCallback(() => {
+    const next = !notifOpen;
+    setNotifOpen(next);
+    if (next) fetchNotifications();
+  }, [notifOpen, /* fetchNotifications is defined in scope; keep stable if you refactor it to useCallback */]);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setOpen(false);
+        setShowConfirm(false);
+      }
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+        setNotifOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Helper to get nav bar bottom position for dropdown
   const getNavBottom = () => {
@@ -31,18 +108,6 @@ export default function TopNavBarLoggedIn() {
     }
     return 60; // fallback
   };
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setOpen(false);
-        setShowConfirm(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   const handleLogout = () => {
     setShowConfirm(true);
@@ -86,9 +151,7 @@ export default function TopNavBarLoggedIn() {
                     : 200,
                 }}
               >
-                {/* <Link href="/about-us" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">About Us</Link> */}
                 <Link href="/showroom" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Showroom</Link>
-                {/* <Link href="/locations" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Locations</Link> */}
               </div>
             )}
           </div>
@@ -115,7 +178,6 @@ export default function TopNavBarLoggedIn() {
                     : 350,
                 }}
               >
-                {/* <Link href="/services" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">List of Services</Link> */}
                 <Link href="/Featured" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Featured Projects</Link>
                 <Link href="/DeliveryProcess" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Delivery & Ordering Process</Link>
               </div>
@@ -163,6 +225,76 @@ export default function TopNavBarLoggedIn() {
             INQUIRE NOW
           </button>
           </Link>
+
+          {/* Notification Bell */}
+          <div className="relative" ref={notifRef}>
+            <button
+              onClick={toggleNotif}
+              title="Notifications"
+              className="relative p-2 rounded hover:bg-gray-100 transition"
+            >
+              <FaBell className="text-xl text-gray-700" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-600 text-white text-xs font-bold rounded-full px-1.5">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+
+            {notifOpen && (
+              <div className="absolute right-0 mt-2 w-80 bg-white rounded shadow-lg border z-50">
+                <div className="flex items-center justify-between px-4 py-2 border-b">
+                  <span className="font-semibold text-sm">Notifications</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="text-xs text-gray-600 hover:underline"
+                      onClick={markAllRead}
+                    >
+                      Mark all read
+                    </button>
+                    <button
+                      className="text-xs text-gray-600 hover:underline"
+                      onClick={() => { setNotifOpen(false); }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-64 overflow-auto">
+                  {notifications.length === 0 && (
+                    <div className="p-4 text-sm text-gray-500">No notifications</div>
+                  )}
+                  {notifications.map((n) => (
+                    <div key={n.id} className={`p-3 border-b hover:bg-gray-50 flex justify-between items-start ${n.is_read ? "" : "bg-gray-50"}`}>
+                      <div className="flex-1 pr-2">
+                        <div className="text-sm font-medium text-gray-800">{n.title}</div>
+                        <div className="text-xs text-gray-600 truncate">{n.message}</div>
+                        <div className="text-xs text-gray-400 mt-1">{n.created_at ? new Date(n.created_at).toLocaleString() : ""}</div>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        {!n.is_read ? (
+                          <button
+                            className="text-xs text-[#8B1C1C] px-2 py-1 rounded bg-[#fdecec] hover:bg-[#fbd6d6]"
+                            onClick={() => markAsRead(n.id)}
+                          >
+                            Mark read
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">Read</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p-2 text-center text-xs text-gray-500">
+                  <Link href="/profile/notifications">View all</Link>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="relative" ref={dropdownRef}>
             <div
               className="flex items-center gap-2 cursor-pointer group"
