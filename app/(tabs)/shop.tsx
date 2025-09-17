@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, Image, TextInput, TouchableOpacity, ScrollView, StyleSheet, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 
 const filterOptions = [
@@ -17,6 +17,7 @@ const filterOptions = [
 
 export default function ShopScreen() {
   const router = useRouter();
+  const { filter } = useLocalSearchParams();
   const [data, setData] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filterVisible, setFilterVisible] = useState(false);
@@ -38,6 +39,19 @@ export default function ShopScreen() {
     selectedCategory === 'All'
       ? data
       : data.filter(product => product.category === selectedCategory);
+
+  // Fetch products from Supabase, filtered by the category/type
+  useEffect(() => {
+    const fetchProducts = async () => {
+      let query = supabase.from('products').select('*');
+      if (filter) {
+        query = query.eq('category', filter); // or .eq('type', filter) depending on your schema
+      }
+      const { data } = await query;
+      setData(data || []);
+    };
+    fetchProducts();
+  }, [filter]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -170,49 +184,28 @@ export default function ShopScreen() {
       </Modal>
 
       {/* Bottom Bar */}
-      <View style={styles.redLowerBar}>
-        <View style={styles.sideIconsContainer}>
-          <TouchableOpacity style={styles.sideIconButton} onPress={() => router.push('../homepage')}>
-            <Image
-              source={require('@/assets/images/home.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/inquire.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity
-          style={styles.circleButton}
-          onPress={() => router.push('../shop')}
-        >
-          <Image
-            source={require('@/assets/images/catalogbutton.png')}
-            style={styles.catalogIcon}
-            resizeMode="contain"
-          />
+      <View style={styles.bottomNavBar}>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
+          <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
+          <Text style={styles.navLabel}>Home</Text>
         </TouchableOpacity>
-        <View style={styles.sideIconsContainer}>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/service.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/settings.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
+        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+          <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
+          <Text style={styles.navLabel}>Inquire</Text>
+        </TouchableOpacity>
+        <View style={styles.fabWrapper}>
+          <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
+            <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
           </TouchableOpacity>
         </View>
+        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+          <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
+          <Text style={styles.navLabel}>Service</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+          <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
+          <Text style={styles.navLabel}>Settings</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -284,48 +277,64 @@ const styles = StyleSheet.create({
     color: '#a81d1d',
     fontWeight: 'bold',
   },
-  redLowerBar: {
-    height: '9%',
-    width: '100%',
-    backgroundColor: '#860e0eff',
+  bottomNavBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  sideIconsContainer: {
-    flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-    alignItems: 'center',
-  },
-  sideIconButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sideIcon: {
-    width: 50,
-    height: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  circleButton: {
+    justifyContent: 'space-around',
+    backgroundColor: '#4f5f8aff',
+    height: 70,
+    paddingBottom: 8,
+    paddingTop: 8,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -25 }, { translateY: -25 }],
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 10,
+  },
+  navItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navIcon: {
+    width: 45,
+    height: 45,
+    marginBottom: 2,
+  },
+  navLabel: {
+    fontSize: 11,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  fabWrapper: {
+    position: 'relative',
+    top: -28,
+    alignItems: 'center',
+    flex: 1,
+  },
+  fabButton: {
+    width: 65,
+    height: 65,
+    borderRadius: 28,
     backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 4,
-    zIndex: 1,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    borderWidth: 3,
+    borderColor: '#4c58c0ff',
   },
-  catalogIcon: {
+  fabIcon: {
     width: 32,
     height: 32,
   },
