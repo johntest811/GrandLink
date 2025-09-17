@@ -1,13 +1,22 @@
 "use client";
 import { useEffect, useState } from "react";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
+import * as FaIcons from "react-icons/fa";
 
 interface Service {
   id: number;
   name: string;
   short_description: string;
   long_description: string;
+  icon?: string; // new field
 }
+
+// ✅ Available icons (add more here as needed)
+const ICON_OPTIONS = [
+  { value: "FaCogs", label: "Cogs ⚙️" },
+  { value: "FaBuilding", label: "Building 🏢" },
+  { value: "FaWarehouse", label: "Warehouse 🏭" },
+];
 
 export default function AdminServicesPage() {
   const [services, setServices] = useState<Service[]>([]);
@@ -15,8 +24,9 @@ export default function AdminServicesPage() {
     name: "",
     short_description: "",
     long_description: "",
+    icon: "FaCogs",
   });
-  const [editingService, setEditingService] = useState<Service | null>(null); // for modal
+  const [editingService, setEditingService] = useState<Service | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -36,7 +46,12 @@ export default function AdminServicesPage() {
     setLoading(false);
     if (error) console.error(error);
     else {
-      setNewService({ name: "", short_description: "", long_description: "" });
+      setNewService({
+        name: "",
+        short_description: "",
+        long_description: "",
+        icon: "FaCogs",
+      });
       fetchServices();
     }
   };
@@ -52,11 +67,7 @@ export default function AdminServicesPage() {
     if (!editingService) return;
     const { error } = await supabase
       .from("services")
-      .update({
-        name: editingService.name,
-        short_description: editingService.short_description,
-        long_description: editingService.long_description,
-      })
+      .update(editingService)
       .eq("id", editingService.id);
     if (error) console.error(error);
     else {
@@ -66,26 +77,43 @@ export default function AdminServicesPage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6 text-black">Admin Services Manager</h1>
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-3xl font-extrabold mb-8 text-gray-900 tracking-tight">
+        ⚙️ Admin Services Manager
+      </h1>
 
       {/* Add New Service Form */}
-      <div className="mb-8 border p-4 rounded-md shadow bg-gray-50">
-        <h2 className="font-semibold mb-3 text-black">Add New Service</h2>
-        <input
-          type="text"
-          placeholder="Service Name"
-          value={newService.name}
-          onChange={(e) => setNewService({ ...newService, name: e.target.value })}
-          className="border p-2 w-full mb-2 rounded text-gray-800"
-        />
+      <div className="mb-10 bg-white border rounded-lg shadow-md p-6">
+        <h2 className="text-xl font-semibold mb-4 text-gray-800">
+          ➕ Add New Service
+        </h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          <input
+            type="text"
+            placeholder="Service Name"
+            value={newService.name}
+            onChange={(e) => setNewService({ ...newService, name: e.target.value })}
+            className="border p-2 rounded text-gray-800 w-full"
+          />
+          <select
+            value={newService.icon}
+            onChange={(e) => setNewService({ ...newService, icon: e.target.value })}
+            className="border p-2 rounded text-gray-800 w-full"
+          >
+            {ICON_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <textarea
           placeholder="Short Description"
           value={newService.short_description}
           onChange={(e) =>
             setNewService({ ...newService, short_description: e.target.value })
           }
-          className="border p-2 w-full mb-2 rounded text-gray-800"
+          className="border p-2 rounded text-gray-800 w-full mt-3"
         />
         <textarea
           placeholder="Long Description"
@@ -93,61 +121,71 @@ export default function AdminServicesPage() {
           onChange={(e) =>
             setNewService({ ...newService, long_description: e.target.value })
           }
-          className="border p-2 w-full mb-3 rounded text-gray-800"
+          className="border p-2 rounded text-gray-800 w-full mt-3"
         />
         <button
           onClick={addService}
           disabled={loading}
-          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded"
+          className="mt-4 bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-md shadow"
         >
-          {loading ? "Adding..." : "+ Add Service"}
+          {loading ? "Adding..." : "➕ Add Service"}
         </button>
       </div>
 
       {/* Services Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse border text-sm">
+      <div className="overflow-x-auto bg-white rounded-lg shadow-md">
+        <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="bg-gray-100 text-left">
-              <th className="border p-2 text-gray-800 bg-blue-200">ID</th>
-              <th className="border p-2 text-gray-800 bg-blue-200">Name</th>
-              <th className="border p-2 text-gray-800 bg-blue-200">Short Description</th>
-              <th className="border p-2 text-gray-800 bg-blue-200">Long Description</th>
-              <th className="border p-2 text-gray-800 bg-blue-200">Actions</th>
+            <tr className="bg-gray-100 text-gray-700">
+              <th className="p-3">ID</th>
+              <th className="p-3">Icon</th>
+              <th className="p-3">Name</th>
+              <th className="p-3">Short Description</th>
+              <th className="p-3">Long Description</th>
+              <th className="p-3">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {services.map((s) => (
-              <tr key={s.id}>
-                <td className="border p-2 text-gray-800">{s.id}</td>
-                <td className="border p-2 text-gray-800">{s.name}</td>
-                <td className="border p-2 text-gray-800">{s.short_description}</td>
-                <td className="border p-2 text-gray-800 truncate max-w-xs">{s.long_description}</td>
-                <td className="border p-2 space-x-2 text-gray-800">
-                  <button
-                    onClick={() => setEditingService(s)}
-                    className="bg-blue-600 text-white px-2 py-1 rounded text-xs "
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => deleteService(s.id)}
-                    className="bg-red-600 text-white px-2 py-1 rounded text-xs"
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {services.map((s) => {
+              const IconComponent =
+                s.icon && (FaIcons as any)[s.icon]
+                  ? (FaIcons as any)[s.icon]
+                  : FaIcons.FaCogs;
+              return (
+                <tr key={s.id} className="border-t hover:bg-gray-50">
+                  <td className="p-3">{s.id}</td>
+                  <td className="p-3 text-center">
+                    <IconComponent size={20} className="text-blue-600" />
+                  </td>
+                  <td className="p-3 font-semibold">{s.name}</td>
+                  <td className="p-3">{s.short_description}</td>
+                  <td className="p-3 truncate max-w-sm">{s.long_description}</td>
+                  <td className="p-3 space-x-2">
+                    <button
+                      onClick={() => setEditingService(s)}
+                      className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => deleteService(s.id)}
+                      className="bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       {/* Edit Modal */}
       {editingService && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-          <div className="bg-white p-6 rounded-md w-full max-w-lg shadow-lg">
-            <h2 className="text-lg font-bold mb-4">Edit Service</h2>
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg w-full max-w-lg shadow-xl">
+            <h2 className="text-lg font-bold mb-4">✏️ Edit Service</h2>
 
             <input
               type="text"
@@ -157,6 +195,19 @@ export default function AdminServicesPage() {
               }
               className="border p-2 w-full mb-2 rounded"
             />
+            <select
+              value={editingService.icon}
+              onChange={(e) =>
+                setEditingService({ ...editingService, icon: e.target.value })
+              }
+              className="border p-2 w-full mb-2 rounded"
+            >
+              {ICON_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
             <textarea
               value={editingService.short_description}
               onChange={(e) =>
@@ -181,13 +232,13 @@ export default function AdminServicesPage() {
             <div className="flex justify-end space-x-2">
               <button
                 onClick={() => setEditingService(null)}
-                className="bg-gray-400 text-white px-4 py-2 rounded"
+                className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
               >
                 Cancel
               </button>
               <button
                 onClick={saveEdit}
-                className="bg-blue-600 text-white px-4 py-2 rounded"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
               >
                 Save Changes
               </button>
