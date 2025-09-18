@@ -12,6 +12,8 @@ export default function TopNavBarLoggedIn() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [toast, setToast] = useState<{ title: string; message: string } | null>(null);
+
   useEffect(() => {
     const fetchUser = async () => {
       const { data } = await supabase.auth.getUser();
@@ -25,13 +27,30 @@ export default function TopNavBarLoggedIn() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const [hoveredDropdown, setHoveredDropdown] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const navRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const notifRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
+  // realtime subscription for notifications for this user
+  useEffect(() => {
+    if (!user?.id) return;
+    const sub = supabase
+      .channel(`notifications-user-${user.id}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_id=eq.${user.id}` },
+        (payload) => {
+          const newNotif = (payload as any).new;
+          if (!newNotif) return;
+          setNotifications((p) => [newNotif, ...p]);
+          setUnreadCount((c) => c + 1);
+          setToast({ title: newNotif.title, message: newNotif.message });
+          // auto-hide toast
+          setTimeout(() => setToast(null), 5000);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(sub);
+    };
+  }, [user?.id]);
 
   // fetch notifications for current user
   async function fetchNotifications() {
@@ -77,6 +96,14 @@ export default function TopNavBarLoggedIn() {
     }
     fetchNotifications();
   }
+
+  const [hoveredDropdown, setHoveredDropdown] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const navRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const notifRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
   // Toggle notifications dropdown (useCallback to stabilize ref)
   const toggleNotif = useCallback(() => {
@@ -364,8 +391,19 @@ export default function TopNavBarLoggedIn() {
             )}
           </div>
         </div>
+
+        {/* Toast popup for live notifications */}
+        {toast && (
+          <div className="fixed top-20 right-6 z-50">
+            <div className="bg-white shadow-lg border px-4 py-3 rounded-lg w-80">
+              <div className="font-semibold text-sm text-gray-800">{toast.title}</div>
+              <div className="text-xs text-gray-600 mt-1 truncate">{toast.message}</div>
+            </div>
+          </div>
+        )}
       </header>
-      {/* Contact Bar */}
+
+      {/* Contact Bar (unchanged) */}
       <div className="w-full bg-[#232d3b] text-white flex flex-col sm:flex-row items-center justify-center gap-4 py-2 px-2 text-xs sm:text-sm z-10">
         <div className="flex items-center gap-1">
           <FaEnvelope className="text-base" /> grandeast.org@gmail.com

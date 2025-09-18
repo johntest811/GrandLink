@@ -1,8 +1,8 @@
 "use client";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
-import TopNavBar from "@/components/TopNavBar";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
@@ -37,7 +37,6 @@ export default function ResetPasswordPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-100">
-      <TopNavBar />
       <div className="flex flex-1 items-center justify-center">
         <form
           onSubmit={handleResetPassword}
@@ -52,7 +51,7 @@ export default function ResetPasswordPage() {
               type="password"
               className="w-full px-3 py-2 border rounded text-black"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
           </div>
@@ -64,7 +63,7 @@ export default function ResetPasswordPage() {
               type="password"
               className="w-full px-3 py-2 border rounded text-black"
               value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
+              onChange={(e) => setConfirmPassword(e.target.value)}
               required
             />
           </div>

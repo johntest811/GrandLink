@@ -44,7 +44,15 @@ export default function DashboardLayout({
         { name: 'Inventory', path: '/dashboard/inventory' },
       ],
     },
-    { name: 'Employee Task', path: '/dashboard/employee-task', icon: '📝' },
+    {
+      name: 'Task',
+      icon: '📝',
+      dropdown: [
+        { name: 'Assigned Task', path: '/dashboard/task/assigntask' },
+        { name: 'Employee Task', path: '/dashboard/task/employeetask' },
+        { name: 'Admin Task', path: '/dashboard/task/admintask' },
+      ],
+    },
     { name: 'Orders', path: '/dashboard/orders', icon: '🛒' },
     { name: 'Order Management', path: '/dashboard/order-management', icon: '📋' },
     { name: 'Calendar', path: '/dashboard/calendar', icon: '📅' },

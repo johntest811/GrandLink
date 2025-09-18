@@ -150,8 +150,8 @@ export default function ProductsAdminPage() {
         fbxUrl = await uploadFile(fbxFile, 'fbx');
       }
 
-      // Insert product into Supabase
-      const { error } = await supabase
+      // Insert product into Supabase and return inserted row
+      const { data: insertedProduct, error: insertErr } = await supabase
         .from('products')
         .insert([{
           name,
@@ -171,9 +171,27 @@ export default function ProductsAdminPage() {
           image4: imageUrls[3],
           image5: imageUrls[4],
           fbx_url: fbxUrl,
-        }]);
+        }])
+        .select()
+        .single();
 
-      if (error) throw error;
+      if (insertErr) throw insertErr;
+
+      // Reservation creation moved to server-side notifyServers to avoid duplication.
+      // Client no longer creates reservation here. Server will create an auto-reservation
+      // when it receives the 'new_product' notifyServers call.
+
+      // 2) notify servers (broadcast new_product) so users with email notifications receive email
+      try {
+        await fetch('/api/notifyServers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'new_product', product: insertedProduct, broadcast: true }),
+        });
+      } catch (notifyErr) {
+        console.error("notifyServers call failed:", notifyErr);
+      }
+
       setMessage("Product added successfully!");
       setName("");
       setFullProductName("");

@@ -9,6 +9,8 @@ To run next.js properly
 - npm install twilio @types/twilio
 - npm install @sendgrid/mail
 - npm install --save-dev @types/sendgrid__mail
+- npm install nodemailer
+- npm i --save-dev @types/nodemailer
 
 **Next.js Admin**
 - npm install bcryptjs

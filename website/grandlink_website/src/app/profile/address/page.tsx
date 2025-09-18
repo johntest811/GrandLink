@@ -18,14 +18,17 @@ export default function AddressManager() {
   const [showForm, setShowForm] = useState(false);
   const [defaultId, setDefaultId] = useState<string | null>(null);
 
-  // Form states
+  // editing state
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Form states (shared for add/edit)
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [isDefaultChecked, setIsDefaultChecked] = useState(false);
 
   useEffect(() => {
     fetchAddresses();
-    // subscribe to auth changes if needed
   }, []);
 
   async function fetchAddresses() {
@@ -54,7 +57,45 @@ export default function AddressManager() {
     setDefaultId(def);
   }
 
-  const handleAddAddress = async (e: React.FormEvent) => {
+  async function notifyServersAddressUpdated(userId: string, title = "Address updated", message = "Your saved address was updated.") {
+    try {
+      await fetch('/api/notifyServers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'address_updated',
+          user_id: userId,
+          title,
+          message,
+        }),
+      });
+    } catch (err) {
+      console.error('notifyServers call failed', err);
+    }
+  }
+
+  // open modal for adding a new address
+  function openAddForm() {
+    setEditingId(null);
+    setFullName("");
+    setPhone("");
+    setAddress("");
+    setIsDefaultChecked(false);
+    setShowForm(true);
+  }
+
+  // open modal to edit existing address
+  function openEditForm(a: Address) {
+    setEditingId(a.id);
+    setFullName(a.full_name);
+    setPhone(a.phone);
+    setAddress(a.address);
+    setIsDefaultChecked(a.is_default);
+    setShowForm(true);
+  }
+
+  // unified save handler for add & edit
+  const handleSaveAddress = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!fullName || !phone || !address) {
@@ -67,45 +108,87 @@ export default function AddressManager() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      alert("You must be signed in to add an address.");
+      alert("You must be signed in to manage addresses.");
       return;
     }
 
-    const isDefault = addresses.length === 0;
-
-    const { data, error } = await supabase
-      .from("addresses")
-      .insert([
-        {
-          user_id: user.id,
+    if (editingId) {
+      // update existing address
+      const { data, error } = await supabase
+        .from("addresses")
+        .update({
           full_name: fullName,
           phone,
           address,
-          is_default: isDefault,
-        },
-      ])
-      .select()
-      .single();
+          is_default: isDefaultChecked,
+        })
+        .eq("id", editingId)
+        .select()
+        .single();
 
-    if (error) {
-      console.error(error);
-      alert("Could not save address");
-      return;
-    }
+      if (error) {
+        console.error("update address error", error);
+        alert("Could not update address");
+        return;
+      }
 
-    // If this was inserted as default, clear other defaults
-    if (isDefault) {
-      await supabase
+      // if set as default, clear others
+      if (isDefaultChecked) {
+        const { error: clearErr } = await supabase
+          .from("addresses")
+          .update({ is_default: false })
+          .eq("user_id", user.id)
+          .neq("id", editingId);
+
+        if (clearErr) console.error("clear defaults error", clearErr);
+      }
+
+      // notify server
+      await notifyServersAddressUpdated(user.id, "Address updated", "An address in your account was updated.");
+
+    } else {
+      // insert new address
+      const isDefault = isDefaultChecked || addresses.length === 0;
+
+      const { data, error } = await supabase
         .from("addresses")
-        .update({ is_default: false })
-        .eq("user_id", user.id)
-        .neq("id", data.id);
+        .insert([
+          {
+            user_id: user.id,
+            full_name: fullName,
+            phone,
+            address,
+            is_default: isDefault,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        console.error(error);
+        alert("Could not save address");
+        return;
+      }
+
+      // If this was inserted as default, clear other defaults
+      if (isDefault) {
+        await supabase
+          .from("addresses")
+          .update({ is_default: false })
+          .eq("user_id", user.id)
+          .neq("id", data.id);
+      }
+
+      await notifyServersAddressUpdated(user.id, "Address added", "A new address was added to your account.");
     }
 
+    // close modal + refresh
     setShowForm(false);
+    setEditingId(null);
     setFullName("");
     setPhone("");
     setAddress("");
+    setIsDefaultChecked(false);
 
     fetchAddresses();
   };
@@ -126,7 +209,9 @@ export default function AddressManager() {
       return;
     }
 
-    // if deleted default, reset defaultId
+    // notify user about deletion
+    await notifyServersAddressUpdated(user.id, "Address removed", "An address was removed from your account.");
+
     if (defaultId === id) setDefaultId(null);
     fetchAddresses();
   };
@@ -151,6 +236,9 @@ export default function AddressManager() {
       return;
     }
 
+    // notify server to create notification + send email (if enabled)
+    await notifyServersAddressUpdated(user.id, "Default address changed", "Your default address was changed.");
+
     setDefaultId(id);
     fetchAddresses();
   };
@@ -161,7 +249,7 @@ export default function AddressManager() {
 
       {/* Add New Button */}
       <button
-        onClick={() => setShowForm(true)}
+        onClick={openAddForm}
         className="bg-[#8B1C1C] text-white px-4 py-2 rounded font-semibold hover:bg-[#a83232] transition mb-6"
       >
         + Add New Address
@@ -178,6 +266,7 @@ export default function AddressManager() {
               <p className="font-bold text-gray-700">
                 {addr.full_name}{" "}
                 <span className="ml-2 text-gray-600">({addr.phone})</span>
+                {addr.is_default && <span className="ml-2 text-sm text-green-600">Default</span>}
               </p>
               <p className="text-gray-700">{addr.address}</p>
             </div>
@@ -195,7 +284,7 @@ export default function AddressManager() {
               <div className="flex gap-3">
                 <button
                   className="text-blue-600 hover:underline"
-                  onClick={() => alert("Edit functionality to be added")}
+                  onClick={() => openEditForm(addr)}
                 >
                   Edit
                 </button>
@@ -224,14 +313,14 @@ export default function AddressManager() {
         </div>
       )}
 
-      {/* Modal Form */}
+      {/* Modal Form (add/edit) */}
       {showForm && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
           <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
             <h3 className="text-xl font-bold mb-4 text-[#8B1C1C]">
-              Add New Address
+              {editingId ? "Edit Address" : "Add New Address"}
             </h3>
-            <form className="grid gap-4" onSubmit={handleAddAddress}>
+            <form className="grid gap-4" onSubmit={handleSaveAddress}>
               <div>
                 <label className="block font-semibold text-gray-700">Full Name *</label>
                 <input
@@ -261,10 +350,24 @@ export default function AddressManager() {
                   required
                 />
               </div>
+
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={isDefaultChecked}
+                  onChange={(e) => setIsDefaultChecked(e.target.checked)}
+                  className="accent-[#8B1C1C]"
+                />
+                <span className="text-gray-700">Set as Default</span>
+              </label>
+
               <div className="flex justify-end gap-3 mt-4">
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditingId(null);
+                  }}
                   className="px-4 py-2 border rounded hover:bg-gray-100 text-gray-700"
                 >
                   Cancel
@@ -273,7 +376,7 @@ export default function AddressManager() {
                   type="submit"
                   className="bg-[#8B1C1C] text-white px-4 py-2 rounded font-semibold hover:bg-[#a83232] transition"
                 >
-                  Save Address
+                  {editingId ? "Save Changes" : "Save Address"}
                 </button>
               </div>
             </form>

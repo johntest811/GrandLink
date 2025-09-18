@@ -70,17 +70,36 @@ export default function EditProductPage() {
   ) => {
     if (!e.target.files || !product) return;
     const file = e.target.files[0];
-    const filePath = `products/${field}/${product.id}_${file.name}`;
-    const { data, error } = await supabase.storage
-      .from("products") // <-- use correct bucket name
-      .upload(filePath, file, { upsert: true });
-    if (error) {
-      setMessage(`Error uploading file: ${error.message}`);
-      return;
+
+    // sanitize filename to remove problematic characters
+    const safeFileName = file.name.replace(/[^a-z0-9.\-_]/gi, "_");
+
+    // use bucket 'products' and place file under the field folder
+    const objectPath = `${field}/${product.id}_${safeFileName}`;
+
+    try {
+      const { data, error } = await supabase.storage
+        .from("products") // bucket name
+        .upload(objectPath, file, { upsert: true });
+
+      if (error) {
+        console.error("upload error", error);
+        setMessage(`Error uploading file: ${error.message}`);
+        return;
+      }
+
+      // get public url via supabase helper
+      const { data: urlData } = await supabase.storage
+        .from("products")
+        .getPublicUrl(data.path);
+
+      const url = urlData.publicUrl;
+      setProduct(prev => prev ? { ...prev, [field]: url } : prev);
+      setMessage("File uploaded!");
+    } catch (err: any) {
+      console.error("upload threw", err);
+      setMessage("Error uploading file: " + (err?.message || String(err)));
     }
-    const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${data?.path}`;
-    setProduct({ ...product, [field]: url });
-    setMessage("File uploaded!");
   };
 
   if (loading) {

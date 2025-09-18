@@ -101,11 +101,13 @@ export default function HomeEditor() {
     setUploading(true);
     setError(null);
     try {
-      // create a unique filename - you may want to include folder names
-      const filePath = `${Date.now()}_${file.name}`;
+      // sanitize filename: remove problematic characters that Storage rejects
+      const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      const filePath = `${Date.now()}_${safeName}`;
+
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from(BUCKET_NAME)
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { upsert: true, contentType: file.type });
 
       if (uploadError) {
         console.error("upload error:", uploadError);
@@ -114,13 +116,12 @@ export default function HomeEditor() {
         return;
       }
 
-      // get public url
-      const { data: urlData } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
-      const publicUrl = urlData?.publicUrl || "";
+      // build public url safely (encode path)
+      const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
+      const publicUrl = `${base}/storage/v1/object/public/${BUCKET_NAME}/${encodeURIComponent(filePath)}`;
 
       // prepend new image to list and automatically select it (optional)
       setImages((prev) => [{ name: filePath, url: publicUrl }, ...prev]);
-      // auto-select the uploaded image if picker is open
       if (picker) {
         handleSelectImage(publicUrl);
       }
@@ -129,7 +130,6 @@ export default function HomeEditor() {
       setError(String(err));
     } finally {
       setUploading(false);
-      // clear the input value so same file can be re-uploaded if needed
       if (e.target) e.target.value = "";
     }
   };
@@ -354,7 +354,8 @@ export default function HomeEditor() {
             {/* Upload form */}
             <div className="mb-3 flex items-center gap-3">
               <label className="text-sm text-black">Upload from your computer:</label>
-              <input type="file" accept="image/*" onChange={handleFileUpload} />
+              {/* accept AVIF explicitly and fallback to image/* */}
+              <input type="file" accept="image/*,.avif" onChange={handleFileUpload} />
               {uploading ? <span className="text-sm text-black">Uploading...</span> : null}
             </div>
 
