@@ -343,23 +343,28 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
     object.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
+
         // Detect glass by mesh or material name (adjust as needed)
         const isGlass =
           mesh.name.toLowerCase().includes("glass") ||
           ((mesh.material as any)?.name ?? "").toLowerCase().includes("glass");
+
         if (isGlass) {
           mesh.material = new THREE.MeshPhysicalMaterial({
-            color: 0xffffff,
+            color: 0xffffff, // White base color
             transparent: true,
-            opacity: 0.5,
-            transmission: 0.95,
-            roughness: 0.1,
-            metalness: 0,
-            ior: 1.5,
-            thickness: 0.2,
-            clearcoat: 1,
-            clearcoatRoughness: 0.1,
+            opacity: 0.2, // Lower opacity for better transparency
+            transmission: 1, // Full transmission for clear glass
+            roughness: 0.05, // Slight roughness for realistic glass
+            metalness: 0, // No metallic properties
+            ior: 1.5, // Index of refraction for glass
+            thickness: 0.5, // Thickness of the glass
+            clearcoat: 1, // Add clearcoat for reflective surface
+            clearcoatRoughness: 0.05, // Slight roughness for clearcoat
+            envMapIntensity: 1, // Enhance reflections
           });
+
+          // Ensure material updates
           mesh.material.needsUpdate = true;
         }
       }

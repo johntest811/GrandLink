@@ -11,7 +11,6 @@ interface Service {
   icon?: string; // new field
 }
 
-// ✅ Updated icon options to match the dashboard artwork
 const ICON_OPTIONS = [
   { value: "FaHammer", label: "Heavy Duty 🛠️" },
   { value: "FaDoorOpen", label: "Sliding 🚪" },
@@ -88,13 +87,13 @@ export default function AdminServicesPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-3xl font-extrabold mb-8 text-gray-900 tracking-tight">
+      <h1 className="text-3xl font-extrabold mb-8 text-black tracking-tight">
         ⚙️ Admin Services Manager
       </h1>
 
       {/* Add New Service Form */}
       <div className="mb-10 bg-white border rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-semibold mb-4 text-gray-800">
+        <h2 className="text-xl font-semibold mb-4 text-black">
           ➕ Add New Service
         </h2>
         <div className="grid gap-3 md:grid-cols-2">
@@ -103,12 +102,12 @@ export default function AdminServicesPage() {
             placeholder="Service Name"
             value={newService.name}
             onChange={(e) => setNewService({ ...newService, name: e.target.value })}
-            className="border p-2 rounded text-gray-800 w-full"
+            className="border p-2 rounded text-black w-full"
           />
           <select
-            value={newService.icon}
+            value={newService.icon || ""}
             onChange={(e) => setNewService({ ...newService, icon: e.target.value })}
-            className="border p-2 rounded text-gray-800 w-full"
+            className="border p-2 rounded text-black w-full"
           >
             {ICON_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -123,7 +122,7 @@ export default function AdminServicesPage() {
           onChange={(e) =>
             setNewService({ ...newService, short_description: e.target.value })
           }
-          className="border p-2 rounded text-gray-800 w-full mt-3"
+          className="border p-2 rounded text-black w-full mt-3"
         />
         <textarea
           placeholder="Long Description"
@@ -131,7 +130,7 @@ export default function AdminServicesPage() {
           onChange={(e) =>
             setNewService({ ...newService, long_description: e.target.value })
           }
-          className="border p-2 rounded text-gray-800 w-full mt-3"
+          className="border p-2 rounded text-black w-full mt-3"
         />
         <button
           onClick={addService}
@@ -146,7 +145,7 @@ export default function AdminServicesPage() {
       <div className="overflow-x-auto bg-white rounded-lg shadow-md">
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="bg-gray-100 text-gray-700">
+            <tr className="bg-gray-100 text-black">
               <th className="p-3">ID</th>
               <th className="p-3">Icon</th>
               <th className="p-3">Name</th>
@@ -163,7 +162,7 @@ export default function AdminServicesPage() {
                   : FaIcons.FaCog;
               return (
                 <tr key={s.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3 text-gray-700">{s.id}</td>
+                  <td className="p-3 text-black">{s.id}</td>
                   <td className="p-3 text-center">
                     <IconComponent size={32} className="text-blue-600 mx-auto" />
                   </td>
@@ -195,7 +194,7 @@ export default function AdminServicesPage() {
       {editingService && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg w-full max-w-lg shadow-xl">
-            <h2 className="text-lg font-bold mb-4">✏️ Edit Service</h2>
+            <h2 className="text-lg font-bold mb-4 text-black">✏️ Edit Service</h2>
 
             <input
               type="text"
@@ -203,14 +202,14 @@ export default function AdminServicesPage() {
               onChange={(e) =>
                 setEditingService({ ...editingService, name: e.target.value })
               }
-              className="border p-2 w-full mb-2 rounded"
+              className="border p-2 w-full mb-2 rounded text-black"
             />
             <select
-              value={editingService.icon}
+              value={editingService.icon || ""}
               onChange={(e) =>
                 setEditingService({ ...editingService, icon: e.target.value })
               }
-              className="border p-2 w-full mb-2 rounded"
+              className="border p-2 w-full mb-2 rounded text-black"
             >
               {ICON_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -226,7 +225,7 @@ export default function AdminServicesPage() {
                   short_description: e.target.value,
                 })
               }
-              className="border p-2 w-full mb-2 rounded"
+              className="border p-2 w-full mb-2 rounded text-black"
             />
             <textarea
               value={editingService.long_description}
@@ -236,7 +235,7 @@ export default function AdminServicesPage() {
                   long_description: e.target.value,
                 })
               }
-              className="border p-2 w-full mb-4 rounded"
+              className="border p-2 w-full mb-4 rounded text-black"
             />
 
             <div className="flex justify-end space-x-2">
