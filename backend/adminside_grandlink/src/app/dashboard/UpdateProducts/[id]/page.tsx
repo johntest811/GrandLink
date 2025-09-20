@@ -34,10 +34,25 @@ export default function EditProductPage() {
 
   useEffect(() => {
     const fetchProduct = async () => {
-      const res = await fetch(`/api/products/${productId}`);
-      const result = await res.json();
-      if (res.ok) setProduct(result.product);
-      setLoading(false);
+      try {
+        const res = await fetch(`/api/products/${productId}`);
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          console.error("Failed to fetch product:", res.status, text);
+          setLoading(false);
+          return;
+        }
+        // safe JSON parse
+        const result = await res.json().catch((e) => {
+          console.error("Invalid JSON from /api/products/[id]:", e);
+          return null;
+        });
+        if (result?.product) setProduct(result.product);
+      } catch (err) {
+        console.error("fetchProduct error:", err);
+      } finally {
+        setLoading(false);
+      }
     };
     if (productId) fetchProduct();
   }, [productId]);

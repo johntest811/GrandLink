@@ -16,36 +16,51 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
   useEffect(() => {
     if (!mountRef.current) return;
 
-    // Clean up previous children/renderers
-    while (mountRef.current.firstChild) {
-      mountRef.current.removeChild(mountRef.current.firstChild);
-    }
+    // clear previous
+    while (mountRef.current.firstChild) mountRef.current.removeChild(mountRef.current.firstChild);
 
-    // Scene setup
+    // scene + camera
     const scene = new THREE.Scene();
-    // default sky color (will be overridden per-weather in applyWeather)
     scene.background = new THREE.Color(0x87ceeb);
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 1, 3000);
+    const camera = new THREE.PerspectiveCamera(45, width / height, 1, 5000);
     camera.position.set(400, 400, 400);
 
-    // Renderer (enable shadows for realistic sun shadows)
+    // renderer: PBR-friendly settings
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // runtime-safe color management for different three.js versions
+    const sRGB = (THREE as any).sRGBEncoding ?? (THREE as any).SRGBColorSpace ?? (THREE as any).SRGBEncoding;
+    if ("outputEncoding" in renderer && sRGB !== undefined) {
+      (renderer as any).outputEncoding = sRGB;
+    } else if ("outputColorSpace" in renderer && sRGB !== undefined) {
+      (renderer as any).outputColorSpace = sRGB;
+    } else if ((THREE as any).ColorManagement) {
+      // older/newer fallbacks
+      (THREE as any).ColorManagement.enabled = true;
+    }
+
+    // runtime-safe physically correct lights flag
+    if ("physicallyCorrectLights" in renderer) {
+      (renderer as any).physicallyCorrectLights = true;
+    }
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Controls
+    // controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
 
-    // Lighting placeholders
-    let ambient = new THREE.AmbientLight(0xffffff, 1.0);
+    // lights
+    const ambient = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambient);
 
-    // sunLight will be the main directional "sun" source for Sunny mode (casts shadows)
     const sunLight = new THREE.DirectionalLight(0xfff1c0, 1.2);
     sunLight.position.set(1000, 1000, -800);
     sunLight.castShadow = true;
@@ -53,7 +68,9 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
     sunLight.shadow.mapSize.height = 2048;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 5000;
-    // configure an orthographic shadow camera large enough for the scene
+    // reduce shadow acne / excessive silhouette by applying a small bias and radius
+    sunLight.shadow.bias = -0.0005;
+    try { (sunLight.shadow as any).radius = 2; } catch(e) {}
     const d = 1600;
     (sunLight.shadow.camera as THREE.OrthographicCamera).left = -d;
     (sunLight.shadow.camera as THREE.OrthographicCamera).right = d;
@@ -61,39 +78,30 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
     (sunLight.shadow.camera as THREE.OrthographicCamera).bottom = -d;
     scene.add(sunLight);
 
-    // Small fill directional light to keep details
     const fill = new THREE.DirectionalLight(0xffffff, 0.4);
     fill.position.set(-400, 200, 400);
     scene.add(fill);
 
-    // Hemilight for better material visibility
     const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
     scene.add(hemi);
 
-    // Ground plane (receives shadows)
+    // ground
     const groundGeo = new THREE.PlaneGeometry(3000, 3000);
-    const groundMat = new THREE.MeshPhongMaterial({ color: "#dcdcdc", depthWrite: true });
+    const groundMat = new THREE.MeshStandardMaterial({ color: "#dcdcdc", roughness: 0.9, metalness: 0.0 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -10;
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // Add a simple sun mesh (billboard-like) to give visual sun
+    // sun mesh for visuals
     const sunGeo = new THREE.SphereGeometry(60, 32, 16);
     const sunMat = new THREE.MeshBasicMaterial({ color: 0xffeb9a, toneMapped: false });
     const sunMesh = new THREE.Mesh(sunGeo, sunMat);
     sunMesh.position.copy(sunLight.position);
     scene.add(sunMesh);
 
-    // Particle holders/state
-    let rainSystem: THREE.Points | null = null;
-    let rainVel: Float32Array | null = null;
-    let windSystem: THREE.Points | null = null;
-    let windVel: Float32Array | null = null;
-    let fogMeshAdded = false;
-
-    // Create simple sprite textures (canvas) for particles — no external assets required
+    // small particle textures
     const createRainTexture = () => {
       const size = 64;
       const canvas = document.createElement("canvas");
@@ -101,21 +109,18 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
       canvas.height = size;
       const ctx = canvas.getContext("2d")!;
       ctx.clearRect(0, 0, size, size);
-      // vertical streak with soft edges
-      const grd = ctx.createLinearGradient(size/2, 0, size/2, size);
+      const grd = ctx.createLinearGradient(size / 2, 0, size / 2, size);
       grd.addColorStop(0, "rgba(255,255,255,0.98)");
       grd.addColorStop(0.6, "rgba(200,200,255,0.35)");
       grd.addColorStop(1, "rgba(200,200,255,0.05)");
       ctx.fillStyle = grd;
-      ctx.fillRect(size/2 - 1.5, 0, 3, size);
-      // slight blur effect by drawing translucent wider streak
+      ctx.fillRect(size / 2 - 1.5, 0, 3, size);
       ctx.globalAlpha = 0.15;
-      ctx.fillRect(size/2 - 3, 0, 6, size);
+      ctx.fillRect(size / 2 - 3, 0, 6, size);
       const tex = new THREE.CanvasTexture(canvas);
       tex.needsUpdate = true;
       return tex;
     };
-
     const createWindTexture = () => {
       const size = 32;
       const canvas = document.createElement("canvas");
@@ -124,7 +129,7 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
       const ctx = canvas.getContext("2d")!;
       ctx.clearRect(0, 0, size, size);
       ctx.beginPath();
-      ctx.arc(size/2, size/2, 6, 0, Math.PI * 2);
+      ctx.arc(size / 2, size / 2, 6, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(180,200,255,0.95)";
       ctx.fill();
       const tex = new THREE.CanvasTexture(canvas);
@@ -135,15 +140,35 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
     const rainTexture = createRainTexture();
     const windTexture = createWindTexture();
 
-    // Improved weather application (more "game-like")
+    // particle holders
+    let rainSystem: THREE.Points | null = null;
+    let rainVelY: Float32Array | null = null;
+    let rainVelX: Float32Array | null = null;
+    let rainBaseOpacity = 0.55; // adjustable
+    let windSystem: THREE.Points | null = null;
+    let windVel: Float32Array | null = null;
+    let windBaseOpacity = 0.65; // adjustable
+    let fogMeshAdded = false;
+
+    // PMREM + environment setup: render the scene into a cubemap then use PMREM for PBR envMap
+    const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(512, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+    const cubeCamera = new THREE.CubeCamera(1, 10000, cubeRenderTarget);
+    // add cubeCamera to scene so it picks up background/lighting (not visible)
+    scene.add(cubeCamera);
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+
+    // Apply weather adjustments
     const applyWeather = (type: string) => {
-      // Reset previous special elements
+      // cleanup previous
       if (rainSystem) {
         scene.remove(rainSystem);
         rainSystem.geometry.dispose();
         (rainSystem.material as THREE.PointsMaterial).dispose();
         rainSystem = null;
-        rainVel = null;
+        rainVelY = null;
+        rainVelX = null;
       }
       if (windSystem) {
         scene.remove(windSystem);
@@ -152,15 +177,11 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
         windSystem = null;
         windVel = null;
       }
-      // Fog management
       scene.fog = null;
-      if (fogMeshAdded) {
-        fogMeshAdded = false;
-      }
+      fogMeshAdded = false;
 
-      // default sky + lighting tweaks per weather
       if (type === "sunny") {
-        scene.background = new THREE.Color(0x87ceeb); // clear blue sky
+        scene.background = new THREE.Color(0x87ceeb);
         ambient.intensity = 0.9;
         sunLight.intensity = 1.6;
         sunLight.color = new THREE.Color(0xfff1c0);
@@ -187,75 +208,255 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
         renderer.setClearColor(0xd6dbe0, 1);
       }
 
-      // Rain: long streak sprites, faster fall, many particles
+      // create particle sets
       if (type === "rainy") {
-        const rainCount = 6000;
+        // thunderstorm: substantial particle increase and stronger visual presence
+        const rainCount = 35000; // heavy storm — tune for performance
         const positions = new Float32Array(rainCount * 3);
-        rainVel = new Float32Array(rainCount);
+        rainVelY = new Float32Array(rainCount);
+        rainVelX = new Float32Array(rainCount);
         for (let i = 0; i < rainCount; i++) {
-          positions[i * 3 + 0] = Math.random() * 2400 - 1200;
-          positions[i * 3 + 1] = Math.random() * 1800 + 100;
-          positions[i * 3 + 2] = Math.random() * 2400 - 1200;
-          // faster drops with slight x drift
-          rainVel[i] = 6 + Math.random() * 6;
+          positions[i * 3 + 0] = Math.random() * 3600 - 1800; // x
+          positions[i * 3 + 1] = Math.random() * 2600 + 200;  // y
+          positions[i * 3 + 2] = Math.random() * 3600 - 1800; // z
+          // faster drops for thunderstorm + variation
+          rainVelY[i] = 16 + Math.random() * 26; // fall speed
+          // horizontal drift to simulate strong wind gusts in storm
+          rainVelX[i] = (Math.random() - 0.5) * (4 + Math.random() * 10);
         }
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
         const mat = new THREE.PointsMaterial({
           map: rainTexture,
-          size: 18,
+          size: 14,
           sizeAttenuation: true,
           transparent: true,
-          alphaTest: 0.01,
+          opacity: rainBaseOpacity,
+          alphaTest: 0.005,
           depthWrite: false,
-          blending: THREE.NormalBlending,
+          blending: THREE.AdditiveBlending,
         });
         rainSystem = new THREE.Points(geo, mat);
+        rainSystem.frustumCulled = false;
+        // push rain slightly in front of ground to avoid z-fighting with model edges
+        rainSystem.renderOrder = 1;
         scene.add(rainSystem);
+        // add a subtle screen-space mist for heavy rain
+        scene.fog = new THREE.FogExp2(0xbfd1e5, 0.00045);
       }
 
-      // Wind: drifting particles across wide area (use small round sprites)
       if (type === "windy") {
-        const windCount = 3200;
+        // stronger visible wind: more particles, larger size and faster drift
+        const windCount = 9000;
         const positions = new Float32Array(windCount * 3);
-        windVel = new Float32Array(windCount * 3); // x,y,z velocities
+        windVel = new Float32Array(windCount * 3);
         for (let i = 0; i < windCount; i++) {
-          positions[i * 3 + 0] = Math.random() * 3600 - 1800;
-          positions[i * 3 + 1] = Math.random() * 1200 + 50;
-          positions[i * 3 + 2] = Math.random() * 3600 - 1800;
-          // stronger horizontal velocity and mild vertical bob
-          windVel[i * 3 + 0] = 2 + Math.random() * 6; // x velocity
-          windVel[i * 3 + 1] = (Math.random() - 0.5) * 0.4; // y velocity small
-          windVel[i * 3 + 2] = (Math.random() - 0.5) * 0.4; // z velocity small
+          positions[i * 3 + 0] = Math.random() * 4200 - 2100;
+          positions[i * 3 + 1] = Math.random() * 1600 + 50;
+          positions[i * 3 + 2] = Math.random() * 4200 - 2100;
+          // stronger directional velocity, biased in x direction
+          windVel[i * 3 + 0] = 4 + Math.random() * 10; // x speed
+          windVel[i * 3 + 1] = (Math.random() - 0.5) * 0.6; // slight vertical jitter
+          windVel[i * 3 + 2] = (Math.random() - 0.5) * 0.6; // z jitter
         }
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
         const mat = new THREE.PointsMaterial({
           map: windTexture,
-          size: 8,
+          size: 16,
           sizeAttenuation: true,
           transparent: true,
+          opacity: windBaseOpacity,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         });
         windSystem = new THREE.Points(geo, mat);
+        windSystem.frustumCulled = false;
+        windSystem.renderOrder = 1;
         scene.add(windSystem);
       }
 
-      // Foggy: add subtle ground fog plane for volumetric feel (not expensive)
       if (type === "foggy") {
         fogMeshAdded = true;
       }
+
+      // regenerate environment map after weather changes to ensure reflections match sky
+      // capture scene to cubemap then PMREM -> scene.environment
+      cubeCamera.update(renderer, scene);
+      const envMap = pmremGenerator.fromCubemap(cubeRenderTarget.texture).texture;
+      scene.environment = envMap;
     };
     applyWeather(weather);
 
-    // Load FBX
+    // FBX loader
     const loader = new FBXLoader();
     loader.load(
       fbxUrl,
       (object) => {
+        // helper to convert an incoming material -> improved PBR material
+        const upgradeMaterial = (orig: any) => {
+          if (!orig) return null;
+
+          // preserve textures & color where possible
+          const baseColor = orig.color ? orig.color.clone() : new THREE.Color(0xffffff);
+          let map = orig.map ?? null;
+          const opacity = typeof orig.opacity === "number" ? orig.opacity : 1;
+          const roughness = orig.roughness ?? (orig.specular ? 1 - (orig.specular.r ?? 0) : 0.6);
+          const metalness = orig.metalness ?? 0;
+
+          // ensure texture color space is correct
+          if (map && map.isTexture) {
+            try {
+              // runtime-safe sRGB detection
+              const sRGB = (THREE as any).sRGBEncoding ?? (THREE as any).SRGBColorSpace ?? (THREE as any).SRGBEncoding;
+              if (sRGB !== undefined) map.encoding = sRGB;
+            } catch (e) {}
+          }
+
+          // decide if this should be glass-like
+          const name = ((orig && orig.name) || "").toString().toLowerCase();
+          const isTransparentCandidate =
+            name.includes("glass") ||
+            (orig && ((orig.transparent && opacity < 0.95) || (orig.specular && orig.specular.r > 0.1)));
+
+          if (isTransparentCandidate) {
+            const mat = new THREE.MeshPhysicalMaterial({
+              map,
+              color: baseColor,
+              metalness: 0.0,
+              roughness: Math.min(0.2, roughness),
+              transmission: 0.95,
+              transparent: true,
+              opacity: Math.max(0.05, opacity),
+              ior: 1.45,
+              thickness: 0.6,
+              clearcoat: 0.2,
+              clearcoatRoughness: 0.05,
+              envMapIntensity: 2.0,
+              side: THREE.DoubleSide,
+            });
+            // Transparent objects should not write depth (avoids z-sorting occlusion)
+            mat.depthWrite = false;
+            // help blending quality
+            (mat as any).transparent = true;
+            return mat;
+          }
+
+          // non-glass -> Standard/Physical for environment reflections
+          const mat = new THREE.MeshStandardMaterial({
+            map,
+            color: baseColor,
+            metalness: metalness,
+            roughness: Math.max(0.05, roughness),
+            envMapIntensity: 1.0,
+          });
+          return mat;
+        };
+
+        object.traverse((child: any) => {
+          if (!child.isMesh) return;
+
+          // default shadow behavior for most meshes
+          child.castShadow = true;
+          child.receiveShadow = true;
+
+          const orig = child.material;
+          let isGlassMat = false;
+          try {
+            if (Array.isArray(orig)) {
+              // replace each material in the array
+              const newMats = orig.map((m: any) => {
+                const nm = upgradeMaterial(m) || m;
+                // detect glass-like material created by upgradeMaterial
+                const isG = nm && nm.transmission && nm.transmission > 0.5;
+                if (isG) isGlassMat = true;
+                return nm;
+              });
+              child.material = newMats;
+            } else {
+              const nm = upgradeMaterial(orig);
+              if (nm) {
+                // detect glass-like material created by upgradeMaterial
+                isGlassMat = nm instanceof THREE.MeshPhysicalMaterial && nm.transmission > 0.5;
+                child.material = nm;
+              }
+            }
+
+            // Glass-specific tweaks to avoid dark silhouettes / z-fighting:
+            if (isGlassMat) {
+              // do not let glass receive direct shadow from frames (avoids dark outlines)
+              child.receiveShadow = false;
+              // render glass after opaque geometry
+              child.renderOrder = 2;
+              // polygon offset helps avoid z-fighting between glass and frame geometry
+              try {
+                (child.material as any).polygonOffset = true;
+                (child.material as any).polygonOffsetFactor = -1;
+                (child.material as any).polygonOffsetUnits = -4;
+                // depthWrite already set during material creation, ensure it's false
+                (child.material as any).depthWrite = false;
+              } catch (e) {}
+            } else {
+              // ensure opaque geometry still receives shadows normally
+              child.receiveShadow = true;
+              child.renderOrder = 0;
+            }
+
+            // Ensure envMap applied once available
+            if (scene.environment) {
+              if (Array.isArray(child.material)) {
+                (child.material as any[]).forEach((m) => {
+                  if (m) {
+                    (m as any).envMap = scene.environment;
+                    (m as any).envMapIntensity = (m as any).envMapIntensity ?? 1.0;
+                    m.needsUpdate = true;
+                  }
+                });
+              } else {
+                (child.material as any).envMap = scene.environment;
+                (child.material as any).envMapIntensity = (child.material as any).envMapIntensity ?? 1.0;
+                (child.material as any).needsUpdate = true;
+              }
+            } else {
+              child.material.needsUpdate = true;
+            }
+          } catch (e) {
+            console.warn("material upgrade error", e);
+          }
+        });
+
         scene.add(object);
-        applyGlassMaterial(object);
+
+        // regenerate env map now that object exists for better PBR reflections
+        cubeCamera.update(renderer, scene);
+        const envMap2 = pmremGenerator.fromCubemap(cubeRenderTarget.texture).texture;
+
+        // ensure envMap encoding set (runtime-safe)
+        try {
+          const sRGB = (THREE as any).sRGBEncoding ?? (THREE as any).SRGBColorSpace ?? (THREE as any).SRGBEncoding;
+          if (sRGB !== undefined) (envMap2 as any).encoding = sRGB;
+        } catch (e) {}
+
+        scene.environment = envMap2;
+
+        // re-apply envMap to all meshes (ensures reflection shows)
+        object.traverse((child: any) => {
+          if (child.isMesh && child.material) {
+            if (Array.isArray(child.material)) {
+              (child.material as any[]).forEach((m) => {
+                if (m) {
+                  m.envMap = scene.environment;
+                  m.envMapIntensity = m.envMapIntensity ?? 1.0;
+                  m.needsUpdate = true;
+                }
+              });
+            } else {
+              (child.material as any).envMap = scene.environment;
+              (child.material as any).envMapIntensity = (child.material as any).envMapIntensity ?? 1.0;
+              (child.material as any).needsUpdate = true;
+            }
+          }
+        });
       },
       undefined,
       (err) => {
@@ -263,40 +464,51 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
       }
     );
 
-    // Animation loop
+    // animation loop
     const animate = () => {
-      // Animate rain
-      if (rainSystem && rainVel) {
-        const positions = rainSystem.geometry.attributes.position as THREE.BufferAttribute;
-        for (let i = 0; i < rainVel.length; i++) {
-          let y = positions.getY(i) - rainVel[i];
-          let x = positions.getX(i) + (Math.sin((i + Date.now() * 0.002) * 0.01) * 0.6); // small sway
-          if (y < -50) {
-            y = 1400 + Math.random() * 600;
-            x = Math.random() * 2400 - 1200;
+      // Rain animation: use direct array access for compatibility and performance
+      if (rainSystem && rainVelY && rainVelX) {
+        const posAttr = rainSystem.geometry.attributes.position as THREE.BufferAttribute;
+        const arr = posAttr.array as Float32Array;
+        const count = rainVelY.length;
+        const timeFactor = (Date.now() % 10000) / 10000;
+        for (let i = 0; i < count; i++) {
+          const idx = i * 3;
+          // stronger horizontal motion during storm gusts (time varying)
+          const gust = Math.sin(i * 0.01 + timeFactor * Math.PI * 2) * 0.5;
+          let x = arr[idx + 0] + (rainVelX[i] * 0.6) + gust;
+          let y = arr[idx + 1] - rainVelY[i] * (0.9 + Math.random() * 0.2);
+          // respawn drops when falling out of view
+          if (y < -300) {
+            y = 1800 + Math.random() * 800;
+            x = Math.random() * 3600 - 1800;
+            arr[idx + 2] = Math.random() * 3600 - 1800;
           }
-          positions.setY(i, y);
-          positions.setX(i, x);
+          if (x > 2200) x = -2200;
+          if (x < -2200) x = 2200;
+          arr[idx + 0] = x;
+          arr[idx + 1] = y;
         }
-        positions.needsUpdate = true;
+        posAttr.needsUpdate = true;
       }
-      // Animate wind
+
       if (windSystem && windVel) {
         const positions = windSystem.geometry.attributes.position as THREE.BufferAttribute;
-        for (let i = 0; i < windVel.length / 3; i++) {
-          const idxX = i * 3;
-          const idxY = i * 3 + 1;
-          const idxZ = i * 3 + 2;
-          let x = positions.getX(i) + windVel[idxX] * 0.6;
-          let y = positions.getY(i) + Math.sin((Date.now() * 0.001 + i) * 0.5) * 0.05 + windVel[idxY] * 0.02;
-          let z = positions.getZ(i) + windVel[idxZ] * 0.02;
-          // wrap around
-          if (x > 1800) x = -1800;
-          if (x < -1800) x = 1800;
-          if (y < 10) y = 1200;
-          positions.setX(i, x);
-          positions.setY(i, y);
-          positions.setZ(i, z);
+        const arr = positions.array as Float32Array;
+        const count = windVel.length / 3;
+        const t = Date.now() * 0.001;
+        for (let i = 0; i < count; i++) {
+          const base = i * 3;
+          // stronger directional x movement and wave-like vertical motion
+          let x = arr[base + 0] + windVel[base + 0] * (0.6 + Math.sin(t + i * 0.01) * 0.2);
+          let y = arr[base + 1] + Math.sin(t * 2 + i * 0.02) * 0.8 + windVel[base + 1] * 0.02;
+          let z = arr[base + 2] + windVel[base + 2] * 0.02;
+          if (x > 2600) x = -2600;
+          if (x < -2600) x = 2600;
+          if (y < 20) y = 1600;
+          arr[base + 0] = x;
+          arr[base + 1] = y;
+          arr[base + 2] = z;
         }
         positions.needsUpdate = true;
       }
@@ -307,9 +519,8 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
     };
     animate();
 
-    // Cleanup
+    // cleanup
     return () => {
-      // dispose created textures and geometries / materials
       if (rainSystem) {
         scene.remove(rainSystem);
         rainSystem.geometry.dispose();
@@ -324,58 +535,29 @@ export default function ThreeDFBXViewer({ fbxUrl, width = 1200, height = 700 }: 
       }
       rainTexture.dispose();
       windTexture.dispose();
-      // dispose sun mesh
       sunMesh.geometry.dispose();
       (sunMesh.material as THREE.Material).dispose();
-      // remove lights
       scene.remove(sunLight);
       scene.remove(fill);
       scene.remove(hemi);
       scene.remove(ambient);
+
+      // dispose PMREM + cubeRT
+      try {
+        pmremGenerator.dispose();
+        cubeRenderTarget.dispose();
+      } catch (e) {}
+
       while (mountRef.current && mountRef.current.firstChild) {
         mountRef.current.removeChild(mountRef.current.firstChild);
       }
     };
   }, [fbxUrl, width, height, weather]);
 
-  // Apply glass material to loaded object
-  function applyGlassMaterial(object: THREE.Object3D) {
-    object.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh) {
-        const mesh = child as THREE.Mesh;
-
-        // Detect glass by mesh or material name (adjust as needed)
-        const isGlass =
-          mesh.name.toLowerCase().includes("glass") ||
-          ((mesh.material as any)?.name ?? "").toLowerCase().includes("glass");
-
-        if (isGlass) {
-          mesh.material = new THREE.MeshPhysicalMaterial({
-            color: 0xffffff, // White base color
-            transparent: true,
-            opacity: 0.2, // Lower opacity for better transparency
-            transmission: 1, // Full transmission for clear glass
-            roughness: 0.05, // Slight roughness for realistic glass
-            metalness: 0, // No metallic properties
-            ior: 1.5, // Index of refraction for glass
-            thickness: 0.5, // Thickness of the glass
-            clearcoat: 1, // Add clearcoat for reflective surface
-            clearcoatRoughness: 0.05, // Slight roughness for clearcoat
-            envMapIntensity: 1, // Enhance reflections
-          });
-
-          // Ensure material updates
-          mesh.material.needsUpdate = true;
-        }
-      }
-    });
-  }
-
   return (
     <div className="relative" style={{ width, height }}>
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
 
-      {/* centered top controls — fixed to viewport so they stay visible on zoom/resize */}
       <div className="pointer-events-none">
         <div
           className="fixed top-4 left-1/2 z-[9999] flex gap-2 transform -translate-x-1/2 pointer-events-auto"
