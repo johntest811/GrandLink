@@ -22,6 +22,7 @@ export default function ProductsAdminPage() {
   const [fullProductName, setFullProductName] = useState("");
   const [additionalFeatures, setAdditionalFeatures] = useState("");
   const [price, setPrice] = useState("");
+  const [inventory, setInventory] = useState("0");         // <-- new state
   const [images, setImages] = useState<File[]>([]);
   const [fbxFile, setFbxFile] = useState<File | null>(null);
   const [message, setMessage] = useState("");
@@ -158,7 +159,8 @@ export default function ProductsAdminPage() {
           fullproductname: fullProductName,
           additionalfeatures: additionalFeatures,
           description,
-          price: Number(price),
+          price: Number(price) || 0,
+          inventory: Number(inventory) || 0,    // <-- include inventory
           category,
           height: height ? Number(height) : null,
           width: width ? Number(width) : null,
@@ -198,6 +200,7 @@ export default function ProductsAdminPage() {
       setDescription("");
       setAdditionalFeatures("");
       setPrice("");
+      setInventory("0");         // <-- reset inventory
       setImages([]);
       setFbxFile(null);
       setHeight("");
@@ -319,6 +322,25 @@ export default function ProductsAdminPage() {
             {/* Product Details */}
             <div className="bg-white/80 rounded-lg p-6">
               <h2 className="text-lg font-bold text-[#233a5e] mb-4">Product Details</h2>
+              <label className="block text-[#233a5e] font-semibold mb-1">Price (PHP)</label>
+              <input
+                type="number"
+                value={price}
+                onChange={e => setPrice(e.target.value)}
+                className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
+                placeholder="0.00"
+                required
+                min="0"
+              />
+              <label className="block text-[#233a5e] font-semibold mb-1">Inventory</label>
+              <input
+                type="number"
+                value={inventory}
+                onChange={e => setInventory(e.target.value)}
+                className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
+                placeholder="0"
+                min="0"
+              />
               <div className="flex space-x-4 mb-4">
                 <div>
                   <label className="block text-[#233a5e] font-semibold mb-1">Height:</label>
