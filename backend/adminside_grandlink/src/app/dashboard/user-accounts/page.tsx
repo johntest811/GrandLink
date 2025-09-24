@@ -1,314 +1,342 @@
 "use client";
-import { useState, useEffect } from "react";
-type SupabaseUser = {
-  id: string;
+
+import { useEffect, useState, useMemo } from "react";
+import { supabase } from "../../Clients/Supabase/SupabaseClients";
+
+type User = {
+  id: number;
+  employee_number: string;
+  name: string;
+  designation: string;
+  last_login: string;
+  status: string;
   email: string;
-  created_at: string;
-  last_sign_in_at?: string; // Supabase Auth field
-  role?: string;
-  status?: string;
-  last_login?: string;
 };
 
-export default function UsersPage() {
-  const [users, setUsers] = useState<SupabaseUser[]>([]);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [showModal, setShowModal] = useState(false);
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [showAddUserPopup, setShowAddUserPopup] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
+export default function UserAccountsPage() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"All" | string>("All");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
+
+  // Export modal
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
+  // Modals
+  const [modalType, setModalType] = useState<"edit" | "view" | "add" | null>(null);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+
+  // New user form
+  const [newUser, setNewUser] = useState({
+    employee_number: "",
+    name: "",
+    designation: "",
+    email: "",
+    status: "Active",
+  });
 
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const res = await fetch("/api/admin-users");
-        const result = await res.json();
-        if (res.ok) {
-          const usersWithLogin = (result.users || []).map((u: any) => {
-            const lastLoginDate = u.last_sign_in_at
-              ? new Date(u.last_sign_in_at)
-              : new Date(u.created_at);
-            const now = new Date();
-            const diffDays = (now.getTime() - lastLoginDate.getTime()) / (1000 * 60 * 60 * 24);
-            return {
-              ...u,
-              role: "User",
-              status: diffDays <= 3 ? "Active" : "Inactive",
-              last_login: lastLoginDate.toISOString().slice(0, 10),
-            };
-          });
-          setUsers(usersWithLogin);
-        } else {
-          setMessage("Error fetching users: " + (result.error || "Unknown error"));
-        }
-      } catch (err) {
-        setMessage("Error fetching users: " + (err as Error).message);
-      }
-    };
     fetchUsers();
   }, []);
 
-  const handleAddUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage("");
-    if (!email || !password) {
-      setMessage("Email and password are required.");
+  async function fetchUsers() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("employees")
+      .select("id, employee_number, name, role, status, email")
+      .order("id", { ascending: true });
+
+    if (!error && data) {
+      setUsers(
+        data.map((u: any) => ({
+          ...u,
+          designation: u.role,
+          last_login: "2025-09-18", // placeholder
+        }))
+      );
+    }
+    setLoading(false);
+  }
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return users.filter((u) => {
+      if (statusFilter !== "All" && u.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        u.employee_number.toLowerCase().includes(q)
+      );
+    });
+  }, [users, search, statusFilter]);
+
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const exportPDF = async () => {
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+
+    const doc = new jsPDF();
+    doc.text("User Accounts Report", 14, 15);
+
+    const filteredData = users.filter((u) => {
+      if (!startDate || !endDate) return true;
+      const login = new Date(u.last_login);
+      return login >= new Date(startDate) && login <= new Date(endDate);
+    });
+
+    autoTable(doc, {
+      startY: 25,
+      head: [["Employee #", "Name", "Designation", "Email", "Status", "Last Login"]],
+      body: filteredData.map((u) => [
+        u.employee_number,
+        u.name,
+        u.designation,
+        u.email,
+        u.status,
+        u.last_login,
+      ]),
+    });
+
+    doc.save("user_accounts.pdf");
+    setShowExportModal(false);
+  };
+
+  async function handleDelete(id: number) {
+    if (!confirm("Remove this user?")) return;
+    await supabase.from("employees").delete().eq("id", id);
+    fetchUsers();
+  }
+
+  async function handleEditSave() {
+    if (!selectedUser) return;
+    await supabase
+      .from("employees")
+      .update({
+        name: selectedUser.name,
+        role: selectedUser.designation,
+        email: selectedUser.email,
+        status: selectedUser.status,
+      })
+      .eq("id", selectedUser.id);
+    setModalType(null);
+    fetchUsers();
+  }
+
+  async function handleAddSave() {
+    if (!newUser.name || !newUser.email || !newUser.employee_number) {
+      alert("Please fill in all required fields");
       return;
     }
-    try {
-      const res = await fetch("/api/admin-users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const result = await res.json();
-      if (res.ok) {
-        setMessage("User account created successfully!");
-        setEmail("");
-        setPassword("");
-        setShowModal(false);
-        setUsers(prev => [
-          ...prev,
-          {
-            ...result.user,
-            role: "User",
-            status: "Active",
-            last_login: new Date().toISOString().slice(0, 10),
-          },
-        ]);
-      } else {
-        setMessage("Error: " + (result.error || "Unknown error"));
-      }
-    } catch (err) {
-      setMessage("Error: " + (err as Error).message);
+
+    const { error } = await supabase.from("employees").insert([
+      {
+        employee_number: newUser.employee_number,
+        name: newUser.name,
+        role: newUser.designation,
+        email: newUser.email,
+        status: newUser.status,
+      },
+    ]);
+
+    if (error) {
+      alert("Error adding user: " + error.message);
+    } else {
+      setModalType(null);
+      setNewUser({ employee_number: "", name: "", designation: "", email: "", status: "Active" });
+      fetchUsers();
     }
-  };
-
-  // Delete user handler
-  const handleDeleteUser = async (userId: string) => {
-    if (!confirm("Are you sure you want to delete this user?")) return;
-    try {
-      const res = await fetch("/api/admin-users", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
-      });
-      const result = await res.json();
-      if (res.ok) {
-        setUsers(users.filter(u => u.id !== userId));
-        setMessage("User deleted successfully!");
-      } else {
-        setMessage("Error deleting user: " + (result.error || "Unknown error"));
-      }
-    } catch (err) {
-      setMessage("Error deleting user: " + (err as Error).message);
-    }
-  };
-
-  // Filter users by status and search term
-  const filteredUsers = users.filter(u => {
-    const matchesStatus = statusFilter === "All" || u.status === statusFilter;
-    const matchesSearch =
-      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (u.email?.split("@")[0].replace(/\./g, " ").toLowerCase().includes(searchTerm.toLowerCase()));
-    return matchesStatus && matchesSearch;
-  });
-
-  // Handle checkbox change
-  const handleCheckboxChange = (id: string, checked: boolean) => {
-    setSelectedIds(prev =>
-      checked ? [...prev, id] : prev.filter(selectedId => selectedId !== id)
-    );
-  };
-
-  // Bulk delete handler
-  const handleBulkDelete = async () => {
-    if (selectedIds.length === 0) return;
-    if (!confirm("Are you sure you want to delete the selected users?")) return;
-    for (const userId of selectedIds) {
-      await handleDeleteUser(userId);
-    }
-    setSelectedIds([]);
-  };
+  }
 
   return (
-    <div className="min-h-screen p-8 bg-gray-50">
-      <div className="flex items-center mb-8">
-        <div className="flex items-center mr-4">
-          {/* <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-400 mr-2">A</div>
-          <span className="font-semibold text-lg">Admin User</span> */}
-        </div>
-      </div>
-      
-      <div className="flex gap-4 mb-4 text-black">
-        <input
-          type="text"
-          placeholder="Search users..."
-          className="border px-3 py-2 rounded w-1/3"
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-        />
-      </div>
-      <div className="bg-white shadow rounded-lg p-6">
-        {/* Status Filter Dropdown */}
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <label className="mr-2 font-semibold text-[#233a5e]">All Status:</label>
-            <select
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="border border-gray-300 p-2 rounded bg-white text-black"
-            >
-              <option value="All">All</option>
-              <option value="Active">Active</option>
-              <option value="Inactive">Inactive</option>
-            </select>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-          className="bg-blue-600 text-white px-6 py-2 rounded font-semibold shadow hover:bg-blue-700 transition"
-          onClick={() => { setShowModal(true); setMessage(""); }}
-        >
-          Add New User
-        </button>
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-2xl font-bold text-blue-700 mb-6">👥 Manage User Accounts</h1>
 
-            <button
-              className={`bg-red-600 text-white px-4 py-2 rounded font-semibold ${selectedIds.length === 0 ? "opacity-50 cursor-not-allowed" : "hover:bg-red-800"}`}
-              disabled={selectedIds.length === 0}
-              onClick={handleBulkDelete}
-            >
-              Delete
-            </button>
-          </div>
+      {/* Search & Export */}
+      <div className="flex flex-col sm:flex-row items-center justify-between mb-4 gap-4">
+        <div className="flex gap-2 w-full sm:w-auto">
+          <input
+            placeholder="🔍 Search users..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            className="border rounded px-3 py-2 w-full sm:w-80 shadow-sm"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+            className="border rounded px-2 py-2"
+          >
+            <option value="All">All</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
         </div>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr style={{ background: "#505A89" }}>
-              <th className="text-white px-4 py-2"></th>
-              <th className="text-white px-4 py-2">NAME</th>
-              <th className="text-white px-4 py-2">EMAIL</th>
-              <th className="text-white px-4 py-2">STATUS</th>
-              <th className="text-white px-4 py-2">LAST LOGIN</th>
-              <th className="text-white px-4 py-2">ACTION</th>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setModalType("add")}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 shadow"
+          >
+            ➕ Add User
+          </button>
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 shadow"
+          >
+            📤 Export
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded shadow-md overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-[#3b82f6] text-white">
+            <tr>
+              <th className="px-4 py-3">Employee #</th>
+              <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3">Designation</th>
+              <th className="px-4 py-3">Email</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Last Login</th>
+              <th className="px-4 py-3">Action</th>
             </tr>
           </thead>
           <tbody>
-            {filteredUsers.map((user, idx) => (
-              <tr key={user.id} className="hover:bg-gray-50">
-                <td className="p-2 border text-center">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(user.id)}
-                    onChange={e => handleCheckboxChange(user.id, e.target.checked)}
-                  />
-                </td>
-                <td className="p-2 border">
-                  <div className="flex items-center">
-                    <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold text-gray-400 mr-2">
-                      {user.email ? user.email[0].toUpperCase() : "U"}
-                    </div>
-                    <span className="font-medium text-gray-700">{user.email?.split("@")[0].replace(/\./g, " ")}</span>
-                  </div>
-                </td>
-                <td className="p-2 border">
-                  <span className="text-black">{user.email}</span>
-                </td>
-                <td className="p-2 border">
-                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${user.status === "Active" ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"}`}>{user.status}</span>
-                </td>
-                <td className="p-2 border">
-                  <span style={{ color: "#505A89" }}>{user.last_login}</span>
-                </td>
-                <td className="p-2 border">
-                  <span
-                    className="text-red-600 cursor-pointer hover:underline"
-                    onClick={() => handleDeleteUser(user.id)}
-                  >
-                    Delete
+            {loading ? (
+              <tr><td colSpan={7} className="p-6 text-center">Loading...</td></tr>
+            ) : pageItems.length === 0 ? (
+              <tr><td colSpan={7} className="p-6 text-center">No users found.</td></tr>
+            ) : pageItems.map((u) => (
+              <tr key={u.id} className="border-b hover:bg-gray-50">
+                <td className="px-4 py-3">{u.employee_number}</td>
+                <td className="px-4 py-3 font-medium">{u.name}</td>
+                <td className="px-4 py-3">{u.designation}</td>
+                <td className="px-4 py-3">{u.email}</td>
+                <td className="px-4 py-3">
+                  <span className={`px-3 py-1 rounded-full text-sm ${u.status === "Active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>
+                    {u.status}
                   </span>
+                </td>
+                <td className="px-4 py-3">{u.last_login}</td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setSelectedUser(u); setModalType("edit"); }}
+                      className="px-2 py-1 bg-yellow-500 text-white rounded text-xs hover:bg-yellow-600"
+                    >
+                      ✏️ Edit
+                    </button>
+                    <button
+                      onClick={() => { setSelectedUser(u); setModalType("view"); }}
+                      className="px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600"
+                    >
+                      👁 View
+                    </button>
+                    <button
+                      onClick={() => handleDelete(u.id)}
+                      className="px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+                    >
+                      🗑 Remove
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <div className="flex justify-between items-center mt-4 text-gray-500 text-sm">
-          <span>Showing 1 to {users.length} of {users.length} results</span>
-          <div className="flex items-center gap-2">
-            <button className="px-3 py-1 border rounded bg-white">Previous</button>
-            <span>1</span>
-            <button className="px-3 py-1 border rounded bg-white">Next</button>
+
+        {/* Pagination */}
+        <div className="p-4 flex items-center justify-between text-sm text-gray-600">
+          <div>
+            Showing {filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1} to{" "}
+            {Math.min(filtered.length, page * PAGE_SIZE)} of {filtered.length} results
+          </div>
+          <div className="flex gap-2">
+            <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="px-3 py-1 border rounded">Previous</button>
+            <span className="px-3 py-1 border rounded">{page}</span>
+            <button disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className="px-3 py-1 border rounded">Next</button>
           </div>
         </div>
       </div>
 
-      {/* Add User Modal */}
-      {showModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: "transparent" }}>
-          <div className="bg-white rounded-lg shadow-lg p-8 w-full max-w-md relative">
-            <button
-              className="absolute top-2 right-2 text-gray-400 hover:text-gray-600 text-xl"
-              onClick={() => setShowModal(false)}
-            >
-              &times;
-            </button>
-            <h2 className="text-xl font-bold mb-4 text-black">Add New User</h2>
-            <form className="flex flex-col gap-4" onSubmit={handleAddUser}>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  className="border px-3 py-2 rounded w-full"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="border px-3 py-2 rounded w-full"
-                  required
-                />
-              </div>
-              <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded font-semibold">Add User</button>
-            </form>
-            {message && <div className="text-center text-red-600 mt-2">{message}</div>}
+      {/* Export Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-96">
+            <h2 className="text-lg font-bold mb-4">📤 Export Users</h2>
+            <label className="block mb-2 text-sm">Start Date</label>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="border p-2 rounded w-full mb-3"/>
+            <label className="block mb-2 text-sm">End Date</label>
+            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="border p-2 rounded w-full mb-4"/>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowExportModal(false)} className="px-4 py-2 bg-gray-400 text-white rounded">Cancel</button>
+              <button onClick={exportPDF} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Export</button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Add New User Popup */}
-      {showAddUserPopup && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 shadow-lg relative min-w-[300px]">
-            <button
-              onClick={() => setShowAddUserPopup(false)}
-              className="absolute top-2 right-2 text-gray-600 hover:text-black text-xl font-bold"
-            >
-              ×
-            </button>
-            <h2 className="text-lg font-bold mb-4 text-[#233a5e]">Add New User</h2>
-            {/* Add your form fields for new user here */}
-            {/* Example: */}
-            <form>
-              <input
-                type="email"
-                placeholder="Email"
-                className="w-full border border-gray-300 p-2 rounded mb-4"
-              />
-              <button
-                type="submit"
-                className="bg-blue-600 text-white px-4 py-2 rounded font-semibold hover:bg-blue-800 w-full"
-              >
-                Create User
-              </button>
-            </form>
+      {/* Add Modal */}
+      {modalType === "add" && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-96">
+            <h2 className="text-lg font-bold mb-4">➕ Add User</h2>
+            <input type="text" value={newUser.employee_number} onChange={(e) => setNewUser({ ...newUser, employee_number: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Employee #"/>
+            <input type="text" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Name"/>
+            <input type="text" value={newUser.designation} onChange={(e) => setNewUser({ ...newUser, designation: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Designation"/>
+            <input type="email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Email"/>
+            <select value={newUser.status} onChange={(e) => setNewUser({ ...newUser, status: e.target.value })} className="border p-2 rounded w-full mb-4">
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setModalType(null)} className="px-4 py-2 bg-gray-400 text-white rounded">Cancel</button>
+              <button onClick={handleAddSave} className="px-4 py-2 bg-blue-600 text-white rounded">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {modalType === "edit" && selectedUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-96">
+            <h2 className="text-lg font-bold mb-4">✏️ Edit User</h2>
+            <input type="text" value={selectedUser.name} onChange={(e) => setSelectedUser({ ...selectedUser, name: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Name"/>
+            <input type="text" value={selectedUser.designation} onChange={(e) => setSelectedUser({ ...selectedUser, designation: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Designation"/>
+            <input type="email" value={selectedUser.email} onChange={(e) => setSelectedUser({ ...selectedUser, email: e.target.value })} className="border p-2 rounded w-full mb-3" placeholder="Email"/>
+            <select value={selectedUser.status} onChange={(e) => setSelectedUser({ ...selectedUser, status: e.target.value })} className="border p-2 rounded w-full mb-4">
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setModalType(null)} className="px-4 py-2 bg-gray-400 text-white rounded">Cancel</button>
+              <button onClick={handleEditSave} className="px-4 py-2 bg-yellow-600 text-white rounded">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Modal */}
+      {modalType === "view" && selectedUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-96">
+            <h2 className="text-lg font-bold mb-4">👁 User Details</h2>
+            <p><strong>Employee #:</strong> {selectedUser.employee_number}</p>
+            <p><strong>Name:</strong> {selectedUser.name}</p>
+            <p><strong>Designation:</strong> {selectedUser.designation}</p>
+            <p><strong>Email:</strong> {selectedUser.email}</p>
+            <p><strong>Status:</strong> {selectedUser.status}</p>
+            <p><strong>Last Login:</strong> {selectedUser.last_login}</p>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setModalType(null)} className="px-4 py-2 bg-blue-600 text-white rounded">Close</button>
+            </div>
           </div>
         </div>
       )}
