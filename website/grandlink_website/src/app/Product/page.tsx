@@ -165,9 +165,18 @@ export default function ProductsPage() {
                   <p className="mt-2 text-center text-base md:text-lg font-medium text-black">
                     {prod.name}
                   </p>
-
                   {/* small underline below product name */}
                   <div className="w-6 h-0.5 bg-red-600 mx-auto mt-1" aria-hidden="true" />
+
+                  {/* Price and Inventory */}
+                  <div className="mt-2 flex flex-col items-center text-sm text-gray-700">
+                    <span>
+                      <b>Price:</b> {prod.price !== undefined && prod.price !== null ? `₱${prod.price}` : "—"}
+                    </span>
+                    <span>
+                      <b>Inventory:</b> {prod.inventory !== undefined && prod.inventory !== null ? prod.inventory : "—"}
+                    </span>
+                  </div>
                 </Link>
               ))}
             </div>
