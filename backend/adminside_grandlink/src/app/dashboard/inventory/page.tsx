@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { supabase } from "../../Clients/Supabase/SupabaseClients";
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
+import { createNotification } from "@/app/lib/notifications";
 
 type ProductInventory = {
   id: string;
@@ -18,58 +19,54 @@ export default function InventoryAdminPage() {
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  // Show low stock products by default
   const [showOnlyLow, setShowOnlyLow] = useState(true);
 
-  // Category filter state + list matching the screenshot
   const CATEGORIES = ["Doors", "Windows", "Enclosures", "Sliding", "Canopy", "Railings", "Casement"];
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
-  // Filter dropdown control
   const [filterOpen, setFilterOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement | null>(null);
 
-  // track original inventories so we can save only changed rows (for Save All)
   const [originalInventories, setOriginalInventories] = useState<Record<string, number>>({});
   const [savingAll, setSavingAll] = useState(false);
 
-  // fetchItems accepts lowOnly flag so we can request only low-stock products from the DB
   const fetchItems = async (lowOnly: boolean = showOnlyLow) => {
     setLoading(true);
+    try {
+      let query = supabase
+        .from("products")
+        .select("id, name, price, inventory, image1, type, category")
+        .order("created_at", { ascending: false });
 
-    // Build base query
-    let query = supabase
-      .from("products")
-      .select("id, name, price, inventory, image1, type, category")
-      .order("created_at", { ascending: false });
+      if (lowOnly) {
+        query = query.or("inventory.is.null,inventory.lte.5");
+      }
 
-    // If lowOnly, include rows where inventory is NULL or <= 5
-    if (lowOnly) {
-      // Supabase .or accepts a comma-separated condition list
-      query = query.or("inventory.is.null,inventory.lte.5");
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.error("fetch inventory error", error);
+      const { data, error } = await query;
+      if (error) {
+        console.error("fetch inventory error", error);
+        setItems([]);
+        setOriginalInventories({});
+      } else {
+        const list = (data || []) as ProductInventory[];
+        setItems(list);
+        const map: Record<string, number> = {};
+        list.forEach((p) => (map[p.id] = p.inventory ?? 0));
+        setOriginalInventories(map);
+      }
+    } catch (e) {
+      console.error("fetchItems exception", e);
       setItems([]);
       setOriginalInventories({});
-    } else {
-      const list = (data || []) as ProductInventory[];
-      setItems(list);
-      const map: Record<string, number> = {};
-      list.forEach((p) => (map[p.id] = p.inventory ?? 0));
-      setOriginalInventories(map);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
-    // initial load uses showOnlyLow default
     fetchItems(showOnlyLow);
   }, []);
 
-  // close dropdown on outside click
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (!filterRef.current) return;
@@ -87,11 +84,17 @@ export default function InventoryAdminPage() {
     } else {
       setItems((prev) => prev.map((p) => (p.id === id ? { ...p, inventory: value } : p)));
       setOriginalInventories((prev) => ({ ...prev, [id]: value }));
+
+      await createNotification({
+        title: "Inventory updated",
+        message: `Product ${id} inventory set to ${value}.`,
+        recipient_role: "Sales Manager",
+        type: "stock",
+      });
     }
     setSavingId(null);
   };
 
-  // Save all changed inventory values
   const saveAll = async () => {
     const changed = items.filter((it) => (originalInventories[it.id] ?? 0) !== (it.inventory ?? 0));
     if (changed.length === 0) {
@@ -99,24 +102,34 @@ export default function InventoryAdminPage() {
       return;
     }
     setSavingAll(true);
-    const results = await Promise.all(
-      changed.map((it) =>
-        supabase.from("products").update({ inventory: it.inventory ?? 0 }).eq("id", it.id)
-      )
-    );
-    const errors = results.map((r) => (r as any).error).filter(Boolean);
-    if (errors.length) {
-      console.error("saveAll errors", errors);
-      alert("Some updates failed. Check console.");
-    } else {
-      // refresh list and original map (respect current lowOnly setting)
-      await fetchItems(showOnlyLow);
+    try {
+      const results = await Promise.all(
+        changed.map((it) =>
+          supabase.from("products").update({ inventory: it.inventory ?? 0 }).eq("id", it.id)
+        )
+      );
+      const errors = results.map((r) => (r as any).error).filter(Boolean);
+      if (errors.length) {
+        console.error("saveAll errors", errors);
+        alert("Some updates failed. Check console.");
+      } else {
+        const summary = changed.map(c => `${c.name || c.id}: ${c.inventory ?? 0}`).join("; ");
+        await createNotification({
+          title: "Inventory bulk update",
+          message: `Updated inventory for ${changed.length} product(s): ${summary}`,
+          recipient_role: "Sales Manager",
+          type: "stock",
+        });
+        await fetchItems(showOnlyLow);
+      }
+    } catch (e) {
+      console.error("saveAll exception", e);
+    } finally {
+      setSavingAll(false);
     }
-    setSavingAll(false);
   };
 
   const filtered = items.filter((it) => {
-    // treat null inventory as 0
     const inv = it.inventory ?? 0;
     if (showOnlyLow && inv > 5) return false;
     if (selectedCategory && selectedCategory !== "All Categories") {
@@ -132,7 +145,6 @@ export default function InventoryAdminPage() {
     );
   });
 
-  // count unsaved changes for UI
   const unsavedCount = items.reduce((acc, it) => acc + ((originalInventories[it.id] ?? 0) !== (it.inventory ?? 0) ? 1 : 0), 0);
 
   return (
@@ -147,9 +159,7 @@ export default function InventoryAdminPage() {
             All Low Stock Products
           </button>
 
-          {/* Filter dropdown wrapper */}
           <div className="relative" ref={filterRef}>
-            {/* Filter button is now blue */}
             <button
               onClick={() => setFilterOpen((s) => !s)}
               className="px-4 py-2 rounded-lg shadow bg-blue-600 text-white"
@@ -246,7 +256,6 @@ export default function InventoryAdminPage() {
       </div>
 
       <div className="grid grid-cols-4 gap-6">
-        {/* Sidebar categories (matches screenshot) */}
         <aside className="col-span-1 bg-white rounded shadow p-4">
           <div className="font-bold mb-3 text-black">All Categories</div>
           <ul className="space-y-2">
@@ -268,7 +277,6 @@ export default function InventoryAdminPage() {
           </ul>
         </aside>
 
-        {/* Main table */}
         <section className="col-span-3 overflow-x-auto bg-white rounded-lg shadow">
           <table className="w-full text-sm">
             <thead>

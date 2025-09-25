@@ -1,10 +1,99 @@
-import React from 'react';
+'use client';
+
+import React, { useEffect, useState } from "react";
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
+import NotificationBell from "@/app/components/NotificationBell";
+
+type Note = {
+  id: string | number;
+  title?: string | null;
+  message: string;
+  recipient_role?: string | null;
+  recipient_id?: string | null;
+  is_read?: boolean;
+  created_at?: string;
+};
 
 export default function Dashboard() {
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
+
+  const loadAdmin = async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getUser();
+      const userId = sessionData?.user?.id ?? null;
+      if (!userId) return;
+      const { data: adminRow } = await supabase.from("admins").select("id, username, position, role").eq("id", userId).single();
+      setCurrentAdmin(adminRow);
+    } catch (e) {
+      console.warn("load admin", e);
+    }
+  };
+
+  const fetchNotes = async () => {
+    try {
+      const role = currentAdmin?.position ?? currentAdmin?.role ?? null;
+      let res;
+      if (role && currentAdmin?.id) {
+        const safeRole = String(role).replace(/'/g, "''");
+        const safeId = String(currentAdmin.id).replace(/'/g, "''");
+        res = await supabase
+          .from("notifications")
+          .select("*")
+          .or(`recipient_role.eq.'${safeRole}',recipient_id.eq.'${safeId}'`)
+          .order("created_at", { ascending: false })
+          .limit(20);
+      } else {
+        res = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(20);
+      }
+      const { data, error } = res as any;
+      if (error) {
+        console.error("notifications fetch error", error);
+        setNotes([]);
+        return;
+      }
+      setNotes(data || []);
+    } catch (e) {
+      console.error("notifications fetch exception", e);
+      setNotes([]);
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
+      await loadAdmin();
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (currentAdmin) fetchNotes();
+  }, [currentAdmin]);
+
   return (
-    <div>
-      <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
-      
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-black">Dashboard</h1>
+
+        {/* small in-page bell so admin sees notifications in dashboard content as well */}
+        <div className="flex items-center gap-3">
+          <NotificationBell adminId={currentAdmin?.id ?? null} adminRole={currentAdmin?.position ?? currentAdmin?.role ?? "Admin"} />
+        </div>
+      </div>
+
+      <section className="bg-white p-4 rounded shadow mb-6">
+        <h2 className="text-lg font-semibold text-black mb-3">Recent Notifications</h2>
+        <div className="space-y-2 max-h-64 overflow-auto">
+          {notes.length === 0 && <div className="text-sm text-gray-500">No notifications</div>}
+          {notes.map(n => (
+            <div key={String(n.id)} className={`p-2 rounded ${n.is_read ? "bg-gray-50" : "bg-white"}`}>
+              <div className="text-sm font-semibold text-black">{n.title ?? "Update"}</div>
+              <div className="text-xs text-gray-500">{n.created_at ? new Date(n.created_at).toLocaleString() : ""}</div>
+              <div className="text-sm text-black">{n.message}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Stats Overview */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatCard title="Total Users" value="1,234" icon="👥" color="bg-blue-500" />

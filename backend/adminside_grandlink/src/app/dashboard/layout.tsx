@@ -1,9 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from "react";
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import Logo from '../components/Logo';
+import NotificationBell from "@/app/components/NotificationBell";
+import { POSITION_PERMISSIONS } from "@/app/lib/permissions";
 
 export default function DashboardLayout({
   children,
@@ -12,6 +15,7 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
 
   // Helper for active nav item
   const isActive = (path: string) => pathname === path;
@@ -96,8 +100,48 @@ export default function DashboardLayout({
     { name: 'FAQs', href: '/faqs' },
   ];
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getUser();
+        const userId = sessionData?.user?.id ?? null;
+        if (!userId) return;
+
+        const { data: adminRow } = await supabase
+          .from("admins")
+          .select("id, username, role, position")
+          .eq("id", userId)
+          .single();
+
+        if (adminRow) {
+          setCurrentAdmin(adminRow);
+          // ...existing code to set allowedNav...
+        }
+      } catch (e) {
+        console.warn("load current admin error", e);
+      }
+    })();
+  }, []);
+
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50">
+      <header className="flex items-center justify-between p-4 bg-white shadow">
+        <div className="flex items-center gap-4">
+          {/* ...existing left header items ... */}
+        </div>
+
+        <div className="flex items-center gap-4">
+          {/* Notification bell in top navbar */}
+          <NotificationBell
+            adminId={currentAdmin?.id ?? null}
+            adminRole={currentAdmin?.position ?? currentAdmin?.role ?? "Admin"}
+          />
+
+          {/* profile / username */}
+          <div className="text-sm text-black">{currentAdmin?.username ?? "Admin"}</div>
+        </div>
+      </header>
+
       {/* Mobile sidebar backdrop */}
       {isMobileSidebarOpen && (
         <div

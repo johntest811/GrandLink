@@ -1,14 +1,18 @@
 'use client';
 
 import React, { useState } from 'react';
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
+import { createNotification } from "@/app/lib/notifications";
 
 export default function SettingsPage() {
   // Superadmin registration form state
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("admin");
+  const [newPosition, setNewPosition] = useState("Sales Manager");
   const [regMessage, setRegMessage] = useState("");
-  const { supabase } = require("@/app/Clients/Supabase/SupabaseClients");
+
+  const POSITIONS = ["Sales Manager", "Site Manager", "Media Handler", "Supervisor", "Manager", "Admin"];
 
   const handleSuperadminRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,21 +21,32 @@ export default function SettingsPage() {
       setRegMessage("Username and password are required.");
       return;
     }
-    // Store password as plain text
-    const { error } = await supabase.from("admins").insert({
+
+    const { data, error } = await supabase.from("admins").insert({
       username: newUsername,
       password_hash: newPassword,
       role: newRole,
-    });
+      position: newPosition,
+    }).select().maybeSingle();
+
     if (error) {
       setRegMessage("Error: " + error.message);
     } else {
       setRegMessage("Admin account created successfully!");
+      // notify other admins / relevant roles
+      await createNotification({
+        title: "Admin created",
+        message: `Admin "${newUsername}" created with role "${newRole}" and position "${newPosition}".`,
+        recipient_role: "Superadmin",
+        type: "system",
+      });
       setNewUsername("");
       setNewPassword("");
       setNewRole("admin");
+      setNewPosition("Sales Manager");
     }
   };
+
   // State for form values
   const [generalSettings, setGeneralSettings] = useState({
     siteName: 'GrandLink Glass and Aluminium',
@@ -91,7 +106,7 @@ export default function SettingsPage() {
           <h2 className="text-xl font-semibold mb-4">General Settings</h2>
           <form onSubmit={handleGeneralSubmit}>
             <div className="mb-4">
-              <label htmlFor="siteName" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="siteName" className="block text-sm font-medium text-black mb-1">
                 Site Name
               </label>
               <input
@@ -105,7 +120,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="siteDescription" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="siteDescription" className="block text-sm font-medium text-black mb-1">
                 Site Description
               </label>
               <textarea
@@ -119,7 +134,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="contactEmail" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="contactEmail" className="block text-sm font-medium text-black mb-1">
                 Contact Email
               </label>
               <input
@@ -133,7 +148,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="contactPhone" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="contactPhone" className="block text-sm font-medium text-black mb-1">
                 Contact Phone
               </label>
               <input
@@ -147,7 +162,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="address" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="address" className="block text-sm font-medium text-black mb-1">
                 Business Address
               </label>
               <textarea
@@ -183,7 +198,7 @@ export default function SettingsPage() {
                   onChange={handleNotificationChange}
                   className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
-                <label htmlFor="emailNotifications" className="ml-2 block text-sm text-gray-700">
+                <label htmlFor="emailNotifications" className="ml-2 block text-sm text-black">
                   Enable Email Notifications
                 </label>
               </div>
@@ -197,7 +212,7 @@ export default function SettingsPage() {
                   onChange={handleNotificationChange}
                   className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
-                <label htmlFor="orderUpdates" className="ml-2 block text-sm text-gray-700">
+                <label htmlFor="orderUpdates" className="ml-2 block text-sm text-black">
                   Order Updates
                 </label>
               </div>
@@ -211,7 +226,7 @@ export default function SettingsPage() {
                   onChange={handleNotificationChange}
                   className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
-                <label htmlFor="newUserRegistrations" className="ml-2 block text-sm text-gray-700">
+                <label htmlFor="newUserRegistrations" className="ml-2 block text-sm text-black">
                   New User Registrations
                 </label>
               </div>
@@ -225,7 +240,7 @@ export default function SettingsPage() {
                   onChange={handleNotificationChange}
                   className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
-                <label htmlFor="productUpdates" className="ml-2 block text-sm text-gray-700">
+                <label htmlFor="productUpdates" className="ml-2 block text-sm text-black">
                   Product Updates
                 </label>
               </div>
@@ -239,7 +254,7 @@ export default function SettingsPage() {
                   onChange={handleNotificationChange}
                   className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
-                <label htmlFor="marketingEmails" className="ml-2 block text-sm text-gray-700">
+                <label htmlFor="marketingEmails" className="ml-2 block text-sm text-black">
                   Marketing Emails
                 </label>
               </div>
@@ -261,7 +276,7 @@ export default function SettingsPage() {
           <h2 className="text-xl font-semibold mb-4">Security Settings</h2>
           <form>
             <div className="mb-4">
-              <label htmlFor="currentPassword" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="currentPassword" className="block text-sm font-medium text-black mb-1">
                 Current Password
               </label>
               <input
@@ -272,7 +287,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="newPassword" className="block text-sm font-medium text-black mb-1">
                 New Password
               </label>
               <input
@@ -283,7 +298,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="confirmPassword" className="block text-sm font-medium text-black mb-1">
                 Confirm New Password
               </label>
               <input
@@ -305,10 +320,10 @@ export default function SettingsPage() {
         {/* Backup & Export */}
         <div className="bg-white shadow rounded-lg p-6">
           <h2 className="text-xl font-semibold mb-4">Backup & Export</h2>
-          
+
           <div className="mb-6">
             <h3 className="text-md font-medium mb-2">Database Backup</h3>
-            <p className="text-sm text-gray-600 mb-3">
+            <p className="text-sm text-black mb-3">
               Create a backup of your entire database. This includes all products, orders, and user data.
             </p>
             <button
@@ -320,27 +335,29 @@ export default function SettingsPage() {
 
           <div>
             <h3 className="text-md font-medium mb-2">Export Data</h3>
-            <p className="text-sm text-gray-600 mb-3">
+            <p className="text-sm text-black mb-3">
               Export specific data to CSV format for use in other applications.
             </p>
             <div className="space-x-2">
-              <button className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded">
+              <button className="bg-gray-200 hover:bg-gray-300 text-black font-bold py-2 px-4 rounded">
                 Export Users
               </button>
-              <button className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded">
+              <button className="bg-gray-200 hover:bg-gray-300 text-black font-bold py-2 px-4 rounded">
                 Export Products
               </button>
-              <button className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded">
+              <button className="bg-gray-200 hover:bg-gray-300 text-black font-bold py-2 px-4 rounded">
                 Export Orders
               </button>
             </div>
           </div>
         </div>
       </div>
+
       {/* Superadmin Registration Form */}
       <div className="bg-white shadow rounded-lg p-6 mt-8">
         <h2 className="text-xl font-semibold mb-4">Create Admin/Manager Account</h2>
         <form className="flex flex-col gap-4 w-80" onSubmit={handleSuperadminRegister}>
+          <label className="text-sm font-medium text-black">Username</label>
           <input
             type="text"
             placeholder="Username"
@@ -348,6 +365,7 @@ export default function SettingsPage() {
             onChange={e => setNewUsername(e.target.value)}
             className="border px-3 py-2 rounded"
           />
+          <label className="text-sm font-medium text-black">Password</label>
           <input
             type="password"
             placeholder="Password"
@@ -355,10 +373,18 @@ export default function SettingsPage() {
             onChange={e => setNewPassword(e.target.value)}
             className="border px-3 py-2 rounded"
           />
+
+          <label className="text-sm font-medium text-black">Role</label>
           <select value={newRole} onChange={e => setNewRole(e.target.value)} className="border px-3 py-2 rounded">
             <option value="admin">Admin</option>
             <option value="manager">Manager</option>
           </select>
+
+          <label className="text-sm font-medium text-black">Position</label>
+          <select value={newPosition} onChange={e => setNewPosition(e.target.value)} className="border px-3 py-2 rounded">
+            {POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+
           <button type="submit" className="bg-[#232d3b] text-white py-2 rounded font-semibold">Create Account</button>
           {regMessage && <div className="text-center text-red-600 mt-2">{regMessage}</div>}
         </form>
