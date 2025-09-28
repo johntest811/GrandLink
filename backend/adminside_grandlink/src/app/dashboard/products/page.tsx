@@ -2,7 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../../Clients/Supabase/SupabaseClients';
-// Add these imports for Three.js and FBXLoader
+import { logActivity } from '@/app/lib/activity';
+import { createNotification, checkLowStockAlerts } from '@/app/lib/notifications';
 import * as THREE from 'three';
 
 const uploadFile = async (file: File, folder: string) => {
@@ -22,7 +23,7 @@ export default function ProductsAdminPage() {
   const [fullProductName, setFullProductName] = useState("");
   const [additionalFeatures, setAdditionalFeatures] = useState("");
   const [price, setPrice] = useState("");
-  const [inventory, setInventory] = useState("0");         // <-- new state
+  const [inventory, setInventory] = useState("0");
   const [images, setImages] = useState<File[]>([]);
   const [fbxFile, setFbxFile] = useState<File | null>(null);
   const [message, setMessage] = useState("");
@@ -37,6 +38,7 @@ export default function ProductsAdminPage() {
   const [showPopup, setShowPopup] = useState(false);
   const [show3DViewer, setShow3DViewer] = useState(false);
   const [fbxObjectUrl, setFbxObjectUrl] = useState<string | null>(null);
+  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
 
   // Show popup for 2 seconds when product is added
   useEffect(() => {
@@ -47,11 +49,166 @@ export default function ProductsAdminPage() {
     }
   }, [message]);
 
+  // Load current admin
+  useEffect(() => {
+    const loadAdmin = async () => {
+      try {
+        console.log("🔍 Loading current admin...");
+        
+        // Try localStorage first
+        const sessionData = localStorage.getItem('adminSession');
+        if (sessionData) {
+          const admin = JSON.parse(sessionData);
+          setCurrentAdmin(admin);
+          console.log("✅ Admin loaded from localStorage:", admin);
+          
+          // Log page visit
+          await logActivity({
+            admin_id: admin.id,
+            admin_name: admin.username,
+            action: 'view',
+            entity_type: 'page',
+            details: `Accessed Add Products page`,
+            page: 'products',
+            metadata: {
+              pageAccess: true,
+              adminAccount: admin.username,
+              timestamp: new Date().toISOString()
+            }
+          });
+          return;
+        }
+        
+        // Fallback to Supabase auth
+        const { data: sessionUser } = await supabase.auth.getUser();
+        if (!sessionUser?.user?.id) {
+          console.warn("⚠️ No user session found");
+          return;
+        }
+        
+        const userId = sessionUser.user.id;
+        const { data: adminRows } = await supabase
+          .from("admins")
+          .select("*")
+          .eq("id", userId);
+        
+        if (!adminRows || adminRows.length === 0) {
+          // Create admin record
+          const { data: newAdmin, error: createError } = await supabase
+            .from("admins")
+            .insert({
+              id: userId,
+              username: sessionUser.user.email?.split('@')[0] || 'Admin',
+              role: 'admin',
+              position: 'Admin',
+              created_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+          
+          if (!createError && newAdmin) {
+            setCurrentAdmin(newAdmin);
+            console.log("✅ Created and loaded new admin:", newAdmin);
+          }
+        } else {
+          const admin = adminRows[0];
+          setCurrentAdmin(admin);
+          console.log("✅ Admin loaded from database:", admin);
+        }
+        
+      } catch (e) {
+        console.error("💥 Load admin exception:", e);
+      }
+    };
+
+    loadAdmin();
+  }, []);
+
+  // Log field changes
+  const logFieldChange = async (fieldName: string, oldValue: any, newValue: any) => {
+    if (!currentAdmin || oldValue === newValue) return;
+    
+    await logActivity({
+      admin_id: currentAdmin.id,
+      admin_name: currentAdmin.username,
+      action: 'update',
+      entity_type: 'form_field',
+      details: `Modified ${fieldName} in Add Products form: "${oldValue}" → "${newValue}"`,
+      page: 'products',
+      metadata: {
+        fieldName,
+        oldValue,
+        newValue,
+        formType: 'add_product',
+        adminAccount: currentAdmin.username
+      }
+    });
+  };
+
+  // Enhanced field change handlers with logging
+  const handleNameChange = (newValue: string) => {
+    const oldValue = name;
+    setName(newValue);
+    if (oldValue && oldValue !== newValue) {
+      logFieldChange('Product Name', oldValue, newValue);
+    }
+  };
+
+  const handleDescriptionChange = (newValue: string) => {
+    const oldValue = description;
+    setDescription(newValue);
+    if (oldValue && oldValue !== newValue) {
+      logFieldChange('Description', oldValue, newValue);
+    }
+  };
+
+  const handlePriceChange = (newValue: string) => {
+    const oldValue = price;
+    setPrice(newValue);
+    if (oldValue && oldValue !== newValue) {
+      logFieldChange('Price', oldValue, newValue);
+    }
+  };
+
+  const handleInventoryChange = (newValue: string) => {
+    const oldValue = inventory;
+    setInventory(newValue);
+    if (oldValue && oldValue !== newValue) {
+      logFieldChange('Inventory', oldValue, newValue);
+    }
+  };
+
+  const handleCategoryChange = (newValue: string) => {
+    const oldValue = category;
+    setCategory(newValue);
+    if (oldValue && oldValue !== newValue) {
+      logFieldChange('Category', oldValue, newValue);
+    }
+  };
+
   // Show 3D Viewer popup
-  const handleOpen3DViewer = () => {
+  const handleOpen3DViewer = async () => {
     if (fbxFile) {
       setFbxObjectUrl(URL.createObjectURL(fbxFile));
       setShow3DViewer(true);
+      
+      // Log 3D viewer usage
+      if (currentAdmin) {
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: 'view',
+          entity_type: '3d_model',
+          details: `Opened 3D FBX viewer for file: ${fbxFile.name}`,
+          page: 'products',
+          metadata: {
+            fileName: fbxFile.name,
+            fileSize: fbxFile.size,
+            fileType: 'fbx',
+            adminAccount: currentAdmin.username
+          }
+        });
+      }
     }
   };
 
@@ -64,7 +221,56 @@ export default function ProductsAdminPage() {
     }
   };
 
-  // Three.js FBX Viewer component
+  // Log file uploads
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const oldCount = images.length;
+    const newImages = files.slice(0, 5);
+    setImages(newImages);
+    setCarouselIndex(0);
+    
+    if (currentAdmin && newImages.length !== oldCount) {
+      await logActivity({
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.username,
+        action: 'upload',
+        entity_type: 'product_images',
+        details: `Selected ${newImages.length} product images (${newImages.map(f => f.name).join(', ')})`,
+        page: 'products',
+        metadata: {
+          imageCount: newImages.length,
+          fileNames: newImages.map(f => f.name),
+          totalSize: newImages.reduce((sum, f) => sum + f.size, 0),
+          adminAccount: currentAdmin.username
+        }
+      });
+    }
+  };
+
+  const handleFbxUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    const oldFileName = fbxFile?.name;
+    setFbxFile(file);
+    
+    if (currentAdmin && file && file.name !== oldFileName) {
+      await logActivity({
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.username,
+        action: 'upload',
+        entity_type: 'fbx_file',
+        details: `Selected FBX file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`,
+        page: 'products',
+        metadata: {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: 'fbx',
+          adminAccount: currentAdmin.username
+        }
+      });
+    }
+  };
+
+  // Three.js FBX Viewer component (unchanged)
   function FBXViewer({ url }: { url: string }) {
     useEffect(() => {
       let loader: any;
@@ -81,7 +287,7 @@ export default function ProductsAdminPage() {
         camera.position.set(0, 100, 250);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        renderer.setClearColor(0x000000, 0); // transparent background
+        renderer.setClearColor(0x000000, 0);
         renderer.setSize(400, 400);
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 1);
@@ -130,27 +336,130 @@ export default function ProductsAdminPage() {
     return <div id="fbx-canvas" style={{ width: 400, height: 400 }} />;
   }
 
-  // Handle product creation
+  // Enhanced product creation with detailed logging
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage("");
     setLoading(true);
+    
     try {
+      console.log("🚀 Starting product creation...");
+      
+      // Log form submission attempt
+      if (currentAdmin) {
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: 'create',
+          entity_type: 'product_form_submission',
+          details: `Initiated product creation for "${name}" in category "${category}"`,
+          page: 'products',
+          metadata: {
+            productName: name,
+            category,
+            price: Number(price) || 0,
+            inventory: Number(inventory) || 0,
+            hasImages: images.length > 0,
+            hasFbx: !!fbxFile,
+            adminAccount: currentAdmin.username
+          }
+        });
+      }
+      
       // Upload images (max 5)
       const imageUrls: string[] = [];
-      for (const img of images.slice(0, 5)) {
-        const url = await uploadFile(img, 'images');
-        imageUrls.push(url);
+      for (let i = 0; i < images.slice(0, 5).length; i++) {
+        const img = images[i];
+        try {
+          const url = await uploadFile(img, 'images');
+          imageUrls.push(url);
+          
+          // Log individual image upload
+          if (currentAdmin) {
+            await logActivity({
+              admin_id: currentAdmin.id,
+              admin_name: currentAdmin.username,
+              action: 'upload',
+              entity_type: 'product_image',
+              details: `Uploaded product image ${i + 1}/5: ${img.name}`,
+              page: 'products',
+              metadata: {
+                fileName: img.name,
+                fileSize: img.size,
+                imageIndex: i + 1,
+                productName: name,
+                adminAccount: currentAdmin.username
+              }
+            });
+          }
+        } catch (uploadError) {
+          console.error(`Failed to upload image ${i + 1}:`, uploadError);
+          if (currentAdmin) {
+            await logActivity({
+              admin_id: currentAdmin.id,
+              admin_name: currentAdmin.username,
+              action: 'upload',
+              entity_type: 'product_image_error',
+              details: `Failed to upload image ${i + 1}: ${img.name} - ${uploadError}`,
+              page: 'products',
+              metadata: {
+                fileName: img.name,
+                error: String(uploadError),
+                imageIndex: i + 1,
+                adminAccount: currentAdmin.username
+              }
+            });
+          }
+        }
       }
+      
       // Pad imageUrls to always have 5 elements
       while (imageUrls.length < 5) imageUrls.push("");
 
       // Upload FBX file
       let fbxUrl = "";
       if (fbxFile) {
-        fbxUrl = await uploadFile(fbxFile, 'fbx');
+        try {
+          fbxUrl = await uploadFile(fbxFile, 'fbx');
+          
+          // Log FBX upload
+          if (currentAdmin) {
+            await logActivity({
+              admin_id: currentAdmin.id,
+              admin_name: currentAdmin.username,
+              action: 'upload',
+              entity_type: 'fbx_file',
+              details: `Uploaded FBX file: ${fbxFile.name} for product "${name}"`,
+              page: 'products',
+              metadata: {
+                fileName: fbxFile.name,
+                fileSize: fbxFile.size,
+                productName: name,
+                adminAccount: currentAdmin.username
+              }
+            });
+          }
+        } catch (fbxError) {
+          console.error("FBX upload failed:", fbxError);
+          if (currentAdmin) {
+            await logActivity({
+              admin_id: currentAdmin.id,
+              admin_name: currentAdmin.username,
+              action: 'upload',
+              entity_type: 'fbx_file_error',
+              details: `Failed to upload FBX file: ${fbxFile.name} - ${fbxError}`,
+              page: 'products',
+              metadata: {
+                fileName: fbxFile.name,
+                error: String(fbxError),
+                adminAccount: currentAdmin.username
+              }
+            });
+          }
+        }
       }
 
+      console.log("📦 Inserting product into database...");
       // Insert product into Supabase and return inserted row
       const { data: insertedProduct, error: insertErr } = await supabase
         .from('products')
@@ -160,7 +469,7 @@ export default function ProductsAdminPage() {
           additionalfeatures: additionalFeatures,
           description,
           price: Number(price) || 0,
-          inventory: Number(inventory) || 0,    // <-- include inventory
+          inventory: Number(inventory) || 0,
           category,
           height: height ? Number(height) : null,
           width: width ? Number(width) : null,
@@ -177,30 +486,127 @@ export default function ProductsAdminPage() {
         .select()
         .single();
 
-      if (insertErr) throw insertErr;
+      if (insertErr) {
+        console.error("❌ Product insertion error:", insertErr);
+        
+        // Log database error
+        if (currentAdmin) {
+          await logActivity({
+            admin_id: currentAdmin.id,
+            admin_name: currentAdmin.username,
+            action: 'create',
+            entity_type: 'product_error',
+            details: `Failed to create product "${name}": ${insertErr.message}`,
+            page: 'products',
+            metadata: {
+              productName: name,
+              error: insertErr.message,
+              errorCode: insertErr.code,
+              adminAccount: currentAdmin.username
+            }
+          });
+        }
+        
+        throw insertErr;
+      }
 
-      // Reservation creation moved to server-side notifyServers to avoid duplication.
-      // Client no longer creates reservation here. Server will create an auto-reservation
-      // when it receives the 'new_product' notifyServers call.
+      console.log("✅ Product inserted successfully:", insertedProduct);
 
-      // 2) notify servers (broadcast new_product) so users with email notifications receive email
-      try {
-        await fetch('/api/notifyServers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'new_product', product: insertedProduct, broadcast: true }),
+      // Enhanced activity logging for successful creation
+      if (currentAdmin?.id) {
+        console.log("📝 Logging product creation activity...");
+        
+        try {
+          const activityResult = await logActivity({
+            admin_id: currentAdmin.id,
+            admin_name: currentAdmin.username || currentAdmin.id,
+            action: "create",
+            entity_type: "product",
+            entity_id: insertedProduct.id,
+            page: "products",
+            details: `Successfully created new product "${name}" in ${category} category with ${inventory} initial inventory`,
+            metadata: {
+              productId: insertedProduct.id,
+              productName: name,
+              fullProductName: fullProductName,
+              category,
+              price: Number(price) || 0,
+              initialInventory: Number(inventory) || 0,
+              material,
+              type,
+              dimensions: {
+                height: height ? Number(height) : null,
+                width: width ? Number(width) : null,
+                thickness: thickness ? Number(thickness) : null
+              },
+              filesUploaded: {
+                images: images.length,
+                fbx: !!fbxFile
+              },
+              createdAt: new Date().toISOString(),
+              adminAccount: currentAdmin.username || currentAdmin.id
+            }
+          });
+          
+          if (activityResult?.success) {
+            console.log("✅ Product creation activity logged successfully");
+          } else {
+            console.error("❌ Failed to log product creation activity:", activityResult?.error);
+          }
+        } catch (activityError) {
+          console.error("💥 Product creation activity logging exception:", activityError);
+        }
+
+        // Create notification for new product
+        await createNotification({
+          title: "New Product Added",
+          message: `Product "${name}" has been added to ${category} category by ${currentAdmin.username || 'Admin'}`,
+          recipient_role: "all",
+          type: "general",
+          priority: "medium",
         });
-      } catch (notifyErr) {
-        console.error("notifyServers call failed:", notifyErr);
+
+        // Check for low stock on the new product
+        if (Number(inventory) <= 5) {
+          await createNotification({
+            title: Number(inventory) === 0 ? "New Product Out of Stock" : "New Product Low Stock",
+            message: `Newly added product "${name}" ${Number(inventory) === 0 ? 'has no stock' : `has only ${inventory} items`}`,
+            recipient_role: "all",
+            type: "stock",
+            priority: Number(inventory) === 0 ? "high" : "medium",
+          });
+        }
+      } else {
+        console.warn("⚠️ Skipping activity logging - admin not loaded");
       }
 
       setMessage("Product added successfully!");
+      console.log("🎉 Product creation completed successfully!");
+      
+      // Log form reset
+      if (currentAdmin) {
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: 'update',
+          entity_type: 'form_reset',
+          details: `Reset Add Products form after successful creation of "${name}"`,
+          page: 'products',
+          metadata: {
+            createdProductName: name,
+            createdProductId: insertedProduct.id,
+            adminAccount: currentAdmin.username
+          }
+        });
+      }
+      
+      // Reset form
       setName("");
       setFullProductName("");
       setDescription("");
       setAdditionalFeatures("");
       setPrice("");
-      setInventory("0");         // <-- reset inventory
+      setInventory("0");
       setImages([]);
       setFbxFile(null);
       setHeight("");
@@ -210,8 +616,28 @@ export default function ProductsAdminPage() {
       setType("Tinted");
       setCategory("");
       setCarouselIndex(0);
+      
     } catch (err: any) {
+      console.error("💥 Product creation failed:", err);
       setMessage(`Error: ${err.message}`);
+      
+      // Log general error
+      if (currentAdmin) {
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: 'create',
+          entity_type: 'product_creation_error',
+          details: `Product creation failed for "${name}": ${err.message}`,
+          page: 'products',
+          metadata: {
+            productName: name,
+            error: err.message,
+            stack: err.stack,
+            adminAccount: currentAdmin.username
+          }
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -223,7 +649,6 @@ export default function ProductsAdminPage() {
     if (carouselIndex + 3 <= images.length) {
       return images.slice(carouselIndex, carouselIndex + 3);
     }
-    // Wrap around if at the end
     return [
       ...images.slice(carouselIndex),
       ...images.slice(0, 3 - (images.length - carouselIndex))
@@ -239,24 +664,28 @@ export default function ProductsAdminPage() {
       i + 3 >= images.length ? 0 : i + 1
     );
 
-  // Handle image selection (max 5)
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    setImages(files.slice(0, 5));
-    setCarouselIndex(0);
-  };
-
   return (
     <div className="min-h-screen bg-[#e7eaef] flex items-center justify-center">
       <div className="max-w-5xl w-full p-8 rounded-lg shadow-lg bg-white/80 flex flex-col space-y-6">
         {/* Title */}
-        <h1 className="text-4xl font-bold text-[#505A89] mb-2 tracking-tight">ADD PRODUCTS</h1>
-        {/* Popup */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-4xl font-bold text-[#505A89] mb-2 tracking-tight">ADD PRODUCTS</h1>
+          <div className="text-sm text-gray-600">
+            {currentAdmin ? (
+              <span className="text-green-600">✅ Admin: {currentAdmin.username || currentAdmin.id}</span>
+            ) : (
+              <span className="text-yellow-600">⏳ Loading admin...</span>
+            )}
+          </div>
+        </div>
+
+        {/* Success Popup */}
         {showPopup && (
           <div className="fixed top-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-6 py-3 rounded shadow-lg z-50 transition-opacity duration-300">
             Product added successfully!
           </div>
         )}
+
         {/* 3D Viewer Popup */}
         {show3DViewer && fbxObjectUrl && (
           <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: "transparent" }}>
@@ -272,6 +701,7 @@ export default function ProductsAdminPage() {
             </div>
           </div>
         )}
+        
         <form onSubmit={handleAddProduct}>
           <div className="grid grid-cols-2 gap-6">
             {/* Product Name and Description */}
@@ -282,12 +712,11 @@ export default function ProductsAdminPage() {
                 type="text"
                 placeholder="Product Name"
                 value={name}
-                onChange={e => setName(e.target.value)}
+                onChange={e => handleNameChange(e.target.value)}
                 className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
                 required
               />
 
-              {/* Full product name (moved above description) */}
               <div className="mt-2">
                 <label className="block text-[#233a5e] font-semibold mb-1">Full Product Name</label>
                 <input
@@ -303,11 +732,10 @@ export default function ProductsAdminPage() {
               <textarea
                 placeholder="Product Description"
                 value={description}
-                onChange={e => setDescription(e.target.value)}
+                onChange={e => handleDescriptionChange(e.target.value)}
                 className="w-full border border-gray-300 p-2 rounded bg-white text-black"
               />
 
-              {/* Additional features (below full product name) */}
               <div className="mt-4">
                 <label className="block text-[#233a5e] font-semibold mb-1">Additional Features</label>
                 <textarea
@@ -319,6 +747,7 @@ export default function ProductsAdminPage() {
                 />
               </div>
             </div>
+
             {/* Product Details */}
             <div className="bg-white/80 rounded-lg p-6">
               <h2 className="text-lg font-bold text-[#233a5e] mb-4">Product Details</h2>
@@ -326,7 +755,7 @@ export default function ProductsAdminPage() {
               <input
                 type="number"
                 value={price}
-                onChange={e => setPrice(e.target.value)}
+                onChange={e => handlePriceChange(e.target.value)}
                 className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
                 placeholder="0.00"
                 required
@@ -336,7 +765,7 @@ export default function ProductsAdminPage() {
               <input
                 type="number"
                 value={inventory}
-                onChange={e => setInventory(e.target.value)}
+                onChange={e => handleInventoryChange(e.target.value)}
                 className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4"
                 placeholder="0"
                 min="0"
@@ -398,6 +827,7 @@ export default function ProductsAdminPage() {
               </div>
             </div>
           </div>
+
           <div className="grid grid-cols-2 gap-6">
             {/* Category */}
             <div className="bg-white/80 rounded-lg p-6">
@@ -407,7 +837,7 @@ export default function ProductsAdminPage() {
                 <select
                   className="w-full border border-gray-300 p-2 rounded bg-white text-black mb-4 appearance-none"
                   value={category}
-                  onChange={e => setCategory(e.target.value)}
+                  onChange={e => handleCategoryChange(e.target.value)}
                   required
                   style={{ position: "relative", zIndex: 10 }}
                 >
@@ -426,6 +856,7 @@ export default function ProductsAdminPage() {
                 </span>
               </div>
             </div>
+
             {/* Product Image */}
             <div className="bg-white/80 rounded-lg p-6">
               <h2 className="text-lg font-bold text-[#233a5e] mb-4">Product Image</h2>
@@ -443,10 +874,9 @@ export default function ProductsAdminPage() {
                   type="file"
                   accept="image/*"
                   multiple
-                  onChange={handleImageChange}
+                  onChange={handleImageUpload}
                   className="hidden"
                 />
-                {/* Carousel for images (show 3 at a time) */}
                 {images.length > 0 && (
                   <div className="flex items-center space-x-2">
                     <button
@@ -487,7 +917,7 @@ export default function ProductsAdminPage() {
                   id="fbx-upload"
                   type="file"
                   accept=".fbx"
-                  onChange={e => setFbxFile(e.target.files?.[0] || null)}
+                  onChange={handleFbxUpload}
                   className="hidden"
                 />
                 {fbxFile && (
@@ -504,6 +934,7 @@ export default function ProductsAdminPage() {
               </button>
             </div>
           </div>
+
           {/* Submit Button */}
           <div className="flex justify-end">
             <button
@@ -527,6 +958,7 @@ export default function ProductsAdminPage() {
               )}
             </button>
           </div>
+
           {/* Message */}
           {message && (
             <div className="mt-4 text-black">{message}</div>

@@ -1,163 +1,395 @@
-'use client';
-
-import React, { useEffect, useState } from "react";
+"use client";
+import { useEffect, useState } from "react";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
-import NotificationBell from "@/app/components/NotificationBell";
+import NotificationBell from "@/components/NotificationBell";
+import { logActivity } from "@/app/lib/activity";
 
-type Note = {
+type ActivityLog = {
   id: string | number;
-  title?: string | null;
-  message: string;
-  recipient_role?: string | null;
-  recipient_id?: string | null;
-  is_read?: boolean;
-  created_at?: string;
+  admin_id: string;
+  admin_name: string;
+  action: string;
+  entity_type: string;
+  entity_id?: string;
+  details: string;
+  page?: string;
+  metadata?: string;
+  created_at: string;
 };
 
-export default function Dashboard() {
-  const [notes, setNotes] = useState<Note[]>([]);
+export default function DashboardPage() {
   const [currentAdmin, setCurrentAdmin] = useState<any>(null);
-
-  const loadAdmin = async () => {
-    try {
-      const { data: sessionData } = await supabase.auth.getUser();
-      const userId = sessionData?.user?.id ?? null;
-      if (!userId) return;
-      const { data: adminRow } = await supabase.from("admins").select("id, username, position, role").eq("id", userId).single();
-      setCurrentAdmin(adminRow);
-    } catch (e) {
-      console.warn("load admin", e);
-    }
-  };
-
-  const fetchNotes = async () => {
-    try {
-      const role = currentAdmin?.position ?? currentAdmin?.role ?? null;
-      let res;
-      if (role && currentAdmin?.id) {
-        const safeRole = String(role).replace(/'/g, "''");
-        const safeId = String(currentAdmin.id).replace(/'/g, "''");
-        res = await supabase
-          .from("notifications")
-          .select("*")
-          .or(`recipient_role.eq.'${safeRole}',recipient_id.eq.'${safeId}'`)
-          .order("created_at", { ascending: false })
-          .limit(20);
-      } else {
-        res = await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(20);
-      }
-      const { data, error } = res as any;
-      if (error) {
-        console.error("notifications fetch error", error);
-        setNotes([]);
-        return;
-      }
-      setNotes(data || []);
-    } catch (e) {
-      console.error("notifications fetch exception", e);
-      setNotes([]);
-    }
-  };
+  const [recentActivities, setRecentActivities] = useState<ActivityLog[]>([]);
 
   useEffect(() => {
-    (async () => {
-      await loadAdmin();
-    })();
+    // Load current admin from localStorage
+    const loadCurrentAdmin = () => {
+      try {
+        console.log("🔍 Loading current admin from localStorage...");
+        const sessionData = localStorage.getItem('adminSession');
+        if (sessionData) {
+          const admin = JSON.parse(sessionData);
+          console.log("✅ Admin loaded from session:", admin);
+          setCurrentAdmin(admin);
+        } else {
+          console.log("❌ No admin session found");
+        }
+      } catch (error) {
+        console.error("💥 Error loading admin session:", error);
+      }
+    };
+
+    loadCurrentAdmin();
   }, []);
 
   useEffect(() => {
-    if (currentAdmin) fetchNotes();
-  }, [currentAdmin]);
+    // Fetch ALL recent activities for dashboard display
+    const fetchRecentActivities = async () => {
+      try {
+        console.log("📋 Fetching ALL activities for dashboard...");
+        const { data, error } = await supabase
+          .from("activity_logs")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        if (error) {
+          console.error("❌ Activities fetch error:", error);
+          setRecentActivities([]);
+          return;
+        }
+        
+        console.log("✅ All activities fetched:", data?.length || 0);
+        setRecentActivities(data || []);
+      } catch (e) {
+        console.error("💥 Activities fetch exception:", e);
+        setRecentActivities([]);
+      }
+    };
+
+    // Initial fetch
+    fetchRecentActivities();
+
+    // Set up real-time subscription for ALL activities
+    const channel = supabase
+      .channel("dashboard_all_activity_logs")
+      .on("postgres_changes", { 
+        event: "INSERT", 
+        schema: "public", 
+        table: "activity_logs"
+      }, () => {
+        console.log("🔄 Real-time activity update received (all activities)");
+        fetchRecentActivities();
+      })
+      .subscribe();
+
+    // Cleanup function
+    return () => {
+      try { 
+        supabase.removeChannel(channel); 
+      } catch (e) {
+        console.error("Error removing channel:", e);
+      }
+    };
+  }, []); // Empty dependency array - no dependencies that change
+
+  const getActionIcon = (action: string) => {
+    switch (action.toLowerCase()) {
+      case "create": return "➕";
+      case "update": return "✏️";
+      case "delete": return "🗑️";
+      case "login": return "🔑";
+      case "logout": return "🚪";
+      case "accept_order": return "✅";
+      case "reserve_order": return "📋";
+      default: return "📝";
+    }
+  };
+
+  const getActionColor = (action: string) => {
+    switch (action.toLowerCase()) {
+      case "create": return "border-green-500 bg-green-50";
+      case "update": return "border-blue-500 bg-blue-50";
+      case "delete": return "border-red-500 bg-red-50";
+      case "login": return "border-purple-500 bg-purple-50";
+      case "logout": return "border-gray-500 bg-gray-50";
+      case "accept_order": return "border-green-500 bg-green-50";
+      case "reserve_order": return "border-orange-500 bg-orange-50";
+      default: return "border-indigo-500 bg-indigo-50";
+    }
+  };
+
+  const getPageDisplayName = (page?: string) => {
+    if (!page) return "";
+    
+    const pageMap: Record<string, string> = {
+      "products": "Add Products",
+      "UpdateProducts": "Update Products", 
+      "inventory": "Inventory Management",
+      "dashboard": "Dashboard",
+      "settings": "Settings",
+      "orders": "Orders"
+    };
+    
+    return pageMap[page] || page;
+  };
+
+  const formatTimeAgo = (dateString: string) => {
+    const now = new Date();
+    const date = new Date(dateString);
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins} minutes ago`;
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    if (diffDays < 7) return `${diffDays} days ago`;
+    
+    return date.toLocaleDateString();
+  };
+
+  const parseMetadata = (metadataStr?: string) => {
+    if (!metadataStr) return null;
+    try {
+      return JSON.parse(metadataStr);
+    } catch {
+      return null;
+    }
+  };
+
+  const testActivityLogging = async () => {
+    if (!currentAdmin?.id) {
+      alert("No admin loaded");
+      return;
+    }
+
+    console.log("🧪 Testing activity logging with admin:", currentAdmin);
+    
+    const result = await logActivity({
+      admin_id: currentAdmin.id,
+      admin_name: currentAdmin.username,
+      action: "create",
+      entity_type: "product",
+      details: "Test activity log from dashboard",
+      page: "dashboard",
+      metadata: { test: true }
+    });
+
+    console.log("🧪 Test result:", result);
+    
+    if (result.success) {
+      alert("✅ Test activity logged successfully!");
+    } else {
+      alert("❌ Test failed: " + JSON.stringify(result.error));
+    }
+  };
+
+  const testSupabaseConnection = async () => {
+    try {
+      console.log("🔌 Testing Supabase connection...");
+      
+      const { data, error } = await supabase.from("activity_logs").select("count", { count: 'exact' });
+      
+      if (error) {
+        console.error("❌ Supabase connection error:", error);
+        alert("Supabase connection failed: " + error.message);
+      } else {
+        console.log("✅ Supabase connected. Activity logs count:", data);
+        alert("✅ Supabase connected successfully!");
+      }
+    } catch (err) {
+      console.error("💥 Connection test failed:", err);
+      alert("Connection test failed: " + err);
+    }
+  };
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-black">Dashboard</h1>
-
-        {/* small in-page bell so admin sees notifications in dashboard content as well */}
-        <div className="flex items-center gap-3">
-          <NotificationBell adminId={currentAdmin?.id ?? null} adminRole={currentAdmin?.position ?? currentAdmin?.role ?? "Admin"} />
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={testActivityLogging}
+            className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+          >
+            🧪 Test Activity Log
+          </button>
+          <button 
+            onClick={testSupabaseConnection}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            🔌 Test Supabase
+          </button>
+          <div className="text-sm text-gray-600">
+            Welcome back, {currentAdmin?.username || "Admin"}
+          </div>
         </div>
       </div>
 
-      <section className="bg-white p-4 rounded shadow mb-6">
-        <h2 className="text-lg font-semibold text-black mb-3">Recent Notifications</h2>
-        <div className="space-y-2 max-h-64 overflow-auto">
-          {notes.length === 0 && <div className="text-sm text-gray-500">No notifications</div>}
-          {notes.map(n => (
-            <div key={String(n.id)} className={`p-2 rounded ${n.is_read ? "bg-gray-50" : "bg-white"}`}>
-              <div className="text-sm font-semibold text-black">{n.title ?? "Update"}</div>
-              <div className="text-xs text-gray-500">{n.created_at ? new Date(n.created_at).toLocaleString() : ""}</div>
-              <div className="text-sm text-black">{n.message}</div>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-sm">📊</span>
+              </div>
             </div>
-          ))}
+            <div className="ml-4">
+              <div className="text-sm font-medium text-gray-500">Total Products</div>
+              <div className="text-2xl font-bold text-gray-900">-</div>
+            </div>
+          </div>
         </div>
-      </section>
 
-      {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <StatCard title="Total Users" value="1,234" icon="👥" color="bg-blue-500" />
-        <StatCard title="Total Products" value="567" icon="📦" color="bg-green-500" />
-        <StatCard title="Total Orders" value="890" icon="🛒" color="bg-purple-500" />
-        <StatCard title="Revenue" value="$12,345" icon="💰" color="bg-yellow-500" />
-      </div>
-
-      {/* Recent Activity */}
-      <div className="bg-white rounded-lg shadow p-6 mb-6">
-        <h2 className="text-xl font-semibold mb-4">Recent Activity</h2>
-        <div className="space-y-4">
-          <ActivityItem 
-            title="New Order #1234" 
-            description="John Doe placed a new order for $123.45" 
-            time="2 hours ago" 
-          />
-          <ActivityItem 
-            title="New User Registration" 
-            description="Jane Smith created a new account" 
-            time="3 hours ago" 
-          />
-          <ActivityItem 
-            title="Product Update" 
-            description="Inventory updated for 5 products" 
-            time="5 hours ago" 
-          />
-          <ActivityItem 
-            title="Payment Received" 
-            description="Payment of $543.21 received for Order #1233" 
-            time="1 day ago" 
-          />
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-sm">📦</span>
+              </div>
+            </div>
+            <div className="ml-4">
+              <div className="text-sm font-medium text-gray-500">All Activities</div>
+              <div className="text-2xl font-bold text-gray-900">{recentActivities.length}</div>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-  );
-}
 
-// Stat Card Component
-function StatCard({ title, value, icon, color }: { title: string; value: string; icon: string; color: string }) {
-  return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <div className="flex items-center">
-        <div className={`${color} text-white p-3 rounded-full mr-4`}>
-          <span className="text-xl">{icon}</span>
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-sm">🛒</span>
+              </div>
+            </div>
+            <div className="ml-4">
+              <div className="text-sm font-medium text-gray-500">Pending Orders</div>
+              <div className="text-2xl font-bold text-gray-900">-</div>
+            </div>
+          </div>
         </div>
-        <div>
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className="text-2xl font-bold">{value}</p>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-sm">📈</span>
+              </div>
+            </div>
+            <div className="ml-4">
+              <div className="text-sm font-medium text-gray-500">Monthly Sales</div>
+              <div className="text-2xl font-bold text-gray-900">-</div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-// Activity Item Component
-function ActivityItem({ title, description, time }: { title: string; description: string; time: string }) {
-  return (
-    <div className="border-b border-gray-100 pb-4 last:border-0 last:pb-0">
-      <div className="flex justify-between">
-        <p className="font-medium">{title}</p>
-        <span className="text-sm text-gray-500">{time}</span>
+      {/* ALL Recent Activities Section - Fully Scrollable */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-900">All Recent Activities</h2>
+            <div className="text-sm text-gray-500">
+              System-wide • {recentActivities.length} total activities
+            </div>
+          </div>
+        </div>
+        
+        {/* Fully Scrollable Activities Container */}
+        <div className="max-h-96 overflow-y-auto">
+          <div className="p-6">
+            {recentActivities.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <div className="text-4xl mb-4">📝</div>
+                <div className="text-lg font-medium mb-2">No recent activities</div>
+                <div className="text-sm">System activities will appear here</div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {recentActivities.map((activity) => {
+                  const metadata = parseMetadata(activity.metadata);
+                  const pageDisplay = getPageDisplayName(activity.page);
+                  
+                  return (
+                    <div key={String(activity.id)} className={`flex items-start gap-4 p-4 rounded-lg border-l-4 ${getActionColor(activity.action)}`}>
+                      <div className="flex-shrink-0">
+                        <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
+                          <span className="text-lg">{getActionIcon(activity.action)}</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="text-sm font-medium text-gray-900 capitalize">
+                            {activity.action} {activity.entity_type}
+                          </span>
+                          {pageDisplay && (
+                            <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">
+                              {pageDisplay}
+                            </span>
+                          )}
+                          <span className="text-xs text-gray-500 ml-auto">
+                            {formatTimeAgo(activity.created_at)}
+                          </span>
+                        </div>
+                        
+                        <div className="text-sm text-gray-700 mb-2">
+                          {activity.details}
+                        </div>
+                        
+                        {metadata && (
+                          <div className="grid grid-cols-2 gap-3 text-xs bg-white rounded p-3 border">
+                            {metadata.productName && (
+                              <div>
+                                <span className="font-medium text-gray-600">Product:</span> 
+                                <span className="text-gray-900 ml-1">{metadata.productName}</span>
+                              </div>
+                            )}
+                            
+                            {metadata.oldInventory !== undefined && metadata.newInventory !== undefined && (
+                              <div>
+                                <span className="font-medium text-gray-600">Inventory:</span> 
+                                <span className="text-gray-900 ml-1">
+                                  {metadata.oldInventory} → {metadata.newInventory}
+                                  {metadata.inventoryChange && (
+                                    <span className={`ml-1 ${metadata.inventoryChange > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                      ({metadata.inventoryChange > 0 ? '+' : ''}{metadata.inventoryChange})
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            )}
+                            
+                            {metadata.category && (
+                              <div>
+                                <span className="font-medium text-gray-600">Category:</span> 
+                                <span className="text-gray-900 ml-1">{metadata.category}</span>
+                              </div>
+                            )}
+                            
+                            {metadata.price !== undefined && (
+                              <div>
+                                <span className="font-medium text-gray-600">Price:</span> 
+                                <span className="text-gray-900 ml-1">₱{metadata.price}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        
+                        <div className="text-xs text-gray-400 mt-2">
+                          {new Date(activity.created_at).toLocaleString()} • Admin: {activity.admin_name}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
-      <p className="text-gray-600 text-sm">{description}</p>
     </div>
   );
 }

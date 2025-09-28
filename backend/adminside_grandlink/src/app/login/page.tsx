@@ -3,7 +3,8 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../Clients/Supabase/SupabaseClients';
-import Logo from '../components/Logo';
+import { logActivity } from '../lib/activity';
+import Logo from '../../components/Logo';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -23,32 +24,96 @@ export default function Login() {
       return;
     }
 
-    // Query admins table for username
-    const { data, error } = await supabase
-      .from('admins')
-      .select('*')
-      .eq('username', username)
-      .single();
-    console.log('Supabase admin data:', data, error); // Debug log
+    try {
+      console.log('🔐 Attempting to authenticate with username:', username);
+      
+      // Find admin by username
+      const { data: adminData, error: adminError } = await supabase
+        .from('admins')
+        .select('id, username, password, position, role, is_active')
+        .eq('username', username)
+        .single();
 
-    if (error || !data) {
-      setError('Invalid username or password');
-      setIsLoading(false);
-      return;
-    }
+      if (adminError || !adminData) {
+        console.error('❌ Admin not found:', adminError);
+        setError('Invalid username or password');
+        setIsLoading(false);
+        return;
+      }
 
-    // Compare password as plain text
-    if (password !== data.password_hash) {
-      setError('Invalid username or password');
-      setIsLoading(false);
-      return;
-    }
+      console.log('✅ Admin found:', adminData.username, 'ID:', adminData.id);
 
-    // Check role
-    if (data.role === 'admin' || data.role === 'manager' || data.role === 'superadmin') {
+      // Check if account is active
+      if (!adminData.is_active) {
+        setError('Your account has been deactivated. Please contact an administrator.');
+        setIsLoading(false);
+        return;
+      }
+
+      // Direct password comparison (plain text)
+      if (adminData.password !== password) {
+        setError('Invalid username or password');
+        setIsLoading(false);
+        return;
+      }
+
+      console.log('✅ Password verified for user:', adminData.username);
+
+      // Update last login
+      const { error: updateError } = await supabase
+        .from('admins')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', adminData.id);
+
+      if (updateError) {
+        console.warn('⚠️ Failed to update last login:', updateError);
+      }
+
+      // Store admin session data in localStorage
+      const sessionData = {
+        id: adminData.id.toString(), // Ensure it's a string
+        username: adminData.username,
+        position: adminData.position,
+        role: adminData.role,
+        loginTime: new Date().toISOString()
+      };
+      localStorage.setItem('adminSession', JSON.stringify(sessionData));
+
+      // Log login activity with better error handling
+      try {
+        console.log('📝 Logging login activity for admin ID:', adminData.id);
+        const activityResult = await logActivity({
+          admin_id: adminData.id.toString(), // Convert UUID to string
+          admin_name: adminData.username,
+          action: "login",
+          entity_type: "admin",
+          details: `Admin "${adminData.username}" logged into the system`,
+          page: "auth",
+          metadata: {
+            loginTime: new Date().toISOString(),
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown',
+            role: adminData.role,
+            position: adminData.position
+          }
+        });
+
+        if (activityResult.success) {
+          console.log('✅ Login activity logged successfully');
+        } else {
+          console.error('❌ Failed to log login activity:', activityResult.error);
+        }
+      } catch (logError) {
+        console.error('💥 Exception while logging activity:', logError);
+        // Don't block login if activity logging fails
+      }
+
+      console.log('🎉 Login successful, redirecting to dashboard');
       router.push('/dashboard');
-    } else {
-      setError('You do not have admin access');
+
+    } catch (error: any) {
+      console.error('💥 Login exception:', error);
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
       setIsLoading(false);
     }
   };
@@ -86,10 +151,11 @@ export default function Login() {
               type="text"
               id="username"
               className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-black"
-              placeholder="Username"
+              placeholder="Enter your username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
+              autoComplete="username"
             />
           </div>
 
@@ -105,6 +171,7 @@ export default function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
             />
           </div>
 
@@ -136,6 +203,12 @@ export default function Login() {
               <span className="px-2 bg-white text-gray-500">Admin access only</span>
             </div>
           </div>
+        </div>
+
+        <div className="mt-4 text-center">
+          <p className="text-xs text-gray-500">
+            Use your assigned username and password to access the admin panel
+          </p>
         </div>
       </div>
 

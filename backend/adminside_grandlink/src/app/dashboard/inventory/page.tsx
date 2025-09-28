@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
-import { createNotification } from "@/app/lib/notifications";
+import { createNotification, checkLowStockAlerts } from "@/app/lib/notifications";
+import { logActivity } from "@/app/lib/activity";
 
 type ProductInventory = {
   id: string;
@@ -29,6 +30,39 @@ export default function InventoryAdminPage() {
 
   const [originalInventories, setOriginalInventories] = useState<Record<string, number>>({});
   const [savingAll, setSavingAll] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<any>(null);
+
+  // Load current admin and log page access
+  useEffect(() => {
+    const loadAdmin = async () => {
+      try {
+        const sessionData = localStorage.getItem('adminSession');
+        if (sessionData) {
+          const admin = JSON.parse(sessionData);
+          setCurrentAdmin(admin);
+          
+          // Log page access
+          await logActivity({
+            admin_id: admin.id,
+            admin_name: admin.username,
+            action: 'view',
+            entity_type: 'page',
+            details: `Accessed Inventory Management page`,
+            page: 'inventory',
+            metadata: {
+              pageAccess: true,
+              adminAccount: admin.username,
+              timestamp: new Date().toISOString()
+            }
+          });
+        }
+      } catch (error) {
+        console.error("Error loading admin:", error);
+      }
+    };
+
+    loadAdmin();
+  }, []);
 
   const fetchItems = async (lowOnly: boolean = showOnlyLow) => {
     setLoading(true);
@@ -53,6 +87,25 @@ export default function InventoryAdminPage() {
         const map: Record<string, number> = {};
         list.forEach((p) => (map[p.id] = p.inventory ?? 0));
         setOriginalInventories(map);
+        
+        // Log inventory data fetch
+        if (currentAdmin) {
+          await logActivity({
+            admin_id: currentAdmin.id,
+            admin_name: currentAdmin.username,
+            action: 'view',
+            entity_type: 'inventory_data',
+            details: `Loaded inventory data for ${list.length} products (${lowOnly ? 'low stock only' : 'all products'})`,
+            page: 'inventory',
+            metadata: {
+              productsLoaded: list.length,
+              lowStockOnly: lowOnly,
+              lowStockItems: list.filter(p => (p.inventory ?? 0) <= 5).length,
+              outOfStockItems: list.filter(p => (p.inventory ?? 0) === 0).length,
+              adminAccount: currentAdmin.username
+            }
+          });
+        }
       }
     } catch (e) {
       console.error("fetchItems exception", e);
@@ -64,33 +117,177 @@ export default function InventoryAdminPage() {
   };
 
   useEffect(() => {
-    fetchItems(showOnlyLow);
-  }, []);
+    if (currentAdmin) {
+      fetchItems(showOnlyLow);
+    }
+  }, [currentAdmin]);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (!filterRef.current) return;
-      if (!filterRef.current.contains(e.target as Node)) setFilterOpen(false);
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setFilterOpen(false);
+      }
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
+  // Log filter changes
+  const handleFilterChange = async (newFilter: string) => {
+    const oldFilter = filter;
+    setFilter(newFilter);
+    
+    if (currentAdmin && oldFilter !== newFilter && newFilter.length > 0) {
+      await logActivity({
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.username,
+        action: 'update',
+        entity_type: 'search_filter',
+        details: `Applied search filter: "${newFilter}"`,
+        page: 'inventory',
+        metadata: {
+          searchTerm: newFilter,
+          previousTerm: oldFilter,
+          adminAccount: currentAdmin.username
+        }
+      });
+    }
+  };
+
+  const handleCategoryFilterChange = async (newCategory: string | null) => {
+    const oldCategory = selectedCategory;
+    setSelectedCategory(newCategory);
+    setFilterOpen(false);
+    
+    if (currentAdmin && oldCategory !== newCategory) {
+      await logActivity({
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.username,
+        action: 'update',
+        entity_type: 'category_filter',
+        details: `Changed category filter from "${oldCategory || 'All Categories'}" to "${newCategory || 'All Categories'}"`,
+        page: 'inventory',
+        metadata: {
+          oldCategory: oldCategory || 'All Categories',
+          newCategory: newCategory || 'All Categories',
+          adminAccount: currentAdmin.username
+        }
+      });
+    }
+  };
+
+  const handleLowStockToggle = async (newValue: boolean) => {
+    const oldValue = showOnlyLow;
+    setShowOnlyLow(newValue);
+    
+    if (currentAdmin && oldValue !== newValue) {
+      await logActivity({
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.username,
+        action: 'update',
+        entity_type: 'view_filter',
+        details: `${newValue ? 'Enabled' : 'Disabled'} low stock only filter`,
+        page: 'inventory',
+        metadata: {
+          lowStockOnly: newValue,
+          previousValue: oldValue,
+          adminAccount: currentAdmin.username
+        }
+      });
+    }
+    
+    fetchItems(newValue);
+  };
+
   const updateInventory = async (id: string, value: number) => {
     setSavingId(id);
+    const productBefore = items.find(p => p.id === id);
+    const oldInventory = productBefore?.inventory ?? 0;
+    
     const { error } = await supabase.from("products").update({ inventory: value }).eq("id", id);
+    
     if (error) {
       console.error("update inventory error", error);
+      
+      // Log error
+      if (currentAdmin) {
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: 'update',
+          entity_type: 'inventory_error',
+          entity_id: id,
+          details: `Failed to update inventory for "${productBefore?.name || id}": ${error.message}`,
+          page: 'inventory',
+          metadata: {
+            productName: productBefore?.name || id,
+            productId: id,
+            oldInventory,
+            newInventory: value,
+            inventoryChange: value - oldInventory,
+            changeType: value - oldInventory > 0 ? "increased" : value - oldInventory < 0 ? "decreased" : "updated",
+            adminAccount: currentAdmin.username,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
     } else {
       setItems((prev) => prev.map((p) => (p.id === id ? { ...p, inventory: value } : p)));
       setOriginalInventories((prev) => ({ ...prev, [id]: value }));
 
-      await createNotification({
-        title: "Inventory updated",
-        message: `Product ${id} inventory set to ${value}.`,
-        recipient_role: "Sales Manager",
-        type: "stock",
-      });
+      // Enhanced activity logging
+      if (currentAdmin) {
+        const inventoryChange = value - oldInventory;
+        const changeType = inventoryChange > 0 ? "increased" : inventoryChange < 0 ? "decreased" : "updated";
+        
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: "update",
+          entity_type: "inventory",
+          entity_id: id,
+          details: `${changeType.charAt(0).toUpperCase() + changeType.slice(1)} inventory for "${productBefore?.name || id}" from ${oldInventory} to ${value} (${inventoryChange > 0 ? '+' : ''}${inventoryChange})`,
+          page: "inventory",
+          metadata: {
+            productName: productBefore?.name || id,
+            productId: id,
+            oldInventory,
+            newInventory: value,
+            inventoryChange,
+            changeType,
+            adminAccount: currentAdmin.username,
+            category: productBefore?.category,
+            price: productBefore?.price
+          }
+        });
+      }
+
+      // Create notifications for stock levels
+      if (value <= 0) {
+        await createNotification({
+          title: "Out of Stock Alert",
+          message: `Product "${productBefore?.name || id}" is out of stock! - Updated by ${currentAdmin?.username || 'Admin'}`,
+          recipient_role: "Admin",
+          type: "stock",
+          priority: "high",
+        });
+      } else if (value <= 2) {
+        await createNotification({
+          title: "Critical Stock Alert",
+          message: `Product "${productBefore?.name || id}" is critically low (${value} remaining) - Updated by ${currentAdmin?.username || 'Admin'}`,
+          recipient_role: "Admin",
+          type: "stock",
+          priority: "high",
+        });
+      } else if (value <= 5) {
+        await createNotification({
+          title: "Low Stock Alert", 
+          message: `Product "${productBefore?.name || id}" is running low (${value} remaining) - Updated by ${currentAdmin?.username || 'Admin'}`,
+          recipient_role: "Admin",
+          type: "stock",
+          priority: "medium",
+        });
+      }
     }
     setSavingId(null);
   };
@@ -101,6 +298,7 @@ export default function InventoryAdminPage() {
       alert("No inventory changes to save.");
       return;
     }
+    
     setSavingAll(true);
     try {
       const results = await Promise.all(
@@ -108,234 +306,292 @@ export default function InventoryAdminPage() {
           supabase.from("products").update({ inventory: it.inventory ?? 0 }).eq("id", it.id)
         )
       );
+      
       const errors = results.map((r) => (r as any).error).filter(Boolean);
       if (errors.length) {
         console.error("saveAll errors", errors);
         alert("Some updates failed. Check console.");
       } else {
-        const summary = changed.map(c => `${c.name || c.id}: ${c.inventory ?? 0}`).join("; ");
-        await createNotification({
-          title: "Inventory bulk update",
-          message: `Updated inventory for ${changed.length} product(s): ${summary}`,
-          recipient_role: "Sales Manager",
-          type: "stock",
+        const summary = changed.map(c => `${c.name || c.id}: ${originalInventories[c.id] ?? 0} → ${c.inventory ?? 0}`).join("; ");
+        const totalItems = changed.length;
+        
+        // Log bulk activity
+        if (currentAdmin) {
+          await logActivity({
+            admin_id: currentAdmin.id,
+            admin_name: currentAdmin.username,
+            action: "update",
+            entity_type: "inventory",
+            details: `Bulk updated inventory for ${totalItems} products: ${summary}`,
+            page: "inventory",
+            metadata: {
+              bulkUpdate: true,
+              totalItems,
+              changes: changed.map(c => ({
+                id: c.id,
+                name: c.name,
+                oldInventory: originalInventories[c.id] ?? 0,
+                newInventory: c.inventory ?? 0
+              })),
+              adminAccount: currentAdmin.username
+            }
+          });
+        }
+
+        // Update original inventories
+        const newOriginals = { ...originalInventories };
+        changed.forEach(c => {
+          newOriginals[c.id] = c.inventory ?? 0;
         });
-        await fetchItems(showOnlyLow);
+        setOriginalInventories(newOriginals);
+        
+        alert(`✅ Updated ${totalItems} products successfully!`);
+        
+        // Check for low stock alerts
+        await checkLowStockAlerts();
       }
     } catch (e) {
       console.error("saveAll exception", e);
+      alert("Failed to save changes. Check console.");
     } finally {
       setSavingAll(false);
     }
   };
 
+  // Run periodic stock check
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkLowStockAlerts();
+    }, 300000); // Check every 5 minutes
+
+    return () => clearInterval(interval);
+  }, []);
+
   const filtered = items.filter((it) => {
     const inv = it.inventory ?? 0;
     if (showOnlyLow && inv > 5) return false;
     if (selectedCategory && selectedCategory !== "All Categories") {
-      if (!it.category) return false;
-      if ((it.category || "").toLowerCase() !== selectedCategory.toLowerCase()) return false;
+      if (it.category !== selectedCategory) return false;
     }
     if (!filter) return true;
-    const q = filter.toLowerCase();
-    return (
-      (it.name || "").toLowerCase().includes(q) ||
-      (it.type || "").toLowerCase().includes(q) ||
-      (it.category || "").toLowerCase().includes(q)
-    );
+    return it.name?.toLowerCase().includes(filter.toLowerCase());
   });
 
   const unsavedCount = items.reduce((acc, it) => acc + ((originalInventories[it.id] ?? 0) !== (it.inventory ?? 0) ? 1 : 0), 0);
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-black">Inventory Manager</h1>
-        <div className="flex gap-2 items-center">
-          <button
-            onClick={() => { setShowOnlyLow(true); setSelectedCategory(null); setFilter(""); fetchItems(true); }}
-            className="px-4 py-2 bg-[#7b2b2b] text-white rounded-lg shadow"
-          >
-            All Low Stock Products
-          </button>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-3xl font-bold text-gray-900">Inventory Management</h1>
+        <div className="flex items-center space-x-4">
+          {unsavedCount > 0 && (
+            <button
+              onClick={saveAll}
+              disabled={savingAll}
+              className={`px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors ${
+                savingAll ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+            >
+              {savingAll ? 'Saving...' : `Save All Changes (${unsavedCount})`}
+            </button>
+          )}
+        </div>
+      </div>
 
+      {/* Filters */}
+      <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex-1 min-w-64">
+            <input
+              type="text"
+              placeholder="Search products..."
+              value={filter}
+              onChange={(e) => handleFilterChange(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+          </div>
+          
           <div className="relative" ref={filterRef}>
             <button
-              onClick={() => setFilterOpen((s) => !s)}
-              className="px-4 py-2 rounded-lg shadow bg-blue-600 text-white"
+              onClick={() => setFilterOpen(!filterOpen)}
+              className="px-4 py-2 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 focus:ring-2 focus:ring-indigo-500"
             >
-              Filter
+              {selectedCategory || "All Categories"} ▼
             </button>
-
+            
             {filterOpen && (
-              <div className="absolute right-0 mt-2 w-72 bg-white border rounded shadow-lg z-50 p-3">
-                <div className="mb-2">
-                  <label className="block text-sm font-medium text-black mb-1">Search</label>
-                  <input
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    placeholder="name / type / category"
-                    className="w-full border p-2 rounded text-black"
-                  />
-                </div>
-
-                <div className="mb-2">
-                  <div className="text-sm font-medium text-black mb-1">Category</div>
-                  <select
-                    value={selectedCategory ?? ""}
-                    onChange={(e) => setSelectedCategory(e.target.value || null)}
-                    className="w-full border p-2 rounded text-black"
-                  >
-                    <option value="">All Categories</option>
-                    {CATEGORIES.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2 mb-3">
-                  <input
-                    id="lowstock"
-                    type="checkbox"
-                    checked={showOnlyLow}
-                    onChange={() => setShowOnlyLow((s) => !s)}
-                    className="h-4 w-4"
-                  />
-                  <label htmlFor="lowstock" className="text-sm text-black">Show low stock (&lt;= 5)</label>
-                </div>
-
-                <div className="flex justify-between">
+              <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                <button
+                  onClick={() => {
+                    handleCategoryFilterChange(null);
+                  }}
+                  className="w-full px-4 py-2 text-left hover:bg-gray-100"
+                >
+                  All Categories
+                </button>
+                {CATEGORIES.map(cat => (
                   <button
-                    onClick={() => { setFilter(""); setSelectedCategory(null); setShowOnlyLow(false); setFilterOpen(false); fetchItems(false); }}
-                    className="px-3 py-1 rounded border"
+                    key={cat}
+                    onClick={() => {
+                      handleCategoryFilterChange(cat);
+                    }}
+                    className="w-full px-4 py-2 text-left hover:bg-gray-100"
                   >
-                    Clear
+                    {cat}
                   </button>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => { fetchItems(showOnlyLow); setFilterOpen(false); }}
-                      className="px-3 py-1 rounded bg-green-600 text-white"
-                    >
-                      Apply
-                    </button>
-                    <button
-                      onClick={() => setFilterOpen(false)}
-                      className="px-3 py-1 rounded border"
-                    >
-                      Close
-                    </button>
-                  </div>
-                </div>
+                ))}
               </div>
             )}
           </div>
 
+          <label className="flex items-center">
+            <input
+              type="checkbox"
+              checked={showOnlyLow}
+              onChange={(e) => {
+                handleLowStockToggle(e.target.checked);
+              }}
+              className="mr-2"
+            />
+            Low Stock Only (≤5)
+          </label>
         </div>
       </div>
 
-      <div className="mb-4 flex items-center gap-3">
-        <input
-          placeholder="Search name / type / category"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="border p-2 rounded w-64 text-black"
-        />
-        <button onClick={() => fetchItems(showOnlyLow)} className="px-3 py-2 bg-green-600 text-white rounded">Refresh</button>
-
-        <button
-          onClick={saveAll}
-          disabled={savingAll || unsavedCount === 0}
-          className="px-3 py-2 bg-blue-600 text-white rounded"
-        >
-          {savingAll ? "Saving..." : `Save All${unsavedCount ? ` (${unsavedCount})` : ""}`}
-        </button>
-
-        {loading && <div className="text-sm text-black">Loading...</div>}
-      </div>
-
-      <div className="grid grid-cols-4 gap-6">
-        <aside className="col-span-1 bg-white rounded shadow p-4">
-          <div className="font-bold mb-3 text-black">All Categories</div>
-          <ul className="space-y-2">
-            <li
-              className={`cursor-pointer p-2 rounded ${selectedCategory === null ? "bg-gray-100 font-semibold" : "hover:bg-gray-50"}`}
-              onClick={() => setSelectedCategory(null)}
-            >
-              <span className="text-black">All Categories</span>
-            </li>
-            {CATEGORIES.map((c) => (
-              <li
-                key={c}
-                className={`cursor-pointer p-2 rounded ${selectedCategory === c ? "bg-gray-100 font-semibold" : "hover:bg-gray-50"}`}
-                onClick={() => setSelectedCategory(c)}
+      {/* Products Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        {loading ? (
+          Array(8).fill(0).map((_, i) => (
+            <div key={i} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 animate-pulse">
+              <div className="h-32 bg-gray-200 rounded mb-4"></div>
+              <div className="h-4 bg-gray-200 rounded mb-2"></div>
+              <div className="h-8 bg-gray-200 rounded"></div>
+            </div>
+          ))
+        ) : (
+          filtered.map((item) => {
+            const isUnsaved = (originalInventories[item.id] ?? 0) !== (item.inventory ?? 0);
+            const inventory = item.inventory ?? 0;
+            const isOutOfStock = inventory === 0;
+            const isLowStock = inventory > 0 && inventory <= 5;
+            
+            return (
+              <div 
+                key={item.id} 
+                className={`bg-white rounded-lg shadow-sm border-2 p-4 transition-all ${
+                  isUnsaved 
+                    ? 'border-yellow-400 bg-yellow-50' 
+                    : isOutOfStock
+                    ? 'border-red-400 bg-red-50'
+                    : isLowStock
+                    ? 'border-orange-400 bg-orange-50'
+                    : 'border-gray-200'
+                }`}
               >
-                <span className="text-black">{c}</span>
-              </li>
-            ))}
-          </ul>
-        </aside>
-
-        <section className="col-span-3 overflow-x-auto bg-white rounded-lg shadow">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-[#51507b] text-white">
-                <th className="p-3 text-left">Product Image</th>
-                <th className="p-3 text-left">Product Type</th>
-                <th className="p-3 text-left">Category</th>
-                <th className="p-3 text-left">Product Name</th>
-                <th className="p-3 text-right">Price</th>
-                <th className="p-3 text-center">Inventory</th>
-                <th className="p-3 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="p-6 text-center text-black">No products found.</td>
-                </tr>
-              )}
-              {filtered.map((item) => (
-                <tr key={item.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3">
-                    {item.image1 ? (
-                      <img src={item.image1} alt={item.name} className="w-20 h-20 object-cover rounded" />
-                    ) : (
-                      <div className="w-20 h-20 bg-gray-100 rounded flex items-center justify-center text-gray-400">No Image</div>
-                    )}
-                  </td>
-                  <td className="p-3 text-black">{item.type ?? "-"}</td>
-                  <td className="p-3 text-black">{item.category ?? "-"}</td>
-                  <td className="p-3 font-semibold text-black">{item.name}</td>
-                  <td className="p-3 text-right text-black">₱{(item.price ?? 0).toFixed(2)}</td>
-                  <td className="p-3 text-center">
-                    <input
-                      type="number"
-                      min={0}
-                      className="w-24 border p-2 rounded text-black"
-                      value={String(item.inventory ?? 0)}
-                      onChange={(e) => {
-                        const v = Math.max(0, parseInt(e.target.value || "0", 10));
-                        setItems((prev) => prev.map((p) => (p.id === item.id ? { ...p, inventory: v } : p)));
-                      }}
+                {/* Product Image */}
+                <div className="relative mb-4">
+                  {item.image1 ? (
+                    <img
+                      src={item.image1}
+                      alt={item.name}
+                      className="w-full h-32 object-cover rounded-lg"
                     />
-                  </td>
-                  <td className="p-3 text-center">
-                    <button
-                      onClick={() => updateInventory(item.id, Number(item.inventory ?? 0))}
-                      disabled={savingId === item.id}
-                      className="px-3 py-1 rounded bg-blue-600 text-white"
-                    >
-                      {savingId === item.id ? "Saving..." : "Save"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+                  ) : (
+                    <div className="w-full h-32 bg-gray-200 rounded-lg flex items-center justify-center">
+                      <span className="text-gray-400">No Image</span>
+                    </div>
+                  )}
+                  
+                  {/* Stock Status Badge */}
+                  <div className="absolute top-2 right-2">
+                    {isOutOfStock && (
+                      <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full font-medium">
+                        OUT OF STOCK
+                      </span>
+                    )}
+                    {isLowStock && (
+                      <span className="bg-orange-500 text-white text-xs px-2 py-1 rounded-full font-medium">
+                        LOW STOCK
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Product Info */}
+                <div className="space-y-2">
+                  <h3 className="font-medium text-gray-900 truncate">{item.name}</h3>
+                  
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>{item.category}</span>
+                    <span>{item.type}</span>
+                  </div>
+                  
+                  {item.price && (
+                    <p className="text-lg font-semibold text-green-600">
+                      ₱{item.price.toLocaleString()}
+                    </p>
+                  )}
+
+                  {/* Inventory Input */}
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Inventory Count
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="number"
+                        min="0"
+                        value={item.inventory ?? 0}
+                        onChange={(e) => {
+                          const newValue = parseInt(e.target.value) || 0;
+                          setItems(prev => 
+                            prev.map(p => 
+                              p.id === item.id ? { ...p, inventory: newValue } : p
+                            )
+                          );
+                        }}
+                        className={`flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${
+                          isUnsaved ? 'border-yellow-400' : 'border-gray-300'
+                        }`}
+                      />
+                      <button
+                        onClick={() => updateInventory(item.id, item.inventory ?? 0)}
+                        disabled={savingId === item.id || !isUnsaved}
+                        className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          isUnsaved
+                            ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        {savingId === item.id ? '⏳' : '💾'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isUnsaved && (
+                    <p className="text-xs text-yellow-700 bg-yellow-100 px-2 py-1 rounded">
+                      Unsaved changes: {originalInventories[item.id] ?? 0} → {item.inventory ?? 0}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
+
+      {filtered.length === 0 && !loading && (
+        <div className="text-center py-12">
+          <div className="text-6xl mb-4">📦</div>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No products found</h3>
+          <p className="text-gray-500">
+            {showOnlyLow 
+              ? "No low stock items found. Great job keeping inventory levels up!"
+              : "No products match your current filters."
+            }
+          </p>
+        </div>
+      )}
     </div>
   );
 }
