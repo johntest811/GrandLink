@@ -149,6 +149,7 @@ export default function ProductsAdminPage() {
       let scene: THREE.Scene;
       let camera: THREE.PerspectiveCamera;
       let animationId: number;
+      let onResizeHandler: (() => void) | null = null;
 
       async function loadFBX() {
         const { FBXLoader } = await import('three-stdlib');
@@ -158,7 +159,11 @@ export default function ProductsAdminPage() {
         scene = new THREE.Scene();
         scene.background = null;
         
-        camera = new THREE.PerspectiveCamera(75, 500 / 400, 0.1, 1000);
+  // Determine dynamic size based on container
+  const mountEl = document.getElementById('fbx-canvas');
+  const mountWidth = mountEl?.clientWidth || 1000;
+  const mountHeight = mountEl?.clientHeight || 600;
+  camera = new THREE.PerspectiveCamera(75, mountWidth / mountHeight, 0.1, 1000);
         camera.position.set(0, 50, 100);
 
         renderer = new THREE.WebGLRenderer({ 
@@ -167,7 +172,7 @@ export default function ProductsAdminPage() {
           powerPreference: "high-performance"
         });
         renderer.setClearColor(0x000000, 0);
-        renderer.setSize(500, 400);
+  renderer.setSize(mountWidth, mountHeight);
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -261,6 +266,17 @@ export default function ProductsAdminPage() {
           mount.appendChild(renderer.domElement);
         }
 
+        // Handle resize
+        function onResize() {
+          const w = mount?.clientWidth || mountWidth;
+          const h = mount?.clientHeight || mountHeight;
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+          renderer.setSize(w, h);
+        }
+        onResizeHandler = onResize;
+        window.addEventListener('resize', onResizeHandler);
+
         function animate() {
           animationId = requestAnimationFrame(animate);
           controls.update();
@@ -333,6 +349,9 @@ export default function ProductsAdminPage() {
           cancelAnimationFrame(animationId);
         }
         
+        if (onResizeHandler) {
+          window.removeEventListener('resize', onResizeHandler);
+        }
         if (renderer) {
           renderer.dispose();
           renderer.forceContextLoss();
@@ -355,15 +374,15 @@ export default function ProductsAdminPage() {
     }, [file]);
 
     return (
-      <div 
-        id="fbx-canvas" 
-        style={{ 
-          width: 500, 
-          height: 400, 
-          background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
-          borderRadius: '8px',
-          overflow: 'hidden'
-        }} 
+      <div
+        id="fbx-canvas"
+        style={{
+          width: '100%',
+          height: '100%',
+          background: 'transparent',
+          borderRadius: '12px',
+          overflow: 'hidden',
+        }}
       />
     );
   }
@@ -371,8 +390,8 @@ export default function ProductsAdminPage() {
   const handleSingleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-    
-    const newImages = [...images, ...files].slice(0, 5);
+    // Allow unlimited images by appending without slicing
+    const newImages = [...images, ...files];
     setImages(newImages);
     setCarouselIndex(0);
     
@@ -383,7 +402,7 @@ export default function ProductsAdminPage() {
           admin_name: currentAdmin.username,
           action: 'upload',
           entity_type: 'product_images',
-          details: `Added ${files.length} product image(s). Total: ${newImages.length}/5`,
+          details: `Added ${files.length} product image(s). Total: ${newImages.length}`,
           page: 'products',
           metadata: {
             addedCount: files.length,
@@ -551,9 +570,9 @@ export default function ProductsAdminPage() {
         console.error("Failed to log form submission:", error);
       }
       
-      // Upload images (max 5)
+      // Upload images (unlimited)
       const imageUrls: string[] = [];
-      for (let i = 0; i < images.slice(0, 5).length; i++) {
+      for (let i = 0; i < images.length; i++) {
         const img = images[i];
         try {
           const url = await uploadFile(img, 'images');
@@ -563,9 +582,6 @@ export default function ProductsAdminPage() {
           console.error(`Failed to upload image ${i + 1}:`, uploadError);
         }
       }
-      
-      // Pad imageUrls to always have 5 elements
-      while (imageUrls.length < 5) imageUrls.push("");
 
       // Upload FBX files
       const fbxUploadedUrls: string[] = [];
@@ -583,7 +599,7 @@ export default function ProductsAdminPage() {
       console.log("📦 Creating product in database...");
 
       // Prepare the product data
-      const productData = {
+      const productData: any = {
         name: name.trim(),
         fullproductname: fullProductName.trim() || null,
         additionalfeatures: additionalFeatures.trim() || null,
@@ -596,14 +612,17 @@ export default function ProductsAdminPage() {
         thickness: thickness ? Number(thickness) : null,
         material: material || 'Glass',
         type: type || 'Tinted',
-        image1: imageUrls[0] || null,
-        image2: imageUrls[1] || null,
-        image3: imageUrls[2] || null,
-        image4: imageUrls[3] || null,
-        image5: imageUrls[4] || null,
+        images: imageUrls,
         fbx_url: fbxUploadedUrls.length > 0 ? fbxUploadedUrls[0] : null,
         fbx_urls: fbxUploadedUrls.length > 0 ? fbxUploadedUrls : null
       };
+
+      // Backward-compat: keep legacy image1..image5 fields populated
+      productData.image1 = imageUrls[0] || null;
+      productData.image2 = imageUrls[1] || null;
+      productData.image3 = imageUrls[2] || null;
+      productData.image4 = imageUrls[3] || null;
+      productData.image5 = imageUrls[4] || null;
 
       // OLD (remove):
       // const { data: insertedProduct, error: insertError } = await supabase
@@ -743,11 +762,11 @@ export default function ProductsAdminPage() {
 
         {/* 3D Viewer Modal */}
         {show3DViewer && fbxFiles.length > 0 && (
-          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-75">
-            <div className="bg-white rounded-lg p-6 shadow-lg relative max-w-3xl w-full mx-4">
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-transparent">
+            <div className="bg-white/95 backdrop-blur-md rounded-xl p-6 shadow-2xl relative max-w-7xl w-[95vw] h-[85vh] mx-4">
               <button
                 onClick={() => setShow3DViewer(false)}
-                className="absolute top-2 right-2 text-gray-600 hover:text-black text-xl font-bold z-10 bg-white rounded-full w-8 h-8 flex items-center justify-center shadow-md"
+                className="absolute top-3 right-3 text-gray-700 hover:text-black text-2xl font-bold z-10 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-md"
               >
                 ×
               </button>
@@ -794,12 +813,11 @@ export default function ProductsAdminPage() {
                   </div>
                 )}
                 
-                <div className="text-xs text-gray-500 mb-2">
-                  Use mouse to rotate, zoom, and pan. Glass materials are rendered with transparency.
-                </div>
+                <div className="text-xs text-gray-500 mb-2">Use mouse to rotate, zoom, and pan. Background is transparent for clean previews.</div>
               </div>
-              
-              <FBXViewer file={fbxFiles[currentFbxIndex]} />
+              <div className="h-[70vh]">
+                <FBXViewer file={fbxFiles[currentFbxIndex]} />
+              </div>
             </div>
           </div>
         )}
@@ -965,26 +983,22 @@ export default function ProductsAdminPage() {
             <div className="bg-white/80 rounded-lg p-6">
               <h2 className="text-lg font-bold text-[#233a5e] mb-4">Product Files</h2>
               
-              {/* Images Upload */}
+              {/* Images Upload (Unlimited) */}
               <div className="mb-6">
                 <h3 className="text-md font-semibold text-[#233a5e] mb-2">
-                  Product Images ({images.length}/5)
+                  Product Images ({images.length})
                 </h3>
                 
                 <div className="flex items-center space-x-2 mb-4">
                   <label
                     htmlFor="images-upload"
-                    className={`flex flex-col items-center justify-center w-28 h-28 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
-                      images.length >= 5 
-                        ? 'border-gray-300 bg-gray-100 cursor-not-allowed' 
-                        : 'border-gray-400 bg-[#e7eaef] hover:bg-gray-200'
-                    }`}
+                    className={
+                      'flex flex-col items-center justify-center w-28 h-28 border-2 border-dashed rounded-lg cursor-pointer transition-colors border-gray-400 bg-[#e7eaef] hover:bg-gray-200'
+                    }
                   >
                     <span className="text-2xl">+</span>
                     <span className="text-xs text-[#233a5e]">Add Image</span>
-                    <span className="text-xs text-gray-500 mt-1">
-                      {images.length >= 5 ? 'Max reached' : `${5 - images.length} left`}
-                    </span>
+                    <span className="text-[10px] text-gray-500 mt-1">Unlimited</span>
                   </label>
                   <input
                     id="images-upload"
@@ -993,7 +1007,6 @@ export default function ProductsAdminPage() {
                     multiple
                     onChange={handleSingleImageUpload}
                     className="hidden"
-                    disabled={images.length >= 5}
                   />
                   
                   {images.length > 0 && (
