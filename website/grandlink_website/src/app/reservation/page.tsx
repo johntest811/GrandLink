@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -37,7 +37,7 @@ type Address = {
   is_default: boolean;
 };
 
-export default function ReservationPage() {
+function ReservationPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const productId = searchParams.get("productId");
@@ -594,5 +594,13 @@ export default function ReservationPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ReservationPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading reservation...</div>}>
+      <ReservationPageContent />
+    </Suspense>
   );
 }

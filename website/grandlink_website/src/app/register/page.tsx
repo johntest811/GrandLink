@@ -1,5 +1,5 @@
 "use client";
-import { FaEnvelope, FaLock, FaUser, FaGoogle } from "react-icons/fa";
+import { FaEnvelope, FaLock, FaUser, FaGoogle, FaCheckCircle } from "react-icons/fa";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { useState } from "react";
 import TopNavBar from "@/components/TopNavBar";
@@ -209,18 +209,6 @@ export default function RegisterPage() {
       </main>
       {/* Optional: Overlay for background dimming */}
       <div className="absolute inset-0 bg-black/30 -z-0" aria-hidden="true"></div>
-    </div>
-  );
-}
-
-import { FaCheckCircle } from "react-icons/fa";
-
-export function RegisterConfirmPage() {
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-white">
-      <FaCheckCircle className="text-green-500 mb-4" size={80} />
-      <h2 className="text-2xl font-bold text-gray-800">You have successfully registered your account!</h2>
-      <p className="mt-2 text-gray-600">You may now log in.</p>
     </div>
   );
 }

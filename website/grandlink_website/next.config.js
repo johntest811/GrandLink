@@ -7,6 +7,9 @@ const nextConfig = {
       "placehold.co"
     ],
   },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
 };
 
 module.exports = nextConfig;

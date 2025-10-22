@@ -152,16 +152,3 @@ export async function POST(request: Request) {
   }
 }
 
-// call this after updating addresses
-const updatedAddressUserId = "USER_ID_HERE"; // <-- Replace with actual user ID
-
-await fetch('/api/notifyServers', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    type: 'address_updated',
-    user_id: updatedAddressUserId,
-    title: 'Address updated',
-    message: 'Your saved address was updated. If this was not you, contact support.',
-  }),
-});

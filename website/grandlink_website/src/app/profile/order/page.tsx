@@ -16,6 +16,7 @@ type UserItem = {
   quantity: number;
   meta: any;
   created_at: string;
+  updated_at?: string;
   admin_accepted_at?: string;
   progress_history?: any[];
 };

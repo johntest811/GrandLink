@@ -3,7 +3,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
 import Footer from "@/components/Footer";
 import { createClient } from "@supabase/supabase-js";
@@ -14,7 +14,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export default function ProductsPage() {
+function ProductsPageContent() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -187,5 +187,13 @@ export default function ProductsPage() {
       </main>
       <Footer />
     </div>
+  );
+}
+
+export default function ProductsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading products...</div>}>
+      <ProductsPageContent />
+    </Suspense>
   );
 }

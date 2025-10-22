@@ -15,7 +15,7 @@ interface Project {
   link_url?: string;
 }
 
-export default function FeaturedProjects({ withLayout = true }: { withLayout?: boolean }) {
+function FeaturedProjectsContent() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
 
@@ -111,16 +111,18 @@ export default function FeaturedProjects({ withLayout = true }: { withLayout?: b
   );
 
   
-  if (withLayout) {
-    return (
-      <div className="flex flex-col min-h-screen bg-[#232d3b]">
-        <TopNavBarLoggedIn />
-        <main className="flex-1">{content}</main>
-        <Footer />
-      </div>
-    );
-  }
-
-
   return <section className="bg-[#232d3b] text-white">{content}</section>;
 }
+
+export default function FeaturedProjectsPage() {
+  return (
+    <div className="flex flex-col min-h-screen bg-[#232d3b]">
+      <TopNavBarLoggedIn />
+      <main className="flex-1">
+        <FeaturedProjectsContent />
+      </main>
+      <Footer />
+    </div>
+  );
+}
+

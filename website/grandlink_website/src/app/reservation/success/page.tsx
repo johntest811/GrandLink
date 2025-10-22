@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -9,7 +9,7 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-export default function ReservationSuccessPage() {
+function ReservationSuccessPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const reservationId = searchParams.get("reservation_id");
@@ -174,5 +174,13 @@ export default function ReservationSuccessPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ReservationSuccessPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading reservation details...</div>}>
+      <ReservationSuccessPageContent />
+    </Suspense>
   );
 }

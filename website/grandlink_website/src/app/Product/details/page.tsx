@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -16,7 +16,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export default function ProductDetailsPage() {
+function ProductDetailsPageContent() {
   const searchParams = useSearchParams();
   const productId = searchParams.get("id");
   const [product, setProduct] = useState<any>(null);
@@ -320,5 +320,13 @@ export default function ProductDetailsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function ProductDetailsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading product...</div>}>
+      <ProductDetailsPageContent />
+    </Suspense>
   );
 }
