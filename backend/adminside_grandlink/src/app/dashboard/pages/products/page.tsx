@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { Plus, Trash2, Edit3, Save, Upload, Image as ImageIcon } from "lucide-react";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
-import { logActivity } from "@/app/lib/activity";
+import { logActivity, autoLogActivity } from "@/app/lib/activity";
 
 type Product = {
   id?: string;
@@ -109,6 +109,16 @@ export default function AdminProductsPage() {
   useEffect(() => {
     if (currentAdmin && categories.length > 0) {
       logProductsLoad();
+    }
+  }, [currentAdmin]);
+
+  // ADD: page view activity
+  useEffect(() => {
+    if (currentAdmin) {
+      autoLogActivity('view', 'page', `Accessed Products page`, {
+        page: 'Products',
+        metadata: { section: 'Products', timestamp: new Date().toISOString() }
+      });
     }
   }, [currentAdmin]);
 

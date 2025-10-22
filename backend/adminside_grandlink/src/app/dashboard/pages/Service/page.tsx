@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
-import { logActivity } from "@/app/lib/activity";
+import { logActivity, autoLogActivity } from "@/app/lib/activity";
 import * as FaIcons from "react-icons/fa";
 
 interface Service {
@@ -78,6 +78,16 @@ export default function AdminServicesPage() {
   useEffect(() => {
     if (currentAdmin) {
       fetchServices();
+    }
+  }, [currentAdmin]);
+
+  // ADD: page view activity
+  useEffect(() => {
+    if (currentAdmin) {
+      autoLogActivity('view', 'page', `Accessed Services page`, {
+        page: 'Services',
+        metadata: { section: 'Services', timestamp: new Date().toISOString() }
+      });
     }
   }, [currentAdmin]);
 

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Logo from '../../components/Logo';
 import NotificationBell from "../../components/NotificationBell";
 import RecentActivity from "../../components/RecentActivity";
+import { logLogoutActivity } from "@/app/lib/activity"; // ADD
 
 export default function DashboardLayout({
   children,
@@ -114,13 +115,23 @@ export default function DashboardLayout({
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => { // make async
     try {
-      localStorage.removeItem('adminSession');
+      const sessionData = localStorage.getItem('adminSession');
+      const admin = sessionData ? JSON.parse(sessionData) : null;
+
+      // Log logout before clearing session
+      if (admin?.id && admin?.username) {
+        await logLogoutActivity(admin.id, admin.username);
+      }
+    } catch (error) {
+      console.error("Logout activity log error:", error);
+    } finally {
+      try {
+        localStorage.removeItem('adminSession');
+      } catch {}
       setCurrentAdmin(null);
       router.push('/login');
-    } catch (error) {
-      console.error("Logout error:", error);
     }
   };
 

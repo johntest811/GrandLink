@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
-import { logActivity } from "@/app/lib/activity";
+import { logActivity, autoLogActivity } from "@/app/lib/activity";
 import dynamic from "next/dynamic";
 import React from "react";
 
@@ -61,6 +61,16 @@ export default function AdminShowroomsPage() {
   useEffect(() => {
     if (currentAdmin) {
       fetchShowrooms();
+    }
+  }, [currentAdmin]);
+
+  // ADD: page view activity
+  useEffect(() => {
+    if (currentAdmin) {
+      autoLogActivity('view', 'page', `Accessed Showrooms page`, {
+        page: 'Showrooms',
+        metadata: { section: 'Showrooms', timestamp: new Date().toISOString() }
+      });
     }
   }, [currentAdmin]);
 

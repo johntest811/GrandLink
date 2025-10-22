@@ -25,7 +25,8 @@ export const logActivity = async (data: ActivityLogData) => {
       entity_id: data.entity_id || null,
       details: data.details,
       page: data.page || null,
-      metadata: data.metadata ? JSON.stringify(data.metadata) : null,
+      // Store as JSON (jsonb), not as string
+      metadata: data.metadata ?? null,
       created_at: new Date().toISOString(),
     };
 

@@ -56,8 +56,15 @@ export default function AdminAboutPage() {
     };
 
     loadAdmin();
-    fetchAbout();
+    // Removed fetchAbout() here so we fetch after admin is set
   }, []);
+
+  // Fetch after admin is available so logs include admin info
+  useEffect(() => {
+    if (currentAdmin) {
+      fetchAbout();
+    }
+  }, [currentAdmin]);
 
   const fetchAbout = async () => {
     try {

@@ -1,6 +1,7 @@
 "use client";
-import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from '@/app/Clients/Supabase/SupabaseClients';
+
+import React, { useEffect, useRef, useState } from "react";
+import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 
 type Activity = {
   id: string;
@@ -11,7 +12,8 @@ type Activity = {
   entity_id?: string;
   details: string;
   page?: string;
-  metadata?: string;
+  // Accept either jsonb object or legacy stringified JSON
+  metadata?: any;
   created_at: string;
   is_read?: boolean;
 };
@@ -211,13 +213,17 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
     return date.toLocaleDateString();
   };
 
-  const parseMetadata = (metadataStr?: string) => {
-    if (!metadataStr) return null;
-    try {
-      return JSON.parse(metadataStr);
-    } catch {
-      return null;
+  const parseMetadata = (metadata?: any) => {
+    if (!metadata) return null;
+    if (typeof metadata === 'string') {
+      try {
+        return JSON.parse(metadata);
+      } catch {
+        return null;
+      }
     }
+    // Already an object from jsonb
+    return metadata;
   };
 
   // Dropdown/Popup version for navbar
@@ -233,8 +239,7 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
           <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          
-          {/* Unread Activity Count Badge */}
+
           {unreadCount > 0 && (
             <span className="absolute -top-1 -right-1 h-5 w-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center animate-pulse font-medium">
               {unreadCount > 9 ? '9+' : unreadCount}
@@ -242,17 +247,14 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
           )}
         </button>
 
-        {/* Dropdown Panel */}
         {isOpen && (
           <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-            {/* Header */}
             <div className="px-4 py-3 border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-gray-900">
                   Recent Activities
                 </h3>
                 <div className="flex items-center space-x-2">
-                  {/* Mark All as Read Button */}
                   {unreadCount > 0 && (
                     <button
                       onClick={markAllAsRead}
@@ -276,7 +278,6 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
               </div>
             </div>
 
-            {/* Activities List */}
             <div className="max-h-96 overflow-y-auto">
               {loading ? (
                 <div className="p-6 text-center">
@@ -293,14 +294,14 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
                 <div className="space-y-1">
                   {activities.map((activity) => {
                     const metadata = parseMetadata(activity.metadata);
-                    
+
                     return (
                       <div
                         key={activity.id}
                         onClick={() => !activity.is_read && markActivityAsRead(activity.id)}
                         className={`p-4 hover:bg-gray-50 transition-colors cursor-pointer border-l-4 ${
-                          activity.is_read 
-                            ? "bg-white border-l-gray-200" 
+                          activity.is_read
+                            ? "bg-white border-l-gray-200"
                             : "bg-blue-50 border-l-blue-500"
                         }`}
                       >
@@ -311,54 +312,78 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
 
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between mb-1">
-                              <p className={`text-sm font-medium truncate ${
-                                activity.is_read ? "text-gray-700" : "text-gray-900"
-                              }`}>
-                                {activity.admin_name}
-                              </p>
-                              <span className="text-xs text-gray-400">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-medium text-gray-900">
+                                  {activity.admin_name}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  performed {activity.action.toLowerCase()}
+                                </span>
+                                {activity.page && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
+                                    {activity.page}
+                                  </span>
+                                )}
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-600 border border-gray-200">
+                                  {activity.entity_type}
+                                </span>
+                                {activity.entity_id && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200">
+                                    id: {activity.entity_id}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs text-gray-400 ml-2 whitespace-nowrap">
                                 {formatTimeAgo(activity.created_at)}
                               </span>
                             </div>
 
-                            <p className={`text-sm mt-1 ${
-                              activity.is_read ? "text-gray-500" : "text-gray-700"
-                            }`}>
+                            <p className={`text-sm ${activity.is_read ? "text-gray-500" : "text-gray-700"}`}>
                               {activity.details}
                             </p>
 
-                            <div className="flex items-center justify-between mt-2">
-                              <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${getActionColor(activity.action)}`}>
-                                {activity.action} • {activity.entity_type}
-                              </span>
-
-                              {activity.page && (
-                                <span className="text-xs text-gray-400">
-                                  {activity.page}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Show metadata details if available */}
                             {metadata && (
-                              <div className="mt-2 text-xs text-gray-500 bg-gray-50 rounded p-2">
-                                <div className="grid grid-cols-2 gap-2">
-                                  {metadata.productName && (
-                                    <div><span className="font-medium">Product:</span> {metadata.productName}</div>
-                                  )}
-                                  {metadata.category && (
-                                    <div><span className="font-medium">Category:</span> {metadata.category}</div>
-                                  )}
-                                  {metadata.oldInventory !== undefined && metadata.newInventory !== undefined && (
-                                    <div><span className="font-medium">Inventory:</span> {metadata.oldInventory} → {metadata.newInventory}</div>
-                                  )}
-                                  <div><span className="font-medium">Time:</span> {new Date(activity.created_at).toLocaleString()}</div>
-                                </div>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {/* Common metadata quick chips */}
+                                {'changesCount' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                    changes: {metadata.changesCount}
+                                  </span>
+                                )}
+                                {'fieldChanged' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                    field: {String(metadata.fieldChanged)}
+                                  </span>
+                                )}
+                                {'action' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                    {String(metadata.action)}
+                                  </span>
+                                )}
+                                {'aboutId' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                    about: {String(metadata.aboutId)}
+                                  </span>
+                                )}
+                                {'projectId' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                    project: {String(metadata.projectId)}
+                                  </span>
+                                )}
+                                {'serviceId' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                    service: {String(metadata.serviceId)}
+                                  </span>
+                                )}
+                                {'showroomId' in metadata && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                    showroom: {String(metadata.showroomId)}
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>
 
-                          {/* Unread indicator */}
                           {!activity.is_read && (
                             <div className="flex-shrink-0 w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
                           )}
@@ -370,13 +395,10 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
               )}
             </div>
 
-            {/* Footer */}
             {activities.length > 0 && (
               <div className="px-4 py-3 border-t border-gray-200 text-center">
                 <button
-                  onClick={() => {
-                    setShowAll(!showAll);
-                  }}
+                  onClick={() => setShowAll(!showAll)}
                   className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
                 >
                   {showAll ? 'Show My Activities' : 'View All Activities'}
@@ -419,7 +441,7 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
           </div>
         </div>
       </div>
-      
+
       <div className="max-h-96 overflow-y-auto">
         {loading ? (
           <div className="p-4">
@@ -444,7 +466,7 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
           <div className="divide-y divide-gray-100">
             {activities.map((activity) => {
               const metadata = parseMetadata(activity.metadata);
-              
+
               return (
                 <div
                   key={activity.id}
@@ -458,51 +480,72 @@ export default function RecentActivity({ adminId, adminName, limit = 10, showAsD
                       <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center border ${getActionColor(activity.action)}`}>
                         <span className="text-sm">{getActionIcon(activity.action)}</span>
                       </div>
-                      
+
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2 mb-1">
-                          <p className="text-sm font-medium text-gray-900">
-                            {activity.admin_name}
-                          </p>
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${getActionColor(activity.action)}`}>
-                            {activity.action}
-                          </span>
-                          <span className="text-xs text-gray-400">
+                        <div className="flex items-center space-x-2 mb-1 flex-wrap">
+                          <span className="text-sm font-medium text-gray-900">{activity.admin_name}</span>
+                          <span className="text-xs text-gray-500">performed {activity.action.toLowerCase()}</span>
+                          {activity.page && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
+                              {activity.page}
+                            </span>
+                          )}
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-600 border border-gray-200">
                             {activity.entity_type}
                           </span>
-                          {activity.page && (
-                            <span className="text-xs text-gray-400">
-                              • {activity.page}
+                          {activity.entity_id && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200">
+                              id: {activity.entity_id}
                             </span>
                           )}
                         </div>
-                        
+
                         <p className="text-sm text-gray-600">
                           {activity.details}
                         </p>
 
-                        {/* Enhanced metadata display */}
                         {metadata && (
-                          <div className="mt-2 text-xs text-gray-500 bg-gray-50 rounded p-2">
-                            <div className="grid grid-cols-2 gap-2">
-                              {metadata.productName && (
-                                <div><span className="font-medium">Product:</span> {metadata.productName}</div>
-                              )}
-                              {metadata.category && (
-                                <div><span className="font-medium">Category:</span> {metadata.category}</div>
-                              )}
-                              {metadata.oldInventory !== undefined && metadata.newInventory !== undefined && (
-                                <div><span className="font-medium">Inventory:</span> {metadata.oldInventory} → {metadata.newInventory}</div>
-                              )}
-                              {metadata.price !== undefined && (
-                                <div><span className="font-medium">Price:</span> ₱{metadata.price}</div>
-                              )}
-                            </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {'changesCount' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                changes: {metadata.changesCount}
+                              </span>
+                            )}
+                            {'fieldChanged' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                field: {String(metadata.fieldChanged)}
+                              </span>
+                            )}
+                            {'serviceId' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                service: {String(metadata.serviceId)}
+                              </span>
+                            )}
+                            {'showroomId' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                showroom: {String(metadata.showroomId)}
+                              </span>
+                            )}
+                            {'categoryName' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                category: {String(metadata.categoryName)}
+                              </span>
+                            )}
+                            {'productName' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                product: {String(metadata.productName)}
+                              </span>
+                            )}
+                            {'section' in metadata && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
+                                section: {String(metadata.section)}
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
                     </div>
-                    
+
                     <div className="flex-shrink-0 ml-4 text-right">
                       <p className="text-xs text-gray-500">
                         {formatTimeAgo(activity.created_at)}

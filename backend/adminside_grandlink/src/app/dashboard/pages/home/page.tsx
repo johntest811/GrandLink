@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
-import { logActivity } from "@/app/lib/activity";
+import { logActivity, autoLogActivity } from "@/app/lib/activity";
 
 type HomeContent = {
   carousel?: Array<{ image?: string; title?: string; buttonText?: string; buttonLink?: string }>;
