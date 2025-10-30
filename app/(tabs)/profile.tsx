@@ -7,26 +7,56 @@ import { Ionicons, MaterialIcons, FontAwesome5, Entypo, Feather } from '@expo/ve
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<User | null>(null);
+  const [cartCount, setCartCount] = useState(0);
   const router = useRouter();
 
   useEffect(() => {
     const fetchUser = async () => {
       const { data } = await supabase.auth.getUser();
       setUser(data.user);
+      // load cart count when user is available
+      if (data?.user) await loadCartCount();
     };
     fetchUser();
   }, []);
+
+  const loadCartCount = async () => {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData?.user) return;
+      const { count, error } = await supabase
+        .from('user_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', authData.user.id)
+        .eq('item_type', 'order')
+        .eq('status', 'active');
+      if (error) throw error;
+      setCartCount(count ?? 0);
+    } catch (e: any) {
+      console.error('Failed to load cart count', e);
+    }
+  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace('/login');
   };
 
+  const openCart = () => {
+    router.push('../cart');
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: '#fff' }}>
       <ScrollView style={{ flex: 1 }}>
         <View style={styles.header}>
-          <Text style={styles.profileTitle}>Profile</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <Ionicons name="arrow-back" size={24} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.profileTitle}>Profile</Text>
+            <View style={{ width: 40 }} />
+          </View>
         </View>
         <View style={styles.profileSection}>
           <Image
@@ -43,26 +73,26 @@ export default function ProfileScreen() {
         {/* Purchases Section */}
         <Text style={styles.sectionTitle}>My Purchases</Text>
         <View style={styles.purchasesRow}>
-          <View style={styles.purchaseItem}>
-            <Ionicons name="list" size={28} color="#a81d1d" />
-            <Text style={styles.purchaseLabel}>My List</Text>
-          </View>
-          <View style={styles.purchaseItem}>
-            <Ionicons name="calendar" size={28} color="#222" />
-            <Text style={styles.purchaseLabel}>Reservation</Text>
-          </View>
-          <View style={styles.purchaseItem}>
-            <MaterialIcons name="payment" size={28} color="#222" />
-            <Text style={styles.purchaseLabel}>To Pay</Text>
-          </View>
-          <View style={styles.purchaseItem}>
-            <Feather name="check-square" size={28} color="#222" />
-            <Text style={styles.purchaseLabel}>Completed</Text>
-          </View>
-          <View style={styles.purchaseItem}>
-            <Entypo name="circle-with-cross" size={28} color="#222" />
-            <Text style={styles.purchaseLabel}>Canceled</Text>
-          </View>
+          <TouchableOpacity style={styles.purchaseItem} onPress={openCart}>
+            <Ionicons name="cart" size={28} color="#000" />
+            <Text style={styles.purchaseLabel}>Cart</Text>
+          </TouchableOpacity>
+           <View style={styles.purchaseItem}>
+             <Ionicons name="calendar" size={28} color="#222" />
+             <Text style={styles.purchaseLabel}>Reservation</Text>
+           </View>
+           <View style={styles.purchaseItem}>
+             <MaterialIcons name="payment" size={28} color="#222" />
+             <Text style={styles.purchaseLabel}>To Pay</Text>
+           </View>
+           <View style={styles.purchaseItem}>
+             <Feather name="check-square" size={28} color="#222" />
+             <Text style={styles.purchaseLabel}>Completed</Text>
+           </View>
+           <View style={styles.purchaseItem}>
+             <Entypo name="circle-with-cross" size={28} color="#222" />
+             <Text style={styles.purchaseLabel}>Canceled</Text>
+           </View>
         </View>
         <View style={styles.divider} />
 
@@ -117,7 +147,7 @@ export default function ProfileScreen() {
                 </View>
                 <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
                   <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
-                  <Text style={styles.navLabel}>Service</Text>
+                  <Text style={styles.navLabel}>Settings</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
                   <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
@@ -129,6 +159,14 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#a81d1d',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   header: {
     paddingTop: 32,
     paddingHorizontal: 24,

@@ -22,6 +22,7 @@ export default function ShopScreen() {
   const [error, setError] = useState<string | null>(null);
   const [filterVisible, setFilterVisible] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -34,11 +35,17 @@ export default function ShopScreen() {
     fetchData();
   }, []);
 
-  // Filter products by selectedCategory
-  const filteredData =
-    selectedCategory === 'All'
-      ? data
-      : data.filter(product => product.category === selectedCategory);
+  // Filter products by selectedCategory and search query
+  const filteredData = data.filter(product => {
+    // Category filter
+    const categoryMatch = selectedCategory === 'All' || product.category === selectedCategory;
+    
+    // Search filter - search in product name (case insensitive)
+    const searchMatch = searchQuery.trim() === '' || 
+      product.name.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    return categoryMatch && searchMatch;
+  });
 
   // Fetch products from Supabase, filtered by the category/type
   useEffect(() => {
@@ -83,16 +90,18 @@ export default function ShopScreen() {
           <View style={styles.searchBox}>
             <Ionicons name="search" size={20} color="#888" />
             <TextInput
-              placeholder="Search"
+              placeholder="Search products..."
               style={styles.searchInput}
               placeholderTextColor="#888"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
             />
           </View>
           <TouchableOpacity
             style={styles.filterButton}
             onPress={() => setFilterVisible(true)}
           >
-            <Ionicons name="filter" size={24} color="#222" />
+            <Ionicons name="menu" size={24} color="#222" />
           </TouchableOpacity>
         </View>
 
@@ -244,6 +253,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
+    gap: 12, // Add spacing between search and filter
   },
   searchBox: {
     flex: 1,
@@ -253,6 +263,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 12,
     height: 40,
+    maxWidth: '85%', // Limit search box width
   },
   searchInput: {
     flex: 1,
@@ -260,7 +271,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   filterButton: {
-    marginLeft: 16,
+    padding: 8, // Add padding for better touch target
+    backgroundColor: '#f2f2f2', // Add background to make it visible
+    borderRadius: 8, // Match search box style
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 40, // Ensure minimum width
+    height: 40, // Match search box height
   },
   tabsRow: {
     flexDirection: 'row',
