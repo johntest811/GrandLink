@@ -1,5 +1,4 @@
 {
-  "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "jsx": "react-jsx",
     "baseUrl": ".",
@@ -7,9 +6,14 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "types": ["react", "react-native"],
+    "types": [
+      "react",
+      "react-native"
+    ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
   "include": [
@@ -18,5 +22,6 @@
     ".expo/types/**/*.ts",
     "expo-env.d.ts",
     "global.d.ts"
-  ]
+  ],
+  "extends": "expo/tsconfig.base"
 }

@@ -1,14 +1,42 @@
 import React, { useState } from "react";
-import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet, Alert } from "react-native";
 import { Stack, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
+import { supabase } from "./supabaseClient"; 
 
 export default function RegisterScreen() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleRegister = async () => {
+    if (!email || !password || !name) {
+      Alert.alert("Error", "Please fill in all fields.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert("Error", "Passwords do not match.");
+      return;
+    }
+    setLoading(true);
+    const { error, data } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { name }
+      }
+    });
+    setLoading(false);
+    if (error) {
+      Alert.alert("Registration Failed", error.message);
+    } else {
+      Alert.alert("Success", "Check your email for a confirmation link.");
+      router.replace("/login");
+    }
+  };
 
   return (
     <>
@@ -94,8 +122,8 @@ export default function RegisterScreen() {
             </View>
 
             {/* Register Button */}
-            <TouchableOpacity style={styles.button}>
-              <Text style={styles.buttonText}>REGISTER</Text>
+            <TouchableOpacity style={styles.button} onPress={handleRegister} disabled={loading}>
+              <Text style={styles.buttonText}>{loading ? "Registering..." : "REGISTER"}</Text>
             </TouchableOpacity>
 
             {/* Login Link */}

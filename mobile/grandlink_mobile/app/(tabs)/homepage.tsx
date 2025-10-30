@@ -1,7 +1,9 @@
 import { ThemedText } from '@/components/ThemedText';
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button} from 'react-native';
-import { Video as ExpoVideo} from "expo-av";
+import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button, Dimensions, Animated } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
+import { router, useRouter } from 'expo-router';
+import { supabase } from '../supabaseClient'; 
 import { blue } from 'react-native-reanimated/lib/typescript/Colors';
 
 const images = [
@@ -12,18 +14,77 @@ const images = [
   require('@/assets/images/homeimage5.png'),
 ];
 
+const QUALITY_MESSAGES = [
+  'High Quality, Long Lasting Performance',
+  'Expert Craftsmanship',
+  'Modern Design',
+  'Trusted by Professionals',
+  'Innovative Solutions',
+];
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+
+function QualityWheel() {
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  // Duplicate the array to create an infinite loop effect
+  const wheelData = [...QUALITY_MESSAGES, ...QUALITY_MESSAGES];
+
+  useEffect(() => {
+    let position = 0;
+    const interval = setInterval(() => {
+      position += 1;
+      if (position >= QUALITY_MESSAGES.length) {
+        // Instantly reset to start for seamless loop
+        position = 0;
+        scrollViewRef.current?.scrollTo({ x: 0, animated: false });
+      } else {
+        scrollViewRef.current?.scrollTo({ x: position * (SCREEN_WIDTH * 0.7), animated: true });
+      }
+    }, 2000); // Change every 2 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <View style={styles.qualityWheelContainer}>
+      <ScrollView
+        ref={scrollViewRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        scrollEnabled={false}
+        style={{ flexGrow: 0 }}
+      >
+        {wheelData.map((msg, idx) => (
+          <View key={idx} style={styles.qualityWheelItem}>
+            <View style={styles.qualityDot} />
+            <Text style={styles.qualityText}>{msg}</Text>
+          </View>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 export default function Homescreen() {  
     const [index, setIndex] = useState(0);
-    const Video: any = ExpoVideo;
+    const router = useRouter();
 
   const nextImage = () => setIndex((prev) => (prev + 1) % images.length);
   const prevImage = () => setIndex((prev) => (prev - 1 + images.length) % images.length);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+  const getUser = async () => {
+    const { data } = await supabase.auth.getUser();
+  };
+  getUser();
+}, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
       setIndex((prev) => (prev + 1) % images.length);
-    }, 3000); 
-    return () => clearInterval(interval);
+    }, 3000);
+    return () => clearInterval(timer);
   }, []);
 
   return (
@@ -32,10 +93,20 @@ export default function Homescreen() {
       <ScrollView style={{ flex: 1 }}>
         <View style={styles.upperBar}>
           <Image
-            source={require('@/assets/images/grandeastlogo.png')}
+            source={require('@/assets/images/GRANDEASTLOGO.png')}
             style={styles.logo}
             resizeMode="contain"
           />
+          <TouchableOpacity
+            style={styles.profileButton}
+            onPress={() => router.push('../profile')}
+          >
+            <Image
+              source={require('@/assets/images/profileicon.png')}
+              style={styles.profileIcon}
+              resizeMode="contain"
+            />
+          </TouchableOpacity>
         </View>
         <View style={styles.blueBox}>
           <TouchableOpacity onPress={prevImage} style={styles.arrow}>
@@ -49,16 +120,24 @@ export default function Homescreen() {
           <TouchableOpacity onPress={nextImage} style={styles.arrow}>
             <Image source={require('@/assets/images/right-arrow.png')} style={styles.arrowIcon} />
           </TouchableOpacity>
+          {/* Dots overlay */}
+          <View style={styles.dotOverlay}>
+            {images.map((_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.dot,
+                  i === index && styles.activeDot
+                ]}
+              />
+            ))}
+          </View>
         </View>
-        <View style={styles.qualityBar}>
-          <View style={styles.qualityDot} />
-          <Text style={styles.qualityText}>High Quality, Long Lasting Performance</Text>
-          <View style={styles.qualityDot} />
-          <Text style={styles.qualityText}>High Quality, Long Lasting Performance</Text>
+        <View style={styles.qualityWheelFullBlue}>
+          <QualityWheel />
         </View>
 
-
-        <TouchableOpacity style={styles.imageButton}>
+        <TouchableOpacity style={styles.imageButton} onPress={() => router.push({ pathname: '../shop', params: { filter: 'Doors' } })}>
           <Image
             source={require('@/assets/images/DoorsButton.png')}
             style={styles.imageButtonImage}
@@ -72,7 +151,7 @@ export default function Homescreen() {
           </View>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.imageButton}>
+        <TouchableOpacity style={styles.imageButton} onPress={() => router.push({ pathname: '../shop', params: { filter: 'Rails' } })}>
           <Image
             source={require('@/assets/images/railingsbutton.png')}
             style={styles.imageButtonImage}
@@ -86,7 +165,7 @@ export default function Homescreen() {
           </View>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.imageButton}>
+        <TouchableOpacity style={styles.imageButton} onPress={() => router.push({ pathname: '../shop', params: { filter: 'Enclosure' } })}>
           <Image
             source={require('@/assets/images/enclosuresbutton.png')}
             style={styles.imageButtonImage}
@@ -100,7 +179,7 @@ export default function Homescreen() {
           </View>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.imageButton}>
+        <TouchableOpacity style={styles.imageButton} onPress={() => router.push({ pathname: '../shop', params: { filter: 'Windows' } })}>
           <Image
             source={require('@/assets/images/windowsbutton.png')}
             style={styles.imageButtonImage}
@@ -117,23 +196,26 @@ export default function Homescreen() {
         <View style={styles.blueBoxB}>
           <View style={{ flexDirection: "row", paddingLeft: 10, paddingTop: 20, alignItems: "center" }}>
             <Text style={styles.featuredText}>Featured Projects</Text>
-            <TouchableOpacity style={styles.viewMoreProjectButton}>
+            <TouchableOpacity
+              style={styles.viewMoreProjectButton}
+              onPress={() => router.push('../shop')}
+            >
               <Text style={styles.viewMoreProjectButtonText}>View More Projects</Text>
             </TouchableOpacity>
           </View>
           <Video
-            source={require("@/assets/videos/testvideo.mp4")}
-            useNativeControls
-            resizeMode="cover"
-            style={{
-              width: "95%",
-              height: 200,
-              alignSelf: "center",
-              marginVertical: 15,
-              borderRadius: 12,
-              backgroundColor: "black",
-            }}
-          />
+              source={require("@/assets/videos/testvideo.mp4")}
+              useNativeControls
+              resizeMode={ResizeMode.COVER}
+              style={{
+                width: "95%",
+                height: 200,
+                alignSelf: "center",
+                marginVertical: 15,
+                borderRadius: 12,
+                backgroundColor: "black",
+              }}
+            />
           <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
             Mikey Bustos ft. Grand East Products
           </ThemedText>
@@ -144,18 +226,18 @@ export default function Homescreen() {
           </ThemedText>
 
           <Video
-            source={require("@/assets/videos/testvideo.mp4")}
-            useNativeControls
-            resizeMode="cover"
-            style={{
-              width: "95%",
-              height: 200,
-              alignSelf: "center",
-              marginVertical: 15,
-              borderRadius: 12,
-              backgroundColor: "black",
-            }}
-          />
+              source={require("../../assets/videos/testvideo.mp4")}
+              useNativeControls
+              resizeMode={ResizeMode.COVER}
+              style={{
+                width: "95%",
+                height: 200,
+                alignSelf: "center",
+                marginVertical: 15,
+                borderRadius: 12,
+                backgroundColor: "black",
+              }}
+            />
 
           <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
             Solenn Heusaff ft. Grand East Products
@@ -215,7 +297,7 @@ export default function Homescreen() {
       <View style={styles.blueBoxB}>
         <View style={styles.logoTitleB}>
               <Image
-            source={require('@/assets/images/grandeastlogo.png')}
+            source={require('@/assets/images/GRANDEASTLOGO.png')}
             style={styles.logo}
             resizeMode="contain"
           />
@@ -223,52 +305,84 @@ export default function Homescreen() {
           <ThemedText style={styles.sectionTitleB}>ABOUT</ThemedText>
           <ThemedText style={styles.sectionTitleB}>GRAND EAST</ThemedText>
           <View style={styles.redLine} />
-      </View>
+          <ThemedText style={styles.aboutGrandEast}>
+            At Grand East, we specialize in creating modern, durable, 
+            and stylish solutions that redefine residential and 
+            commercial spaces. With a passion for precision and a 
+            commitment to quality, our expert team delivers exceptional 
+            aluminum and glass installations that stand the test of time. 
+            Whether you're upgrading your home or transforming your business, 
+            we provide innovative designs that combine functionality with 
+            aesthetic appeal, ensuring your vision becomes a reality. </ThemedText>
 
-        
+            <View style={{ position: 'relative', width: 500, height: 200, marginTop: 20, marginBottom: 120, }}>
+              <Image
+                source={require('@/assets/images/inquireNOW.png')}
+                style={styles.inquireNOW}
+                resizeMode="contain"
+              />
+              <View style={{
+                position: 'absolute',
+                top: 30,
+                left: 0,
+                width: '100%',
+                alignItems: 'center',
+              }}>
+                <Text style={{ color: '#a81d1d', fontSize: 24, fontWeight: 'bold', textAlign: 'center' }}>
+                  Ready to elevate your space?
+                </Text>
+                <Text style={{ color: '#fff', fontSize: 18, fontStyle: 'italic', textAlign: 'center', marginTop: 2 }}>
+                  Inquire now for a custom solution!
+                </Text>
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#a81d1d',
+                    borderRadius: 4,
+                    paddingVertical: 12,
+                    paddingHorizontal: 32,
+                    marginTop: 24,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                  }}
+                  onPress={() => {
+                    // TODO: Add your action here (e.g., navigation or modal)
+                    alert('Inquire Now button pressed!');
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 22, fontWeight: 'bold', marginRight: 10 }}>
+                    INQUIRE NOW
+                  </Text>
+                  <Text style={{ color: '#fff', fontSize: 22 }}>📞</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+          </View>
 
       </ScrollView>
-      <View style={styles.redLowerBar}>
-        <View style={styles.sideIconsContainer}>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/home.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
+      <View style={styles.bottomNavBar}>
+          <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
+            <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
+            <Text style={styles.navLabel}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/inquire.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
+          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+            <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
+            <Text style={styles.navLabel}>Inquire</Text>
           </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={styles.circleButton}>
-          <Image
-            source={require('@/assets/images/catalogbutton.png')}
-            style={styles.catalogIcon}
-            resizeMode="contain"
-          />
-        </TouchableOpacity>
-        <View style={styles.sideIconsContainer}>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/service.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
+          <View style={styles.fabWrapper}>
+            <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
+              <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+            <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
+            <Text style={styles.navLabel}>Service</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.sideIconButton}>
-            <Image
-              source={require('@/assets/images/settings.png')}
-              style={styles.sideIcon}
-              resizeMode="contain"
-            />
+          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+            <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
+            <Text style={styles.navLabel}>Settings</Text>
           </TouchableOpacity>
         </View>
-      </View>
     </View>
 
     
@@ -288,16 +402,18 @@ whitebackground: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 15,
+    paddingHorizontal: 15,
+    paddingTop: 15,
+    paddingBottom: 10,
     backgroundColor: '#fdfdfdff',
   },
   logo: {
-    height: 70,
-    width: 200,
+    height: 60,
+    width: 170,
   },
   blueBox: {
-    height: '12%',
-    backgroundColor: '#1c202aff',
+    height: 220,
+    backgroundColor: '#1c202a',
     width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
@@ -309,6 +425,25 @@ whitebackground: {
         justifyContent: 'space-between',
         alignItems: 'center',
         paddingHorizontal: 20,
+  },
+  profileButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  profileIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#eee',
   },
   serviceContainer: {
     padding: 20,
@@ -328,12 +463,24 @@ whitebackground: {
     textAlign: 'center',
     color: '#a81d1dff',
   },
+  aboutGrandEast: {
+    fontSize: 18,
+    lineHeight: 20,
+    color: '#ffffffff',
+    textAlign: 'left',
+    marginTop: 20,
+  },
+  inquireNOW: {
+    marginTop: 20,
+    height: 200,
+    width: 500,
+  },
   redLine: {
     width: 120, 
     height: 7,
     backgroundColor: '#a02c2cff', 
     marginTop: 8,
-    marginBottom: 40,
+    marginBottom: 5,
     textAlign: 'left',
     alignSelf: 'flex-start',
   },
@@ -406,10 +553,10 @@ whitebackground: {
     borderRadius: 10,
     overflow: 'hidden',
     height: 180,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: '92%', // Make it responsive and fill most of the width
+    alignSelf: 'center',
     marginBottom: 16,
-    color: '#fff',
+    backgroundColor: '#eee',
   },
   imageButtonB: {
   flex: 1, 
@@ -426,36 +573,45 @@ whitebackground: {
     width: '100%',
     height: '100%',
     position: 'absolute',
+    top: 0,
+    left: 0,
   },
   imageButtonOverlay: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-  },
-  imageButtonTitle: {
-    color: '#fff',
-    fontSize: 32,
-    fontWeight: 'bold',
-    marginBottom: 16,
-    textShadowColor: '#000',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 4,
-  },
-  imageButtonBox: {
-    borderWidth: 1,
-    borderColor: '#fff',
-    borderRadius: 2,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    marginTop: 4,
-  },
-  imageButtonText: {
-    color: '#fff',
-    fontSize: 20,
-  },
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  width: '100%',
+  height: '100%',
+  justifyContent: 'center', // Center vertically
+  alignItems: 'center',     // Center horizontally
+  backgroundColor: 'rgba(0, 0, 0, 0.25)',
+  paddingHorizontal: 10,
+},
+imageButtonTitle: {
+  color: '#fff',
+  fontSize: 26,
+  fontWeight: 'bold',
+  textAlign: 'center',
+  textShadowColor: '#000',
+  textShadowOffset: { width: 1, height: 1 },
+  textShadowRadius: 4,
+  marginBottom: 10,
+},
+imageButtonBox: {
+  borderWidth: 1,
+  borderColor: '#fff',
+  borderRadius: 2,
+  paddingHorizontal: 14,
+  paddingVertical: 6,
+  backgroundColor: 'rgba(0,0,0,0.3)',
+  marginTop: 0,
+},
+imageButtonText: {
+  color: '#fff',
+  fontSize: 16,
+  fontWeight: '600',
+  textAlign: 'center',
+},
   redLowerBar: {
     height: '9%',
     width: '100%',
@@ -502,11 +658,12 @@ sideIconsContainer: {
     height: 32,
   },
   slideshowImage: {
-  width: 250,
-  height: 200,
-  borderRadius: 8, 
-  backgroundColor: '#eee', 
-},
+    width: '100%',
+    height: '100%',
+    borderRadius: 0, // Remove borderRadius for full fit
+    backgroundColor: '#eee',
+    alignSelf: 'center',
+  },
 featuredText: {
     color: '#fff',
     fontSize: 16,
@@ -556,4 +713,124 @@ viewMoreProjectButtonText: {
     paddingHorizontal: 10,
     fontSize: 13,
     },
+  bottomNavBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    backgroundColor: '#4f5f8aff',
+    height: 70,
+    paddingBottom: 8,
+    paddingTop: 8,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 10,
+  },
+  navItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navIcon: {
+    width: 45,
+    height: 45,
+    marginBottom: 2,
+  },
+  navLabel: {
+    fontSize: 11,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  fabWrapper: {
+    position: 'relative',
+    top: -28,
+    alignItems: 'center',
+    flex: 1,
+  },
+  fabButton: {
+    width: 65,
+    height: 65,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    borderWidth: 3,
+    borderColor: '#4c58c0ff',
+  },
+  fabIcon: {
+    width: 32,
+    height: 32,
+  },
+  qualityWheelContainer: {
+    width: '100%',
+    height: 40,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  qualityWheelItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: SCREEN_WIDTH * 0.3,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  dotContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 5,
+    marginHorizontal: 4,
+    backgroundColor: '#776d6dff',
+    opacity: 0.9,
+  },
+  activeDot: {
+    backgroundColor: '#a14535ff',
+    opacity: 1,
+  },
+  dotOverlay: {
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2,
+  },
+  qualityWheelBlueBox: {
+    backgroundColor: '#1c202a',
+    borderRadius: 10,
+    marginBottom: 16,
+    width: 400,
+    alignSelf: 'center',
+  },
+  qualityWheelFullBlue: {
+    width: '100%',
+    backgroundColor: '#1c2c53ff', // or your preferred blue
+    paddingVertical: 10,
+    marginBottom: 8,
+    alignSelf: 'stretch',
+    borderRadius: 0,
+  },
 });
