@@ -823,7 +823,15 @@ export default function ProductViewScreen() {
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id;
       if (!userId) {
-        Alert.alert('Not signed in', 'Please sign in to add to cart.');
+        Alert.alert(
+          'Login Required',
+          'Please login or create an account to add items to your cart.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Login', onPress: () => router.push('/login') },
+            { text: 'Sign Up', onPress: () => router.push('/register') }
+          ]
+        );
         return;
       }
 
