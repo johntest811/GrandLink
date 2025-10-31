@@ -1,6 +1,6 @@
 import { ThemedText } from '@/components/ThemedText';
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button, Dimensions, Animated } from 'react-native';
+import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button, Dimensions, Animated, Alert } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import { router, useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient'; 
@@ -68,17 +68,44 @@ function QualityWheel() {
 
 export default function Homescreen() {  
     const [index, setIndex] = useState(0);
+    const [isLoggedIn, setIsLoggedIn] = useState(false);
     const router = useRouter();
 
   const nextImage = () => setIndex((prev) => (prev + 1) % images.length);
   const prevImage = () => setIndex((prev) => (prev - 1 + images.length) % images.length);
 
   useEffect(() => {
-  const getUser = async () => {
+  const checkUser = async () => {
     const { data } = await supabase.auth.getUser();
+    setIsLoggedIn(!!data?.user);
   };
-  getUser();
+  checkUser();
+  
+  // Listen for auth changes
+  const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+    setIsLoggedIn(!!session);
+  });
+  
+  return () => {
+    authListener?.subscription.unsubscribe();
+  };
 }, []);
+
+  const handleProfilePress = async () => {
+    const { data } = await supabase.auth.getUser();
+    if (data?.user) {
+      router.push('../profile');
+    } else {
+      Alert.alert(
+        'Login Required',
+        'Please login to access your profile.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Login', onPress: () => router.push('/login') }
+        ]
+      );
+    }
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -99,7 +126,7 @@ export default function Homescreen() {
           />
           <TouchableOpacity
             style={styles.profileButton}
-            onPress={() => router.push('../profile')}
+            onPress={handleProfilePress}
           >
             <Image
               source={require('@/assets/images/profileicon.png')}

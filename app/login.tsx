@@ -22,23 +22,13 @@ export default function LoginScreen() {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   setLoading(false);
   if (error) {
-    console.log(error); // <-- Add this line for debugging
+    console.log(error);
     Alert.alert('Login Failed', error.message);
   } else {
-    router.replace('/(tabs)/homepage');
+    // After successful login, go back to where they came from or homepage
+    router.back();
   }
 };
-
-  useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
-        router.replace('/(tabs)/homepage');
-      }
-    });
-    return () => {
-      authListener?.subscription.unsubscribe();
-    };
-  }, []);
 
   const handleGoogleLogin = async () => {
   const redirectTo = 'https://auth.expo.io/@your-username/your-app-slug'; // Replace with your Expo redirect URI

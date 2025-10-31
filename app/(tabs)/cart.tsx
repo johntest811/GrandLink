@@ -29,12 +29,14 @@ type CartItem = {
   price?: number;
   image?: string;
   inserted_at?: string;
+  selected?: boolean;
 };
 
 export default function CartScreen() {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const router = useRouter();
 
   // Load cart when component mounts
@@ -153,7 +155,47 @@ export default function CartScreen() {
     }
   };
 
+  const toggleItemSelection = (id: string) => {
+    setSelectedItems(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedItems.size === cartItems.length) {
+      setSelectedItems(new Set());
+    } else {
+      setSelectedItems(new Set(cartItems.map(item => item.id)));
+    }
+  };
+
+  const proceedToCheckout = async () => {
+    if (selectedItems.size === 0) {
+      Alert.alert('No items selected', 'Please select at least one item to checkout.');
+      return;
+    }
+    
+    // Store selected item IDs and navigate to payment
+    // Payment page will read these IDs to show only selected items
+    const selectedIds = Array.from(selectedItems);
+    
+    // Navigate with selected IDs as a parameter
+    router.push({
+      pathname: '../payment',
+      params: { selectedIds: JSON.stringify(selectedIds) }
+    });
+  };
+
   const cartTotal = cartItems.reduce((s, it) => s + (it.price ?? 0) * (it.qty ?? 1), 0);
+  const selectedTotal = cartItems
+    .filter(item => selectedItems.has(item.id))
+    .reduce((s, it) => s + (it.price ?? 0) * (it.qty ?? 1), 0);
 
   return (
     <View style={styles.container}>
@@ -181,6 +223,23 @@ export default function CartScreen() {
         </View>
       ) : (
         <>
+          {/* Select All Header */}
+          <View style={styles.selectAllContainer}>
+            <TouchableOpacity 
+              style={styles.selectAllRow} 
+              onPress={toggleSelectAll}
+            >
+              <View style={styles.checkbox}>
+                {selectedItems.size === cartItems.length && (
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                )}
+              </View>
+              <Text style={styles.selectAllText}>
+                Select All ({selectedItems.size}/{cartItems.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           <FlatList
             data={cartItems}
             keyExtractor={(i) => i.id}
@@ -195,6 +254,17 @@ export default function CartScreen() {
             }
             renderItem={({ item }) => (
               <View style={styles.cartItem}>
+                <TouchableOpacity 
+                  style={styles.checkboxContainer}
+                  onPress={() => toggleItemSelection(item.id)}
+                >
+                  <View style={[styles.checkbox, selectedItems.has(item.id) && styles.checkboxSelected]}>
+                    {selectedItems.has(item.id) && (
+                      <Ionicons name="checkmark" size={18} color="#fff" />
+                    )}
+                  </View>
+                </TouchableOpacity>
+
                 {item.image ? (
                   <Image source={{ uri: item.image }} style={styles.cartItemImage} />
                 ) : (
@@ -234,11 +304,24 @@ export default function CartScreen() {
           {/* Footer with Total and Checkout */}
           <View style={styles.footer}>
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Total:</Text>
-              <Text style={styles.totalAmount}>₱{cartTotal.toFixed(2)}</Text>
+              <View>
+                <Text style={styles.totalLabel}>
+                  Total ({selectedItems.size} {selectedItems.size === 1 ? 'item' : 'items'}):
+                </Text>
+                {selectedItems.size < cartItems.length && (
+                  <Text style={styles.subtotalText}>Cart total: ₱{cartTotal.toFixed(2)}</Text>
+                )}
+              </View>
+              <Text style={styles.totalAmount}>₱{selectedTotal.toFixed(2)}</Text>
             </View>
-            <TouchableOpacity style={styles.checkoutButton} onPress={() => router.push('../payment')}>
-              <Text style={styles.checkoutButtonText}>Proceed to Checkout</Text>
+            <TouchableOpacity 
+              style={[styles.checkoutButton, selectedItems.size === 0 && styles.checkoutButtonDisabled]} 
+              onPress={proceedToCheckout}
+              disabled={selectedItems.size === 0}
+            >
+              <Text style={styles.checkoutButtonText}>
+                Proceed to Checkout ({selectedItems.size})
+              </Text>
             </TouchableOpacity>
           </View>
         </>
@@ -294,6 +377,41 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#222',
+  },
+  selectAllContainer: {
+    backgroundColor: '#f9f9f9',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  selectAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  selectAllText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#222',
+    marginLeft: 12,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#a81d1d',
+    borderColor: '#a81d1d',
+  },
+  checkboxContainer: {
+    marginRight: 12,
+    justifyContent: 'center',
   },
   centerContent: {
     flex: 1,
@@ -414,11 +532,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#a81d1d',
   },
+  subtotalText: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 4,
+  },
   checkoutButton: {
     backgroundColor: '#a81d1d',
     paddingVertical: 16,
     borderRadius: 8,
     alignItems: 'center',
+  },
+  checkoutButtonDisabled: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
   },
   checkoutButtonText: {
     color: '#fff',

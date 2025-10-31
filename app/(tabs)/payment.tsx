@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 
 const { width } = Dimensions.get('window');
@@ -32,36 +32,78 @@ type CartItem = {
   image?: string;
   category?: string;
   material?: string;
-  sku?: string;
 };
 
 export default function PaymentScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
   
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [address, setAddress] = useState<string>('');
+  const [savedAddressData, setSavedAddressData] = useState<any>(null);
   const [branch, setBranch] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('paymongo');
+  const [discountCode, setDiscountCode] = useState<string>('');
+  const [appliedDiscount, setAppliedDiscount] = useState<any>(null);
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+  const [colorCustomization, setColorCustomization] = useState(false);
+  const [customColor, setCustomColor] = useState('');
 
   const RESERVATION_FEE = 500;
+  const COLOR_CUSTOMIZATION_PRICE = 2500;
 
   useEffect(() => {
     loadCartItems();
-  }, []);
+    loadUserAddress();
+  }, []); // Run only once on mount
+
+  const loadUserAddress = async () => {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData?.user) return;
+
+      const { data, error } = await supabase
+        .from('addresses')
+        .select('*')
+        .eq('user_id', authData.user.id)
+        .eq('is_default', true)
+        .maybeSingle();
+
+      if (data) {
+        setSavedAddressData(data);
+        // Format the full address
+        const fullAddress = `${data.full_name || ''}\n${data.phone || ''}\n${data.address || ''}`.trim();
+        setAddress(fullAddress);
+      }
+    } catch (e: any) {
+      console.error('Failed to load address', e);
+    }
+  };
 
   const loadCartItems = async () => {
     try {
       setLoading(true);
       const { data: authData } = await supabase.auth.getUser();
+      console.log('Auth data:', authData?.user?.id);
       if (!authData?.user) {
         Alert.alert('Not signed in', 'Please sign in to continue.');
         router.replace('/login');
         return;
       }
       
-      const { data, error } = await supabase
+      // Get selected item IDs from navigation params
+      let selectedIds: string[] = [];
+      if (params.selectedIds) {
+        try {
+          selectedIds = JSON.parse(params.selectedIds as string);
+        } catch (e) {
+          console.error('Failed to parse selectedIds', e);
+        }
+      }
+      
+      let query = supabase
         .from('user_items')
         .select(`
           id,
@@ -72,14 +114,20 @@ export default function PaymentScreen() {
             name,
             image1,
             category,
-            material,
-            sku
+            material
           )
         `)
         .eq('user_id', authData.user.id)
         .eq('item_type', 'order')
         .eq('status', 'active')
         .order('created_at', { ascending: false });
+      
+      // If specific items were selected, filter by those IDs
+      if (selectedIds.length > 0) {
+        query = query.in('id', selectedIds);
+      }
+      
+      const { data, error } = await query;
       
       if (error) throw error;
       
@@ -93,7 +141,6 @@ export default function PaymentScreen() {
         image: item.products?.image1 || null,
         category: item.products?.category || '',
         material: item.products?.material || '',
-        sku: item.products?.sku || '',
       }));
       setCartItems(items as CartItem[]);
       
@@ -110,14 +157,320 @@ export default function PaymentScreen() {
     }
   };
 
-  const totalProductValue = useMemo(() => {
+  const subtotal = useMemo(() => {
     return cartItems.reduce((sum, item) => sum + (item.price ?? 0) * (item.qty ?? 1), 0);
   }, [cartItems]);
+
+  const addOnsTotal = useMemo(() => {
+    return colorCustomization ? COLOR_CUSTOMIZATION_PRICE : 0;
+  }, [colorCustomization]);
+
+  const subtotalWithAddOns = useMemo(() => {
+    return subtotal + addOnsTotal;
+  }, [subtotal, addOnsTotal]);
+
+  const discountAmount = useMemo(() => {
+    if (!appliedDiscount) {
+      console.log('Discount Amount: No discount applied');
+      return 0;
+    }
+    
+    const value = parseFloat(appliedDiscount.value) || 0;
+    console.log('Discount calculation - Type:', appliedDiscount.type, 'Value:', value, 'SubtotalWithAddOns:', subtotalWithAddOns);
+    
+    let discount = 0;
+    if (appliedDiscount.type === 'percent') {
+      discount = (subtotalWithAddOns * value) / 100;
+      console.log('Percent discount calculated:', discount);
+    } else if (appliedDiscount.type === 'fixed') {
+      discount = value;
+      console.log('Fixed discount applied:', discount);
+    }
+    
+    console.log('Final discount amount:', discount);
+    return discount;
+  }, [appliedDiscount, subtotalWithAddOns]);
+
+  const totalProductValue = subtotalWithAddOns - discountAmount;
+  
+  console.log('=== PRICE BREAKDOWN ===');
+  console.log('Subtotal:', subtotal);
+  console.log('Add-ons:', addOnsTotal);
+  console.log('Subtotal with add-ons:', subtotalWithAddOns);
+  console.log('Discount amount:', discountAmount);
+  console.log('Total product value:', totalProductValue);
+  console.log('=======================');
   
   const remainingBalance = Math.max(0, totalProductValue - RESERVATION_FEE);
 
   const formatCurrency = (v: number) =>
     v.toLocaleString(undefined, { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 });
+
+  const applyDiscountCode = async () => {
+    if (!discountCode.trim()) {
+      Alert.alert('Invalid Code', 'Please enter a discount code.');
+      return;
+    }
+
+    try {
+      setApplyingDiscount(true);
+      
+      const codeToCheck = discountCode.trim();
+      console.log('========== DISCOUNT CODE DEBUG ==========');
+      console.log('1. Input code:', codeToCheck);
+      console.log('2. Uppercase code:', codeToCheck.toUpperCase());
+      
+      // First, try to get all discount codes to test RLS
+      const { data: allCodes, error: allError } = await supabase
+        .from('discount_codes')
+        .select('code, active');
+      
+      console.log('3. All discount codes in database:', allCodes);
+      console.log('4. RLS Error (if any):', allError);
+      
+      // Try exact match first (case-insensitive)
+      const { data, error } = await supabase
+        .from('discount_codes')
+        .select('*')
+        .ilike('code', codeToCheck)
+        .maybeSingle();
+
+      console.log('5. Query result:', data);
+      console.log('6. Query error:', error);
+
+      if (error) {
+        console.error('Discount query error:', error);
+        Alert.alert('Error', `Database error: ${error.message}\n\nPlease check if discount_codes table exists and has proper RLS policies.`);
+        return;
+      }
+
+      if (!data) {
+        console.log('7. No matching code found in database');
+        Alert.alert('Invalid Code', `Discount code "${codeToCheck}" not found in database.\n\nAvailable codes: ${allCodes?.map(c => c.code).join(', ') || 'None'}`);
+        return;
+      }
+
+      console.log('8. Discount data found:', JSON.stringify(data, null, 2));
+      console.log('9. Active field value:', data.active, 'Type:', typeof data.active);
+      console.log('10. Type field value:', data.type, 'Type:', typeof data.type);
+      console.log('11. Value field value:', data.value, 'Type:', typeof data.value);
+
+      // Check if code is active
+      const isActive = data.active === true || data.active === 'true' || data.active === 1 || data.active === '1';
+      console.log('12. Is active check result:', isActive);
+      
+      if (!isActive) {
+        Alert.alert('Invalid Code', 'This discount code is no longer active.');
+        return;
+      }
+
+      // Check if discount has started
+      if (data.starts_at) {
+        const startDate = new Date(data.starts_at);
+        const now = new Date();
+        console.log('13. Start date check:', startDate, 'vs Now:', now, 'Started?:', startDate <= now);
+        if (startDate > now) {
+          Alert.alert('Invalid Code', 'This discount code is not yet active.');
+          return;
+        }
+      }
+
+      // Check expiry
+      if (data.expires_at) {
+        const expiryDate = new Date(data.expires_at);
+        const now = new Date();
+        console.log('14. Expiry check:', expiryDate, 'vs Now:', now, 'Expired?:', expiryDate < now);
+        if (expiryDate < now) {
+          Alert.alert('Invalid Code', 'This discount code has expired.');
+          return;
+        }
+      }
+
+      // Check if usage limit has been reached
+      if (data.max_uses && data.max_uses > 0) {
+        const usedCount = parseInt(data.used_count) || 0;
+        const maxUses = parseInt(data.max_uses) || 0;
+        console.log('15. Usage check:', usedCount, '>=', maxUses, '?', usedCount >= maxUses);
+        if (usedCount >= maxUses) {
+          Alert.alert('Invalid Code', 'This discount code has reached its usage limit.');
+          return;
+        }
+      }
+
+      // Check minimum purchase requirement
+      const minSubtotal = parseFloat(data.min_subtotal || '0') || 0;
+      console.log('16. Min subtotal check:', minSubtotal, 'vs', subtotalWithAddOns, 'Pass?:', subtotalWithAddOns >= minSubtotal);
+      if (minSubtotal > 0 && subtotalWithAddOns < minSubtotal) {
+        Alert.alert(
+          'Minimum Purchase Not Met',
+          `This code requires a minimum purchase of ${formatCurrency(minSubtotal)}.\n\nYour current total: ${formatCurrency(subtotalWithAddOns)}`
+        );
+        return;
+      }
+
+      console.log('17. ✅ All checks passed! Applying discount...');
+      setAppliedDiscount(data);
+      
+      const discountValue = parseFloat(data.value) || 0;
+      const discountType = data.type === 'percent' ? 'percentage' : 'fixed amount';
+      Alert.alert('Success!', `Discount code "${data.code}" applied!\n\n${discountValue}${data.type === 'percent' ? '%' : ' PHP'} ${discountType} discount`);
+      console.log('========== DISCOUNT APPLIED ==========');
+    } catch (e: any) {
+      console.error('Failed to apply discount:', e);
+      Alert.alert('Error', `Failed to apply discount code: ${e.message || 'Unknown error'}\n\nCheck console for details.`);
+    } finally {
+      setApplyingDiscount(false);
+    }
+  };
+
+  const removeDiscount = () => {
+    setAppliedDiscount(null);
+    setDiscountCode('');
+  };
+
+  const [processingPayment, setProcessingPayment] = useState(false);
+
+  const createPayMongoCheckout = async () => {
+    try {
+      setProcessingPayment(true);
+
+      // Get authenticated user
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData?.user) {
+        Alert.alert('Error', 'Please sign in to continue.');
+        return;
+      }
+
+      console.log('Creating PayMongo checkout...');
+      console.log('Total amount:', totalProductValue);
+
+      // Prepare order details
+      const orderDetails = {
+        user_id: authData.user.id,
+        items: cartItems.map(item => ({
+          id: item.id,
+          product_id: item.product_id,
+          name: item.name,
+          quantity: item.qty,
+          price: item.price,
+        })),
+        address: savedAddressData || { address },
+        branch,
+        notes,
+        add_ons: colorCustomization ? {
+          color_customization: {
+            enabled: true,
+            color: customColor,
+            price: COLOR_CUSTOMIZATION_PRICE,
+          }
+        } : null,
+        discount: appliedDiscount ? {
+          code: appliedDiscount.code,
+          type: appliedDiscount.type,
+          value: appliedDiscount.value,
+          amount: discountAmount,
+        } : null,
+        subtotal,
+        reservation_fee: RESERVATION_FEE,
+        total_amount: totalProductValue,
+      };
+
+      // Create PayMongo checkout session
+      const PAYMONGO_SECRET_KEY = 'sk_test_bbkRwyuhZ2dsW6atv6XLLJ7A'; // From your .env.local
+      const PAYMONGO_API = 'https://api.paymongo.com/v1/checkout_sessions';
+
+      // Build description
+      let description = `${cartItems.length} item(s)`;
+      if (colorCustomization) description += ' with color customization';
+      if (appliedDiscount) description += ` - Discount: ${appliedDiscount.code}`;
+
+      const checkoutData = {
+        data: {
+          attributes: {
+            send_email_receipt: true,
+            show_description: true,
+            show_line_items: true,
+            line_items: [
+              {
+                currency: 'PHP',
+                amount: Math.round(totalProductValue * 100), // Convert to centavos (cents)
+                name: 'GrandLink Order',
+                quantity: 1,
+                description: description,
+              }
+            ],
+            payment_method_types: ['gcash', 'paymaya', 'card', 'grab_pay'],
+            description: `Order for ${authData.user.email || 'customer'}`,
+            reference_number: `GE-${Date.now()}`,
+            metadata: {
+              user_id: authData.user.id,
+              branch: branch,
+              has_discount: appliedDiscount ? 'yes' : 'no',
+              has_addon: colorCustomization ? 'yes' : 'no',
+            }
+          }
+        }
+      };
+
+      console.log('Sending request to PayMongo...');
+
+      const response = await fetch(PAYMONGO_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${btoa(PAYMONGO_SECRET_KEY + ':')}`,
+        },
+        body: JSON.stringify(checkoutData),
+      });
+
+      const result = await response.json();
+      console.log('PayMongo response:', result);
+
+      if (result.data && result.data.attributes && result.data.attributes.checkout_url) {
+        const checkoutUrl = result.data.attributes.checkout_url;
+        const sessionId = result.data.id;
+
+        console.log('Checkout URL:', checkoutUrl);
+        console.log('Payment Session ID:', sessionId);
+
+        // Open PayMongo checkout in browser
+        const { Linking } = require('react-native');
+        const canOpen = await Linking.canOpenURL(checkoutUrl);
+        
+        if (canOpen) {
+          await Linking.openURL(checkoutUrl);
+          
+          Alert.alert(
+            'Payment Page Opened',
+            'Complete your payment in the browser. You can return to the app after payment is complete.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  // Navigate back or to orders page
+                  router.back();
+                }
+              }
+            ]
+          );
+        } else {
+          Alert.alert('Error', 'Unable to open payment page. Please try again.');
+        }
+      } else if (result.errors) {
+        console.error('PayMongo errors:', result.errors);
+        const errorMsg = result.errors[0]?.detail || 'Failed to create payment session';
+        Alert.alert('Payment Error', errorMsg);
+      } else {
+        console.error('Unexpected PayMongo response:', result);
+        Alert.alert('Error', 'Failed to create payment session. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('Payment error:', error);
+      Alert.alert('Error', `Payment failed: ${error.message || 'Unknown error'}`);
+    } finally {
+      setProcessingPayment(false);
+    }
+  };
 
   const onReserve = () => {
     if (!address) {
@@ -128,25 +481,13 @@ export default function PaymentScreen() {
       Alert.alert('Missing info', 'Please select a store branch.');
       return;
     }
+    if (colorCustomization && !customColor.trim()) {
+      Alert.alert('Missing info', 'Please specify the color for customization.');
+      return;
+    }
 
-    // Replace with real reservation / payment flow
-    const itemCount = cartItems.reduce((sum, item) => sum + (item.qty ?? 1), 0);
-    Alert.alert(
-      'Confirm Order',
-      `You will pay ${formatCurrency(totalProductValue)} for ${itemCount} item(s).\n\nPayment method: ${
-        paymentMethod === 'paymongo' ? 'PayMongo (GCash/PayMaya)' : 'PayPal'
-      }`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Proceed',
-          onPress: () => {
-            // TODO: call backend / supabase to create order & redirect to payment
-            Alert.alert('Order Placed', 'Order created successfully (mock).');
-          },
-        },
-      ],
-    );
+    // Proceed directly to payment
+    createPayMongoCheckout();
   };
 
   return (
@@ -182,7 +523,6 @@ export default function PaymentScreen() {
                     )}
                     <View style={styles.cartItemDetails}>
                       <Text style={styles.cartItemName} numberOfLines={2}>{item.name}</Text>
-                      {item.sku && <Text style={styles.cartItemSku}>SKU: {item.sku}</Text>}
                       <View style={styles.cartItemPriceRow}>
                         <Text style={styles.cartItemPrice}>₱{(item.price ?? 0).toFixed(2)}</Text>
                         <Text style={styles.cartItemQty}>x {item.qty ?? 1}</Text>
@@ -198,12 +538,39 @@ export default function PaymentScreen() {
                 <Text style={styles.reserveTitle}>Delivery & Payment Details</Text>
 
               <Text style={styles.formLabel}>Delivery Address *</Text>
-              <TextInput
-                placeholder="Enter delivery address"
-                style={styles.input}
-                value={address}
-                onChangeText={setAddress}
-              />
+              {savedAddressData && (
+                <View style={styles.savedAddressCard}>
+                  <View style={styles.savedAddressHeader}>
+                    <Ionicons name="location" size={18} color="#a81d1d" />
+                    <Text style={styles.savedAddressTitle}>Saved Address</Text>
+                  </View>
+                  <Text style={styles.savedAddressText}>{savedAddressData.full_name}</Text>
+                  <Text style={styles.savedAddressText}>{savedAddressData.phone}</Text>
+                  <Text style={styles.savedAddressText}>{savedAddressData.address}</Text>
+                  <TouchableOpacity 
+                    style={styles.changeAddressBtn}
+                    onPress={() => {
+                      Alert.alert(
+                        'Change Address',
+                        'Go to Profile > My Address to update your saved address.',
+                        [{ text: 'OK' }]
+                      );
+                    }}
+                  >
+                    <Text style={styles.changeAddressBtnText}>Change Address</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {!savedAddressData && (
+                <TextInput
+                  placeholder="Enter delivery address or save one in your profile"
+                  style={[styles.input, styles.textArea]}
+                  value={address}
+                  onChangeText={setAddress}
+                  multiline
+                  numberOfLines={3}
+                />
+              )}
 
               <Text style={[styles.formLabel, { marginTop: 12 }]}>Store Branch *</Text>
               <View style={styles.pickerWrap}>
@@ -225,6 +592,75 @@ export default function PaymentScreen() {
                 onChangeText={setNotes}
               />
 
+              <Text style={[styles.formLabel, { marginTop: 12 }]}>Add-ons</Text>
+              <TouchableOpacity 
+                style={styles.addOnRow} 
+                onPress={() => {
+                  setColorCustomization(!colorCustomization);
+                  if (!colorCustomization) {
+                    setCustomColor('');
+                  }
+                }}
+              >
+                <View style={styles.checkboxContainer}>
+                  <View style={[styles.checkbox, colorCustomization && styles.checkboxChecked]}>
+                    {colorCustomization && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={styles.addOnLabel}>
+                    Color Customization (+{formatCurrency(COLOR_CUSTOMIZATION_PRICE)} per unit)
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              {colorCustomization && (
+                <TextInput
+                  placeholder="Enter desired color (e.g., blue, red, custom RGB)"
+                  style={[styles.input, { marginTop: 8, marginBottom: 6 }]}
+                  value={customColor}
+                  onChangeText={setCustomColor}
+                />
+              )}
+
+              <Text style={[styles.formLabel, { marginTop: 12 }]}>Discount Code</Text>
+              {appliedDiscount ? (
+                <View style={styles.appliedDiscountContainer}>
+                  <View style={styles.appliedDiscountInfo}>
+                    <Ionicons name="pricetag" size={20} color="#0b9f34" />
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={styles.appliedDiscountCode}>{appliedDiscount.code}</Text>
+                      <Text style={styles.appliedDiscountDesc}>
+                        {appliedDiscount.type === 'percent' 
+                          ? `${appliedDiscount.value}% off` 
+                          : `${formatCurrency(parseFloat(appliedDiscount.value))} off`}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={removeDiscount} style={styles.removeDiscountBtn}>
+                      <Ionicons name="close-circle" size={24} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.discountInputRow}>
+                  <TextInput
+                    placeholder="Enter discount code"
+                    style={[styles.input, styles.discountInput]}
+                    value={discountCode}
+                    onChangeText={setDiscountCode}
+                    autoCapitalize="characters"
+                  />
+                  <TouchableOpacity 
+                    style={[styles.applyDiscountBtn, applyingDiscount && styles.applyDiscountBtnDisabled]} 
+                    onPress={applyDiscountCode}
+                    disabled={applyingDiscount}
+                  >
+                    {applyingDiscount ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.applyDiscountBtnText}>Apply</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+
               <Text style={[styles.formLabel, { marginTop: 12 }]}>Payment Method</Text>
               <View style={styles.paymentMethods}>
                 <TouchableOpacity style={styles.radioRow} onPress={() => setPaymentMethod('paymongo')}>
@@ -242,12 +678,39 @@ export default function PaymentScreen() {
               <View style={styles.summaryCard}>
                 <Text style={styles.summaryTitle}>Order Summary</Text>
                 <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Subtotal ({cartItems.reduce((s, i) => s + (i.qty ?? 1), 0)} items):</Text>
-                  <Text style={styles.summaryValue}>{formatCurrency(totalProductValue)}</Text>
+                  <Text style={styles.summaryLabel}>Product Subtotal ({cartItems.reduce((s, i) => s + (i.qty ?? 1), 0)} items):</Text>
+                  <Text style={styles.summaryValue}>{formatCurrency(subtotal)}</Text>
                 </View>
+                {colorCustomization && (
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>
+                      Add-ons:
+                    </Text>
+                    <Text style={styles.summaryValue}>
+                      {formatCurrency(addOnsTotal)}
+                    </Text>
+                  </View>
+                )}
+                {colorCustomization && customColor && (
+                  <View style={styles.addOnDetailRow}>
+                    <Text style={styles.addOnDetailText}>
+                      • Color Customization - {formatCurrency(COLOR_CUSTOMIZATION_PRICE)} ({customColor})
+                    </Text>
+                  </View>
+                )}
+                {appliedDiscount && (
+                  <View style={styles.summaryRow}>
+                    <Text style={[styles.summaryLabel, { color: '#0b9f34' }]}>
+                      Discount ({appliedDiscount.code}):
+                    </Text>
+                    <Text style={[styles.summaryValue, { color: '#0b9f34' }]}>
+                      -{formatCurrency(discountAmount)}
+                    </Text>
+                  </View>
+                )}
                 <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Delivery Fee:</Text>
-                  <Text style={styles.summaryValue}>TBD</Text>
+                  <Text style={styles.summaryLabel}>Reservation Fee:</Text>
+                  <Text style={styles.summaryValue}>{formatCurrency(RESERVATION_FEE)}</Text>
                 </View>
                 <View style={[styles.summaryRow, { borderTopWidth: 1, borderTopColor: '#eee', paddingTop: 8, marginTop: 8 }]}>
                   <Text style={[styles.summaryLabel, { fontWeight: '700', fontSize: 16 }]}>Total:</Text>
@@ -256,8 +719,19 @@ export default function PaymentScreen() {
                   </Text>
                 </View>
 
-                <TouchableOpacity style={styles.reserveBtn} onPress={onReserve}>
-                  <Text style={styles.reserveBtnText}>Place Order & Pay</Text>
+                <TouchableOpacity 
+                  style={[styles.reserveBtn, processingPayment && styles.reserveBtnDisabled]} 
+                  onPress={onReserve}
+                  disabled={processingPayment}
+                >
+                  {processingPayment ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <ActivityIndicator size="small" color="#fff" />
+                      <Text style={styles.reserveBtnText}>Processing...</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.reserveBtnText}>Place Order & Pay</Text>
+                  )}
                 </TouchableOpacity>
               </View>
 
@@ -391,8 +865,22 @@ const styles = StyleSheet.create({
   qtyInput: { marginHorizontal: 12, borderBottomWidth: Platform.OS === 'web' ? 0 : 1, borderColor: '#ddd', padding: 8, width: 72, textAlign: 'center', borderRadius: 6 },
 
   input: { borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 10, backgroundColor: '#fff', marginBottom: 6 },
-  pickerWrap: { borderWidth: 1, borderColor: '#eee', borderRadius: 8, overflow: 'hidden', marginBottom: 6 },
-  picker: { height: 44, width: '100%' },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  pickerWrap: { 
+    borderWidth: 1, 
+    borderColor: '#eee', 
+    borderRadius: 8, 
+    overflow: 'hidden', 
+    marginBottom: 6,
+    justifyContent: 'center',
+  },
+  picker: { 
+    height: 50, 
+    width: '100%',
+  },
   dimRow: { flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: 6 },
   dimInput: { flex: 1 },
 
@@ -409,5 +897,143 @@ const styles = StyleSheet.create({
   summaryValue: { fontWeight: '700' },
 
   reserveBtn: { marginTop: 12, backgroundColor: '#a81d1d', paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+  reserveBtnDisabled: { backgroundColor: '#ccc', opacity: 0.7 },
   reserveBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+
+  // Discount code styles
+  discountInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  discountInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  applyDiscountBtn: {
+    backgroundColor: '#a81d1d',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    minWidth: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  applyDiscountBtnDisabled: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
+  },
+  applyDiscountBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  appliedDiscountContainer: {
+    backgroundColor: '#f0f9f4',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#c6f6d5',
+  },
+  appliedDiscountInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  appliedDiscountCode: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0b9f34',
+  },
+  appliedDiscountDesc: {
+    fontSize: 13,
+    color: '#2d7a4a',
+    marginTop: 2,
+  },
+  removeDiscountBtn: {
+    padding: 4,
+  },
+  savedAddressCard: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  savedAddressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  savedAddressTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#a81d1d',
+    marginLeft: 6,
+  },
+  savedAddressText: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 4,
+  },
+  changeAddressBtn: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  changeAddressBtnText: {
+    fontSize: 13,
+    color: '#a81d1d',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  // Add-ons styles
+  addOnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#ccc',
+    marginRight: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  checkboxChecked: {
+    backgroundColor: '#a81d1d',
+    borderColor: '#a81d1d',
+  },
+  addOnLabel: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
+    flex: 1,
+  },
+  addOnDetailRow: {
+    paddingVertical: 4,
+    paddingLeft: 8,
+    marginTop: -4,
+    marginBottom: 4,
+  },
+  addOnDetailText: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+  },
 });
