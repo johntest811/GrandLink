@@ -1,0 +1,14 @@
+import BottomNavBar from "../../components/BottomNavBar";      add this import
+
+export default function InquireScreen() {
+  return (
+    <View style={{ flex: 1 }}>
+      {/* your page UI here */}
+
+      at the bootm before /view
+
+
+      <BottomNavBar />      add this
+    </View>
+  );
+}

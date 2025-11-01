@@ -4,6 +4,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
 import { GLView } from 'expo-gl';
+import { useAppContext } from '../../context/AppContext';
+
 import { ExpoWebGLRenderingContext } from 'expo-gl';
 // @ts-ignore
 import * as THREE from 'three';
@@ -22,6 +24,7 @@ export default function ProductViewScreen() {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [viewerVisible, setViewerVisible] = useState(false);
   const [modelError, setModelError] = useState(false);
+  const { darkMode } = useAppContext();
 
   // Weather state
   const [weatherMode, setWeatherMode] = useState<'sunny' | 'rainy' | 'foggy' | 'night'>('sunny');
@@ -884,7 +887,12 @@ export default function ProductViewScreen() {
   })();
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#fff' }}>
+    <View
+      style={[
+        { flex: 1 },
+        { backgroundColor: darkMode ? "#121212" : "#fff" },
+      ]}
+    >
       {/* Top Bar */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.back()}>
@@ -893,6 +901,8 @@ export default function ProductViewScreen() {
         <Text style={styles.topBarTitle}>Product Details</Text>
         <View style={{ width: 28 }} /> {/* Spacer for symmetry */}
       </View>
+
+      
 
       <ScrollView contentContainerStyle={{ alignItems: 'center', paddingBottom: 120 }}>
         <View style={styles.productBox}>

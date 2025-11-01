@@ -5,6 +5,7 @@ import { Video, ResizeMode } from 'expo-av';
 import { router, useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient'; 
 import { blue } from 'react-native-reanimated/lib/typescript/Colors';
+import { useAppContext } from "../../context/AppContext";
 
 const images = [
   require('@/assets/images/homeimage1.png'),
@@ -69,6 +70,7 @@ function QualityWheel() {
 export default function Homescreen() {  
     const [index, setIndex] = useState(0);
     const router = useRouter();
+    const { darkMode } = useAppContext();
 
   const nextImage = () => setIndex((prev) => (prev + 1) % images.length);
   const prevImage = () => setIndex((prev) => (prev - 1 + images.length) % images.length);
@@ -88,7 +90,8 @@ export default function Homescreen() {
   }, []);
 
   return (
-    <View style={styles.whitebackground}>
+  <View style={[styles.whitebackground, darkMode && { backgroundColor: '#0d1117' }]}>
+
     <View style={{ flex: 1 }}>
       <ScrollView style={{ flex: 1 }}>
         <View style={styles.upperBar}>
@@ -193,7 +196,8 @@ export default function Homescreen() {
           </View>
         </TouchableOpacity>
         
-        <View style={styles.blueBoxB}>
+        <View style={[styles.blueBoxB, darkMode && { backgroundColor: '#161b22' }]}>
+
           <View style={{ flexDirection: "row", paddingLeft: 10, paddingTop: 20, alignItems: "center" }}>
             <Text style={styles.featuredText}>Featured Projects</Text>
             <TouchableOpacity
@@ -216,7 +220,8 @@ export default function Homescreen() {
                 backgroundColor: "black",
               }}
             />
-          <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
+          <ThemedText style={{ color: darkMode ? "#e6e6e6" : "black", fontSize: 18, fontWeight: 'bold' }}>
+
             Mikey Bustos ft. Grand East Products
           </ThemedText>
           <ThemedText style={{ color: "white", fontSize: 10, textAlign: "left", marginBottom: 3 }}>
@@ -294,7 +299,8 @@ export default function Homescreen() {
             <View style={styles.redLineA} />
       </View>
 
-      <View style={styles.blueBoxB}>
+      <View style={[styles.blueBoxB, darkMode && { backgroundColor: '#161b22' }]}>
+
         <View style={styles.logoTitleB}>
               <Image
             source={require('@/assets/images/GRANDEASTLOGO.png')}
@@ -365,7 +371,7 @@ export default function Homescreen() {
             <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
             <Text style={styles.navLabel}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+          <TouchableOpacity style={styles.navItem} onPress={() => router.push('../shop')}>
             <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
             <Text style={styles.navLabel}>Inquire</Text>
           </TouchableOpacity>
@@ -378,7 +384,7 @@ export default function Homescreen() {
             <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
             <Text style={styles.navLabel}>Service</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
+          <TouchableOpacity style={styles.navItem} onPress={() => router.push('../setting')}>
             <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
             <Text style={styles.navLabel}>Settings</Text>
           </TouchableOpacity>

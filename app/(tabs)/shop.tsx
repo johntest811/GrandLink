@@ -1,8 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Image, TextInput, TouchableOpacity, ScrollView, StyleSheet, Modal } from 'react-native';
+import {
+  View,
+  Text,
+  Image,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
+import { useAppContext } from '../../context/AppContext';
 
 const filterOptions = [
   'Doors',
@@ -18,52 +27,51 @@ const filterOptions = [
 export default function ShopScreen() {
   const router = useRouter();
   const { filter } = useLocalSearchParams();
+  const { darkMode } = useAppContext(); 
+
   const [data, setData] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filterVisible, setFilterVisible] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Fetch data
   useEffect(() => {
     const fetchData = async () => {
-      const { data, error } = await supabase
-        .from('products') 
-        .select('*');
+      const { data, error } = await supabase.from('products').select('*');
       if (error) setError(error.message);
       else setData(data || []);
     };
     fetchData();
   }, []);
 
-  // Filter products by selectedCategory and search query
-  const filteredData = data.filter(product => {
-    // Category filter
-    const categoryMatch = selectedCategory === 'All' || product.category === selectedCategory;
-    
-    // Search filter - search in product name (case insensitive)
-    const searchMatch = searchQuery.trim() === '' || 
+  // Filtered results
+  const filteredData = data.filter((product) => {
+    const categoryMatch =
+      selectedCategory === 'All' || product.category === selectedCategory;
+    const searchMatch =
+      searchQuery.trim() === '' ||
       product.name.toLowerCase().includes(searchQuery.toLowerCase());
-    
     return categoryMatch && searchMatch;
   });
 
-  // Fetch products from Supabase, filtered by the category/type
-  useEffect(() => {
-    const fetchProducts = async () => {
-      let query = supabase.from('products').select('*');
-      if (filter) {
-        query = query.eq('category', filter); // or .eq('type', filter) depending on your schema
-      }
-      const { data } = await query;
-      setData(data || []);
-    };
-    fetchProducts();
-  }, [filter]);
+  // Dark mode colors
+  const colors = {
+    background: darkMode ? '#0d1117' : '#fff',
+    text: darkMode ? '#f0f6fc' : '#222',
+    secondary: darkMode ? '#161b22' : '#f2f2f2',
+    accent: '#a81d1d',
+    navbar: '#4f5f8aff',
+  };
 
   return (
-    <View style={{ flex: 1 }}>
-      <ScrollView style={styles.container}>
-        {/* Logo and Title */}
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
         <View style={styles.logoRow}>
           <Image
             source={require('@/assets/images/GLLogo.png')}
@@ -71,37 +79,52 @@ export default function ShopScreen() {
             resizeMode="contain"
           />
           <View>
-            <Text style={styles.logoTitle}>GRAND EAST</Text>
-            <Text style={styles.logoSubtitle}>GLASS AND ALUMINUM</Text>
+            <Text style={[styles.logoTitle, { color: colors.accent }]}>
+              GRAND EAST
+            </Text>
+            <Text style={[styles.logoSubtitle, { color: colors.text }]}>
+              GLASS AND ALUMINUM
+            </Text>
           </View>
           <TouchableOpacity
             style={styles.profileButton}
             onPress={() => router.push('../profile')}
           >
             <Image
-              source={require('@/assets/images/profileicon.png')} 
+              source={require('@/assets/images/profileicon.png')}
               style={styles.profileIcon}
               resizeMode="contain"
             />
           </TouchableOpacity>
         </View>
-        <View style={styles.blueBar} />
+
+        {/* Search */}
         <View style={styles.searchRow}>
-          <View style={styles.searchBox}>
-            <Ionicons name="search" size={20} color="#888" />
+          <View
+            style={[styles.searchBox, { backgroundColor: colors.secondary }]}
+          >
+            <Ionicons
+              name="search"
+              size={20}
+              color={darkMode ? '#999' : '#555'}
+            />
             <TextInput
               placeholder="Search products..."
-              style={styles.searchInput}
-              placeholderTextColor="#888"
+              style={[styles.searchInput, { color: colors.text }]}
+              placeholderTextColor={darkMode ? '#888' : '#999'}
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
           </View>
           <TouchableOpacity
-            style={styles.filterButton}
+            style={[styles.filterButton, { backgroundColor: colors.secondary }]}
             onPress={() => setFilterVisible(true)}
           >
-            <Ionicons name="menu" size={24} color="#222" />
+            <Ionicons
+              name="menu"
+              size={24}
+              color={darkMode ? '#fff' : '#222'}
+            />
           </TouchableOpacity>
         </View>
 
@@ -111,24 +134,53 @@ export default function ShopScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.tabsRow}
         >
-          <TouchableOpacity onPress={() => setSelectedCategory('All')}>
-            <Text style={[styles.tabText, selectedCategory === 'All' && styles.tabActive]}>All</Text>
-          </TouchableOpacity>
-          {filterOptions.map(option => (
-            <TouchableOpacity key={option} onPress={() => setSelectedCategory(option)}>
-              <Text style={[styles.tabText, selectedCategory === option && styles.tabActive]}>{option}</Text>
+          {['All', ...filterOptions].map((option) => (
+            <TouchableOpacity
+              key={option}
+              onPress={() => setSelectedCategory(option)}
+              style={[
+                styles.tabButton,
+                {
+                  backgroundColor:
+                    selectedCategory === option
+                      ? colors.accent
+                      : colors.secondary,
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  color:
+                    selectedCategory === option
+                      ? '#fff'
+                      : darkMode
+                      ? '#f0f6fc'
+                      : '#222',
+                  fontWeight: selectedCategory === option ? 'bold' : '500',
+                }}
+              >
+                {option}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
         {/* Products */}
         <View style={styles.productsContainer}>
-          {filteredData.map(product => (
+          {filteredData.map((product) => (
             <TouchableOpacity
               key={product.id}
-              style={styles.productBox}
+              style={[
+                styles.productBox,
+                { backgroundColor: colors.secondary },
+              ]}
               activeOpacity={0.85}
-              onPress={() => router.push({ pathname: '/(tabs)/product', params: { id: product.id } })}
+              onPress={() =>
+                router.push({
+                  pathname: '/(tabs)/product',
+                  params: { id: product.id },
+                })
+              }
             >
               <Image
                 source={
@@ -139,80 +191,74 @@ export default function ShopScreen() {
                 style={styles.productImage}
                 resizeMode="cover"
               />
-              <Text style={styles.productName}>{product.name}</Text>
-              <View style={{ width: '100%', alignItems: 'center' }}>
-                <Text style={[styles.productDesc, { maxWidth: 440, paddingHorizontal: 16 }]}>
-                  {product.description}
-                </Text>
-              </View>
-              <Text style={styles.productPrice}>₱{product.price}</Text>
-              {/* You can add more info here, e.g. material, type, etc. */}
+              <Text style={[styles.productName, { color: colors.text }]}>
+                {product.name}
+              </Text>
+              <Text
+                style={[styles.productDesc, { color: darkMode ? '#aaa' : '#555' }]}
+              >
+                {product.description}
+              </Text>
+              <Text style={[styles.productPrice, { color: colors.accent }]}>
+                ₱{product.price}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
       </ScrollView>
 
-      {/* Filter Modal */}
-      <Modal
-        visible={filterVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setFilterVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.filterModal}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-              <Ionicons name="filter" size={24} color="#2563eb" />
-              <Text style={{ fontWeight: 'bold', fontSize: 18, marginLeft: 8, color: '#2563eb' }}>Filter</Text>
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 }}>
-              {filterOptions.map(option => (
-                <TouchableOpacity
-                  key={option}
-                  style={styles.radioRow}
-                  onPress={() => setSelectedCategory(option)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.radioOuter}>
-                    {selectedCategory === option && <View style={styles.radioInner} />}
-                  </View>
-                  <Text style={styles.radioLabel}>{option}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <TouchableOpacity style={styles.dropdown}>
-                <Text>Colors ▼</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.applyButton} onPress={() => setFilterVisible(false)}>
-                <Text style={{ color: '#fff', fontWeight: 'bold' }}>Apply</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Bottom Bar */}
-      <View style={styles.bottomNavBar}>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
-          <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
+      {/* Bottom Navbar */}
+      <View style={[styles.bottomNavBar, { backgroundColor: colors.navbar }]}>
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => router.push('../homepage')}
+        >
+          <Image
+            source={require('@/assets/images/home.png')}
+            style={styles.navIcon}
+          />
           <Text style={styles.navLabel}>Home</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
+
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => router.push('../inquire')}
+        >
+          <Image
+            source={require('@/assets/images/inquire.png')}
+            style={styles.navIcon}
+          />
           <Text style={styles.navLabel}>Inquire</Text>
         </TouchableOpacity>
+
         <View style={styles.fabWrapper}>
-          <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
-            <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
+          <TouchableOpacity
+            style={styles.fabButton}
+            onPress={() => router.push('../shop')}
+          >
+            <Image
+              source={require('@/assets/images/catalogbutton.png')}
+              style={styles.fabIcon}
+            />
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
+
+        <TouchableOpacity style={styles.navItem}>
+          <Image
+            source={require('@/assets/images/service.png')}
+            style={styles.navIcon}
+          />
           <Text style={styles.navLabel}>Service</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
+
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => router.push('../setting')}
+        >
+          <Image
+            source={require('@/assets/images/settings.png')}
+            style={styles.navIcon}
+          />
           <Text style={styles.navLabel}>Settings</Text>
         </TouchableOpacity>
       </View>
@@ -221,195 +267,44 @@ export default function ShopScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
+  container: { flex: 1 },
   logoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
   },
-  logoImage: {
-    width: 40,
-    height: 40,
-    marginRight: 10,
-  },
-  logoTitle: {
-    fontWeight: 'bold',
-    fontSize: 20,
-    color: '#a81d1d',
-  },
-  logoSubtitle: {
-    fontSize: 12,
-    color: '#222',
-  },
-  blueBar: {
-    height: 32,
-    backgroundColor: '#2c3848',
-    width: '100%',
-  },
+  logoImage: { width: 40, height: 40, marginRight: 10 },
+  logoTitle: { fontWeight: 'bold', fontSize: 20 },
+  logoSubtitle: { fontSize: 12 },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    gap: 12, // Add spacing between search and filter
+    paddingHorizontal: 16,
+    gap: 12,
   },
   searchBox: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f2f2f2',
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 12,
     height: 40,
-    maxWidth: '85%', // Limit search box width
   },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
-  },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 16 },
   filterButton: {
-    padding: 8, // Add padding for better touch target
-    backgroundColor: '#f2f2f2', // Add background to make it visible
-    borderRadius: 8, // Match search box style
-    justifyContent: 'center',
-    alignItems: 'center',
-    minWidth: 40, // Ensure minimum width
-    height: 40, // Match search box height
+    padding: 10,
+    borderRadius: 10,
   },
   tabsRow: {
     flexDirection: 'row',
-    marginBottom: 8,
-    alignSelf: 'center',
-  },
-  tabText: {
-    fontSize: 16,
-    color: '#222',
-    marginRight: 18,
-    marginLeft: 30,
-  },
-  tabActive: {
-    color: '#a81d1d',
-    fontWeight: 'bold',
-  },
-  bottomNavBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    backgroundColor: '#4f5f8aff',
-    height: 70,
-    paddingBottom: 8,
-    paddingTop: 8,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 10,
-  },
-  navItem: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navIcon: {
-    width: 45,
-    height: 45,
-    marginBottom: 2,
-  },
-  navLabel: {
-    fontSize: 11,
-    color: '#fff',
-    fontWeight: '600',
-  },
-  fabWrapper: {
-    position: 'relative',
-    top: -28,
-    alignItems: 'center',
-    flex: 1,
-  },
-  fabButton: {
-    width: 65,
-    height: 65,
-    borderRadius: 28,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    borderWidth: 3,
-    borderColor: '#4c58c0ff',
-  },
-  fabIcon: {
-    width: 32,
-    height: 32,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  filterModal: {
-    width: '85%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    elevation: 5,
-  },
-  radioRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '45%',
-    marginBottom: 12,
-    marginRight: 12,
-  },
-  radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#222',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-    backgroundColor: '#fff',
-  },
-  radioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#2563eb',
-  },
-  radioLabel: {
-    fontSize: 15,
-    color: '#222',
-  },
-  dropdown: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#222',
-    borderRadius: 8,
-    padding: 10,
-    minWidth: 100,
-    marginRight: 12,
-  },
-  applyButton: {
-    backgroundColor: '#a81d1d',
-    borderRadius: 8,
     paddingVertical: 10,
-    paddingHorizontal: 24,
+    paddingHorizontal: 10,
+  },
+  tabButton: {
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    marginRight: 10,
   },
   productsContainer: {
     flexDirection: 'row',
@@ -419,55 +314,52 @@ const styles = StyleSheet.create({
   },
   productBox: {
     width: 320,
-    backgroundColor: '#fff',
     borderRadius: 20,
-    margin: 16,
-    padding: 20,
+    margin: 12,
+    padding: 16,
     alignItems: 'center',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
   },
   productImage: {
-    width: 280,
-    height: 280,
-    borderRadius: 8,
+    width: 260,
+    height: 260,
+    borderRadius: 10,
     marginBottom: 8,
-    backgroundColor: '#eee',
   },
-  productName: {
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginBottom: 4,
-    color: '#222',
+  productName: { fontWeight: 'bold', fontSize: 16, marginBottom: 4 },
+  productDesc: { fontSize: 13, textAlign: 'center', marginBottom: 4 },
+  productPrice: { fontSize: 15, fontWeight: 'bold' },
+  bottomNavBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    height: 70,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
-  productDesc: {
-    fontSize: 13,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 4,
+  navItem: { flex: 1, alignItems: 'center' },
+  navIcon: { width: 35, height: 35, marginBottom: 2 },
+  navLabel: { fontSize: 11, color: '#fff', fontWeight: '600' },
+  fabWrapper: { position: 'relative', top: -28, alignItems: 'center' },
+  fabButton: {
+    width: 65,
+    height: 65,
+    borderRadius: 32,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#4c58c0ff',
   },
-  productPrice: {
-    fontSize: 15,
-    color: '#a81d1d',
-    fontWeight: 'bold',
-  },
+  fabIcon: { width: 32, height: 32 },
   profileButton: {
     position: 'absolute',
     right: 15,
     top: '50%',
     transform: [{ translateY: -20 }],
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
-  profileIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#eee',
-  },
+  profileIcon: { width: 36, height: 36, borderRadius: 18 },
 });

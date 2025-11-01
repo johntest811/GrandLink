@@ -1,0 +1,308 @@
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  Switch,
+  StyleSheet,
+  Alert,
+} from "react-native";
+import { useRouter } from "expo-router";
+import { supabase } from "../supabaseClient";
+import { userNotificationService } from "../../utils/userNotificationService";
+
+interface NotificationPreferences {
+  new_product_notifications: boolean;
+  stock_update_notifications: boolean;
+  order_status_notifications: boolean;
+  email_notifications: boolean;
+}
+
+interface Notification {
+  id: number;
+  title: string;
+  message: string;
+  type: string;
+  is_read: boolean;
+  created_at: string;
+  action_url?: string;
+}
+
+export default function NotificationsScreen() {
+  const router = useRouter();
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+
+  const [preferences, setPreferences] = useState<NotificationPreferences>({
+    new_product_notifications: true,
+    stock_update_notifications: true,
+    order_status_notifications: true,
+    email_notifications: true,
+  });
+
+  useEffect(() => {
+    fetchUserAndPreferences();
+  }, []);
+
+  useEffect(() => {
+    if (user?.id) fetchNotifications();
+  }, [user, page]);
+
+  async function fetchUserAndPreferences() {
+    try {
+      const { data } = await supabase.auth.getUser();
+      const userData = data?.user;
+      if (!userData) {
+        router.push("/login");
+        return;
+      }
+      setUser(userData);
+
+      const result = await userNotificationService.getUserPreferences(userData.id);
+      if (result.success && result.preferences) {
+        setPreferences({
+          new_product_notifications: result.preferences.new_product_notifications ?? true,
+          stock_update_notifications: result.preferences.stock_update_notifications ?? true,
+          order_status_notifications: result.preferences.order_status_notifications ?? true,
+          email_notifications: result.preferences.email_notifications ?? true,
+        });
+      }
+    } catch (err) {
+      Alert.alert("Error", "Failed to load preferences");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function fetchNotifications() {
+    if (!user?.id || loadingNotifications) return;
+    setLoadingNotifications(true);
+    try {
+      const result = await userNotificationService.getUserNotifications(user.id, page, 20);
+      if (result.success && result.notifications) {
+        setNotifications((prev) =>
+          page === 1 ? result.notifications : [...prev, ...result.notifications]
+        );
+        setHasMore(result.has_more || false);
+      }
+    } catch (err) {
+      console.error("Error fetching notifications", err);
+    } finally {
+      setLoadingNotifications(false);
+    }
+  }
+
+  async function handlePreferenceChange(key: keyof NotificationPreferences, value: boolean) {
+    if (!user?.id) return;
+    setSaving(true);
+    setPreferences((prev) => ({ ...prev, [key]: value }));
+    try {
+      const result = await userNotificationService.updateUserPreferences(user.id, {
+        [key]: value,
+      });
+      if (!result.success) {
+        Alert.alert("Error", "Failed to update preference");
+        setPreferences((prev) => ({ ...prev, [key]: !value }));
+      }
+    } catch (err) {
+      Alert.alert("Error", "Failed to update preference");
+      setPreferences((prev) => ({ ...prev, [key]: !value }));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleMarkAsRead(notificationId: number) {
+    if (!user?.id) return;
+    try {
+      const result = await userNotificationService.markNotificationAsRead(notificationId, user.id);
+      if (result.success) {
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notificationId ? { ...n, is_read: true } : n))
+        );
+      }
+    } catch {}
+  }
+
+  async function handleDeleteNotification(notificationId: number) {
+    if (!user?.id) return;
+    try {
+      const result = await userNotificationService.deleteNotification(notificationId, user.id);
+      if (result.success) {
+        setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+      } else {
+        Alert.alert("Error", "Failed to delete notification");
+      }
+    } catch {
+      Alert.alert("Error", "Failed to delete notification");
+    }
+  }
+
+  const getNotificationIcon = (type: string) => {
+    switch (type) {
+      case "new_product":
+        return "🆕";
+      case "stock_update":
+        return "📦";
+      case "order_status":
+        return "📋";
+      default:
+        return "🔔";
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#8B1C1C" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container}>
+      <Text style={styles.title}>Notification Settings</Text>
+      <Text style={styles.subtitle}>
+        Manage your notification preferences and view your history
+      </Text>
+
+      {/* Preferences */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>⚙️ Notification Preferences</Text>
+        {[
+          {
+            key: "new_product_notifications",
+            title: "🆕 New Product Notifications",
+            desc: "Get notified when new products are added",
+          },
+          {
+            key: "stock_update_notifications",
+            title: "📦 Stock Update Notifications",
+            desc: "Be alerted when products are back in stock",
+          },
+          {
+            key: "order_status_notifications",
+            title: "📋 Order Status Notifications",
+            desc: "Receive updates about your order status",
+          },
+          {
+            key: "email_notifications",
+            title: "📧 Email Notifications",
+            desc: "Receive notifications via email",
+          },
+        ].map((pref) => (
+          <View key={pref.key} style={styles.prefItem}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.prefTitle}>{pref.title}</Text>
+              <Text style={styles.prefDesc}>{pref.desc}</Text>
+            </View>
+            <Switch
+              value={preferences[pref.key as keyof NotificationPreferences]}
+              onValueChange={(val) =>
+                handlePreferenceChange(pref.key as keyof NotificationPreferences, val)
+              }
+              disabled={saving}
+            />
+          </View>
+        ))}
+      </View>
+
+      {/* Notification History */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📜 Notification History</Text>
+        {notifications.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🔔</Text>
+            <Text style={styles.emptyText}>No notifications yet</Text>
+          </View>
+        ) : (
+          <>
+            {notifications.map((n) => (
+              <TouchableOpacity
+                key={n.id}
+                style={[styles.notifItem, n.is_read ? styles.read : styles.unread]}
+                onPress={() => handleMarkAsRead(n.id)}
+              >
+                <Text style={styles.notifIcon}>{getNotificationIcon(n.type)}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.notifTitle}>{n.title}</Text>
+                  <Text style={styles.notifMsg}>{n.message}</Text>
+                  <Text style={styles.notifDate}>{formatDate(n.created_at)}</Text>
+                </View>
+                <TouchableOpacity onPress={() => handleDeleteNotification(n.id)}>
+                  <Text style={styles.delete}>🗑️</Text>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            ))}
+            {hasMore && !loadingNotifications && (
+              <TouchableOpacity
+                onPress={() => setPage((prev) => prev + 1)}
+                style={styles.loadMore}
+              >
+                <Text style={styles.loadMoreText}>Load More</Text>
+              </TouchableOpacity>
+            )}
+            {loadingNotifications && <ActivityIndicator color="#8B1C1C" />}
+          </>
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#F9FAFB", padding: 16 },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { color: "#555", marginTop: 8 },
+  title: { fontSize: 24, fontWeight: "bold", color: "#111", marginBottom: 4 },
+  subtitle: { color: "#666", marginBottom: 20 },
+  section: { backgroundColor: "#fff", borderRadius: 12, padding: 16, marginBottom: 20 },
+  sectionTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12, color: "#111" },
+  prefItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 0.5,
+    borderColor: "#eee",
+  },
+  prefTitle: { fontWeight: "600", color: "#111" },
+  prefDesc: { fontSize: 12, color: "#666" },
+  empty: { alignItems: "center", padding: 40 },
+  emptyIcon: { fontSize: 40, marginBottom: 10 },
+  emptyText: { color: "#666" },
+  notifItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  unread: { backgroundColor: "#E3F2FD" },
+  read: { backgroundColor: "#fff", borderWidth: 0.5, borderColor: "#eee" },
+  notifIcon: { fontSize: 24, marginRight: 8 },
+  notifTitle: { fontWeight: "600", color: "#111" },
+  notifMsg: { color: "#555", fontSize: 13 },
+  notifDate: { fontSize: 11, color: "#999", marginTop: 4 },
+  delete: { fontSize: 16, marginLeft: 10 },
+  loadMore: { alignItems: "center", padding: 10 },
+  loadMoreText: { color: "#8B1C1C", fontWeight: "600" },
+});

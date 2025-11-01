@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import type { User } from '@supabase/supabase-js';
@@ -8,6 +8,15 @@ import { Ionicons, MaterialIcons, FontAwesome5, Entypo, Feather } from '@expo/ve
 export default function ProfileScreen() {
   const [user, setUser] = useState<User | null>(null);
   const [cartCount, setCartCount] = useState(0);
+  const [showAddressModal, setShowAddressModal] = useState(false);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
+  const [savedAddress, setSavedAddress] = useState<any>(null);
+  const [loadingAddress, setLoadingAddress] = useState(false);
+  const [savingAddress, setSavingAddress] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -15,7 +24,10 @@ export default function ProfileScreen() {
       const { data } = await supabase.auth.getUser();
       setUser(data.user);
       // load cart count when user is available
-      if (data?.user) await loadCartCount();
+      if (data?.user) {
+        await loadCartCount();
+        await loadUserAddress();
+      }
     };
     fetchUser();
   }, []);
@@ -33,7 +45,113 @@ export default function ProfileScreen() {
       if (error) throw error;
       setCartCount(count ?? 0);
     } catch (e: any) {
-      console.error('Failed to load cart count', e);
+      // Failed to load cart count
+    }
+  };
+
+  const loadUserAddress = async () => {
+    try {
+      setLoadingAddress(true);
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData?.user) return;
+
+      const { data, error } = await supabase
+        .from('addresses')
+        .select('*')
+        .eq('user_id', authData.user.id)
+        .eq('is_default', true)
+        .maybeSingle();
+
+      if (error) {
+        // Don't throw error, just log it - table might not exist yet
+        console.error('Load address error:', error);
+        return;
+      }
+      
+      if (data) {
+        setSavedAddress(data);
+        // Try to split full_name if first_name/last_name aren't available
+        if (data.first_name && data.last_name) {
+          setFirstName(data.first_name);
+          setLastName(data.last_name);
+        } else if (data.full_name) {
+          const nameParts = data.full_name.split(' ');
+          setFirstName(nameParts[0] || '');
+          setLastName(nameParts.slice(1).join(' ') || '');
+        }
+        setPhoneNumber(data.phone || '');
+        setEmail(data.email || '');
+        setAddress(data.address || '');
+      }
+    } catch (e: any) {
+      // Failed to load address
+    } finally {
+      setLoadingAddress(false);
+    }
+  };
+
+  const openAddressModal = () => {
+    setShowAddressModal(true);
+  };
+
+  const closeAddressModal = () => {
+    setShowAddressModal(false);
+  };
+
+  const saveAddress = async () => {
+    try {
+      // Validate required fields
+      if (!firstName.trim() || !lastName.trim() || !phoneNumber.trim() || !email.trim() || !address.trim()) {
+        Alert.alert('Missing Information', 'Please fill in all required fields.');
+        return;
+      }
+
+      setSavingAddress(true);
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData?.user) {
+        Alert.alert('Error', 'Please sign in to save address.');
+        return;
+      }
+
+      const addressRecord = {
+        user_id: authData.user.id,
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        full_name: `${firstName.trim()} ${lastName.trim()}`,
+        phone: phoneNumber.trim(),
+        email: email.trim(),
+        address: address.trim(),
+        is_default: true,
+      };
+
+      if (savedAddress) {
+        // Update existing address
+        const { data, error } = await supabase
+          .from('addresses')
+          .update(addressRecord)
+          .eq('id', savedAddress.id)
+          .select();
+
+        if (error) throw error;
+      } else {
+        // Insert new address
+        const { data, error } = await supabase
+          .from('addresses')
+          .insert(addressRecord)
+          .select();
+
+        if (error) throw error;
+      }
+
+      Alert.alert('Success', 'Your address has been saved successfully!');
+      await loadUserAddress();
+      closeAddressModal();
+    } catch (e: any) {
+      console.error('Save address error:', JSON.stringify(e, null, 2));
+      const errorMsg = e?.message || e?.error_description || e?.hint || e?.details || 'Unknown error';
+      Alert.alert('Error', `Failed to save address: ${errorMsg}`);
+    } finally {
+      setSavingAddress(false);
     }
   };
 
@@ -98,9 +216,17 @@ export default function ProfileScreen() {
 
         {/* Settings List */}
         <View style={styles.menuList}>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={openAddressModal}>
             <FontAwesome5 name="address-book" size={22} color="#a81d1d" />
-            <Text style={[styles.menuText, { color: '#a81d1d', fontWeight: 'bold' }]}>My Address</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.menuText, { color: '#a81d1d', fontWeight: 'bold' }]}>My Address</Text>
+              {savedAddress && (
+                <Text style={styles.addressPreview} numberOfLines={1}>
+                  {savedAddress.address}
+                </Text>
+              )}
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#a81d1d" />
           </TouchableOpacity>
           <TouchableOpacity style={styles.menuItem}>
             <Ionicons name="notifications" size={22} color="#2c3848" />
@@ -129,6 +255,94 @@ export default function ProfileScreen() {
           <Text style={styles.logoutButtonText}>Logout</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Address Modal */}
+      <Modal
+        visible={showAddressModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={closeAddressModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>My Address</Text>
+              <TouchableOpacity onPress={closeAddressModal}>
+                <Ionicons name="close" size={28} color="#222" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              <View style={styles.row}>
+                <View style={styles.halfWidth}>
+                  <Text style={styles.inputLabel}>First Name *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="First Name"
+                    value={firstName}
+                    onChangeText={setFirstName}
+                  />
+                </View>
+                <View style={styles.halfWidth}>
+                  <Text style={styles.inputLabel}>Last Name *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Last Name"
+                    value={lastName}
+                    onChangeText={setLastName}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>Phone Number *</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Phone Number"
+                value={phoneNumber}
+                onChangeText={setPhoneNumber}
+                keyboardType="phone-pad"
+              />
+
+              <Text style={styles.inputLabel}>Email *</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Email"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+
+              <Text style={styles.inputLabel}>Address *</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                placeholder="e.g., 123 Main Street, Barangay San Jose, Makati City, Metro Manila 1920"
+                value={address}
+                onChangeText={setAddress}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+
+              <TouchableOpacity 
+                style={[styles.saveButton, savingAddress && styles.saveButtonDisabled]} 
+                onPress={saveAddress}
+                disabled={savingAddress}
+              >
+                {savingAddress ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.saveButtonText}>Save Address</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.cancelButton} onPress={closeAddressModal}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Modern Bottom Navbar */}
       <View style={styles.bottomNavBar}>
@@ -318,5 +532,101 @@ const styles = StyleSheet.create({
   fabIcon: {
     width: 32,
     height: 32,
+  },
+  addressPreview: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
+    marginLeft: 16,
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '90%',
+    paddingBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#222',
+  },
+  modalBody: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  inputLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    backgroundColor: '#f9f9f9',
+  },
+  textArea: {
+    height: 100,
+    paddingTop: 12,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  halfWidth: {
+    flex: 1,
+  },
+  saveButton: {
+    backgroundColor: '#a81d1d',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 24,
+    elevation: 2,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  cancelButton: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  cancelButtonText: {
+    color: '#666',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
