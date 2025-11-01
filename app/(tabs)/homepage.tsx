@@ -96,7 +96,7 @@ export default function Homescreen() {
       <ScrollView style={{ flex: 1 }}>
         <View style={styles.upperBar}>
           <Image
-            source={require('@/assets/images/GRANDEASTLOGO.png')}
+            source={require('@/assets/images/grandeastlogo.png')}
             style={styles.logo}
             resizeMode="contain"
           />
@@ -303,7 +303,7 @@ export default function Homescreen() {
 
         <View style={styles.logoTitleB}>
               <Image
-            source={require('@/assets/images/GRANDEASTLOGO.png')}
+            source={require('@/assets/images/grandeastlogo.png')}
             style={styles.logo}
             resizeMode="contain"
           />

@@ -168,6 +168,15 @@ export default function SettingsTab() {
               About Grand Link
             </Text>
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.item} onPress={() => router.push("/showroom")}>
+    <MaterialIcons name="storefront" size={22} color="#888" />
+    <Text
+      style={[styles.itemText, { color: darkMode ? "#fff" : "#222" }]}
+    >
+      Showroom
+    </Text>
+  </TouchableOpacity>
         </View>
 
         
