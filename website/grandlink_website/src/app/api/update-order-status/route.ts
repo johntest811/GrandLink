@@ -34,6 +34,10 @@ if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
   console.warn("GMAIL_USER / GMAIL_PASS not configured - email sending disabled.");
 }
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function POST(request: NextRequest) {
   try {
     const { userItemId, newStatus, adminName, adminNotes, estimatedDeliveryDate, skipUpdate } = await request.json();
@@ -153,7 +157,7 @@ export async function POST(request: NextRequest) {
     const message = statusMessages[newStatus] || `Your order status has been updated to: ${statusDisplay}`;
 
     if (shouldSendInApp) {
-      const { error: notifErr } = await supabase.from("user_notifications").insert({
+      const baseNotification: any = {
         user_id: orderData.user_id,
         title: `Order Status: ${statusDisplay}`,
         message: `${productName} - ${message}`,
@@ -167,24 +171,26 @@ export async function POST(request: NextRequest) {
         },
         action_url: `/profile/order`,
         order_id: userItemId,
-        product_id: orderData.product_id,
         is_read: false,
         created_at: now,
-      });
-      if (notifErr) console.warn("Notification insert error:", notifErr);
+      };
+
+      const { error: notifError } = await supabase.from("user_notifications").insert(baseNotification);
+      if (notifError) {
+        console.error("Failed to insert user notification:", notifError);
+      }
     }
 
     if (shouldSendEmail && mailTransporter && userEmail) {
       try {
         await mailTransporter.sendMail({
-          from: process.env.GMAIL_FROM || process.env.GMAIL_USER,
+          from: process.env.GMAIL_FROM || process.env.GMAIL_USER!,
           to: userEmail,
           subject: `Order Status: ${statusDisplay}`,
-          text: `${productName} - ${message}`,
-          html: `<p><strong>${productName}</strong> - ${message}</p>`,
+          html: `<p>${message}</p><p>Order ID: ${userItemId}</p>`,
         });
-      } catch (emailErr) {
-        console.warn("Email send error:", emailErr);
+      } catch (mailErr) {
+        console.error("Email send failed:", mailErr);
       }
     }
 

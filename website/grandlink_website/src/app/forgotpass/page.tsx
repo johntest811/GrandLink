@@ -4,15 +4,19 @@ import { FaEnvelope } from "react-icons/fa";
 import { FaGoogle } from "react-icons/fa"; // Add this import
 import Image from "next/image";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
-import TopNavBar from "@/components/TopNavBar";
+import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
 
 export default function ResetPasswordPage() {
+  const baseUrl =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "https://grandlnik-website.vercel.app");
+
   // Google OAuth login
   const handleGoogleLogin = async () => {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: "http://localhost:3000/home", // or your deployed URL
+        redirectTo: `${baseUrl}/home`,
       },
     });
   };
@@ -29,7 +33,8 @@ export default function ResetPasswordPage() {
 
     // Remove manual check for user existence
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/forgotpass/reset`,
+      // Use a stable base URL that works on both localhost and Vercel
+      redirectTo: `${baseUrl}/forgotpass/reset`,
     });
 
     if (resetError) {
@@ -44,7 +49,7 @@ export default function ResetPasswordPage() {
 
   return (
     <div className="relative min-h-screen font-sans bg-cover bg-center flex flex-col" style={{ backgroundImage: 'url("/sevices.avif")' }}>
-      <TopNavBar />
+      <UnifiedTopNavBar />
 
 
       {/* Main Content */}

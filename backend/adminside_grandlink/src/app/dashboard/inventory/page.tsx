@@ -24,7 +24,7 @@ export default function InventoryAdminPage() {
   const [filter, setFilter] = useState("");
   const [showOnlyLow, setShowOnlyLow] = useState(true);
 
-  const CATEGORIES = ["Doors", "Windows", "Enclosures", "Sliding", "Canopy", "Railings", "Casement"];
+  const CATEGORIES = ["Doors", "Windows", "Enclosures", "Sliding", "Canopy", "Railings", "Casement", "Curtain Walls"];
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const [filterOpen, setFilterOpen] = useState(false);
@@ -403,13 +403,21 @@ export default function InventoryAdminPage() {
   }, []);
 
   const filtered = items.filter((it) => {
+    const normalize = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const keyFor = (s: string | null | undefined) => {
+      const k = normalize(s);
+      if (k.includes("curtain") && k.includes("wall")) return "curtainwall";
+      if (k.includes("enclosure")) return "enclosure";
+      return k;
+    };
+
     const inv = it.inventory ?? 0;
     if (showOnlyLow && inv > 5) return false;
     if (selectedCategory && selectedCategory !== "All Categories") {
-      if (it.category !== selectedCategory) return false;
+      if (keyFor(it.category) !== keyFor(selectedCategory)) return false;
     }
     if (!filter) return true;
-    return it.name?.toLowerCase().includes(filter.toLowerCase());
+    return (it.name || "").toLowerCase().includes(filter.toLowerCase());
   });
 
   const unsavedCount = items.reduce((acc, it) => acc + ((originalInventories[it.id] ?? 0) !== (it.inventory ?? 0) ? 1 : 0), 0);
@@ -442,20 +450,20 @@ export default function InventoryAdminPage() {
               placeholder="Search products..."
               value={filter}
               onChange={(e) => handleFilterChange(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full px-3 py-2 border border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-black"
             />
           </div>
           
           <div className="relative" ref={filterRef}>
             <button
               onClick={() => setFilterOpen(!filterOpen)}
-              className="px-4 py-2 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 focus:ring-2 focus:ring-indigo-500"
+              className="px-4 py-2 border border-gray-600 rounded-lg bg-white hover:bg-gray-50 focus:ring-2 focus:ring-indigo-500 text-black"
             >
               {selectedCategory || "All Categories"} ▼
             </button>
             
             {filterOpen && (
-              <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+              <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10 text-black">
                 <button
                   onClick={() => {
                     handleCategoryFilterChange(null);
@@ -479,7 +487,7 @@ export default function InventoryAdminPage() {
             )}
           </div>
 
-          <label className="flex items-center">
+          <label className="flex items-center text-black">
             <input
               type="checkbox"
               checked={showOnlyLow}
@@ -572,7 +580,7 @@ export default function InventoryAdminPage() {
                     <label className="block text-sm font-medium text-gray-700">
                       Inventory Count
                     </label>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center space-x-2 text-black">
                       <input
                         type="number"
                         min="0"

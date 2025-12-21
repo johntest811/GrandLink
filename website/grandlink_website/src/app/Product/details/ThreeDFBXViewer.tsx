@@ -5,13 +5,13 @@ import { FBXLoader, OrbitControls } from "three-stdlib";
 
 type Props = {
   fbxUrls: string[];
+  weather: "sunny" | "rainy" | "night" | "foggy";
   width?: number;
   height?: number;
 };
 
-export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }: Props) {
+export default function ThreeDFBXViewer({ fbxUrls, weather, width = 1200, height = 700 }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const [weather, setWeather] = useState<"sunny" | "rainy" | "windy" | "foggy">("sunny");
   const [currentFbxIndex, setCurrentFbxIndex] = useState(0);
   const [loading, setLoading] = useState(false);
 
@@ -114,11 +114,14 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
       renderer.shadowMap.type = THREE.BasicShadowMap; // Performance mode
     }
 
-    // runtime-safe color management
-    const sRGB = (THREE as any).sRGBEncoding ?? (THREE as any).SRGBColorSpace ?? (THREE as any).SRGBEncoding;
+    // runtime-safe color management - use SRGBColorSpace for Three.js r152+
+    const sRGB = THREE.SRGBColorSpace ?? 3001; // SRGBColorSpace constant or fallback to sRGBEncoding value
     try {
-      if ("outputEncoding" in renderer && sRGB !== undefined) (renderer as any).outputEncoding = sRGB;
-      else if ("outputColorSpace" in renderer && sRGB !== undefined) (renderer as any).outputColorSpace = sRGB;
+      if ("outputColorSpace" in renderer) {
+        (renderer as any).outputColorSpace = sRGB;
+      } else if ("outputEncoding" in renderer) {
+        (renderer as any).outputEncoding = sRGB;
+      }
     } catch (e) {}
     if ("physicallyCorrectLights" in renderer) try { (renderer as any).physicallyCorrectLights = true; } catch(e){}
 
@@ -273,7 +276,7 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
     // frame counter
     let frameCounter = 0;
 
-    const applyWeather = (type: string) => {
+  const applyWeather = (type: string) => {
       // cleanup previous weather effects
       if (rainSystem) {
         try {
@@ -337,70 +340,16 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
 
         const fogDensity = performanceFactor > 0.5 ? 0.001 : 0.0006;
         scene.fog = new THREE.FogExp2(0xbfd1e5, fogDensity);
-      } else if (type === "windy") {
-        scene.background = new THREE.Color(0xe6f2ff);
-        ambient.intensity = 0.5;
-        sunLight.intensity = 1.8;
-        renderer.setClearColor(0xe6f2ff, 1);
-
-        const windCount = performanceFactor > 0.6 ? STRONG_WIND : BASE_WIND;
-        const positions = new Float32Array(windCount * 3);
-        windVel = new Float32Array(windCount * 3);
-        windLifetime = new Float32Array(windCount);
-
-        const modelCenter = modelBounds ? modelBounds.getCenter(new THREE.Vector3()) : new THREE.Vector3(0, 0, 0);
-        const modelSize = modelBounds ? modelBounds.getSize(new THREE.Vector3()) : new THREE.Vector3(100, 100, 100);
-        const windRange = Math.max(modelSize.x, modelSize.y, modelSize.z) * 3;
-        
-        for (let i = 0; i < windCount; i++) {
-          const side = Math.random();
-          let startX, startY, startZ;
-          
-          if (side < 0.7) {
-            startX = modelCenter.x - windRange * (0.8 + Math.random() * 0.4);
-            startY = modelCenter.y + (Math.random() - 0.5) * modelSize.y * 2;
-            startZ = modelCenter.z + (Math.random() - 0.5) * windRange;
-          } else if (side < 0.9) {
-            startX = modelCenter.x + (Math.random() - 0.5) * windRange;
-            startY = modelCenter.y + (Math.random() - 0.5) * modelSize.y * 2;
-            startZ = modelCenter.z - windRange * (0.8 + Math.random() * 0.4);
-          } else {
-            startX = modelCenter.x + (Math.random() - 0.5) * windRange * 0.5;
-            startY = modelCenter.y + windRange * (0.5 + Math.random() * 0.3);
-            startZ = modelCenter.z + (Math.random() - 0.5) * windRange * 0.5;
-          }
-
-          positions[i * 3 + 0] = startX;
-          positions[i * 3 + 1] = startY;
-          positions[i * 3 + 2] = startZ;
-
-          const baseWindSpeed = 8 + Math.random() * 12;
-          const windDirection = Math.PI * 0.1 * (Math.random() - 0.5);
-          
-          windVel[i * 3 + 0] = baseWindSpeed * Math.cos(windDirection);
-          windVel[i * 3 + 1] = (Math.random() - 0.5) * 2;
-          windVel[i * 3 + 2] = baseWindSpeed * Math.sin(windDirection) * 0.3;
-          
-          windLifetime[i] = Math.random() * 100;
-        }
-        
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-        const mat = new THREE.PointsMaterial({
-          map: windTexture,
-          size: Math.max(20, 30 * performanceFactor),
-          sizeAttenuation: true,
-          transparent: true,
-          opacity: windBaseOpacity,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        });
-        windSystem = new THREE.Points(geo, mat);
-        windSystem.frustumCulled = false;
-        windSystem.renderOrder = 1;
-        scene.add(windSystem);
-
-        scene.fog = new THREE.FogExp2(0xe6f2ff, 0.0008);
+      } else if (type === "night") {
+        // Night mode: dark blue sky, cooler moonlight, reduced ambient
+        scene.background = new THREE.Color(0x0b1020);
+        renderer.setClearColor(0x0b1020, 1);
+        ambient.intensity = 0.2;
+        // Set main directional as moonlight with bluish tone
+        try { sunLight.color.set(0xbdd1ff); } catch {}
+        sunLight.intensity = 0.6;
+        // Slight, subtle fog for depth at night
+        scene.fog = new THREE.FogExp2(0x0b1020, 0.0006);
       } else if (type === "foggy") {
         scene.background = new THREE.Color(0xd6dbe0);
         ambient.intensity = 0.6;
@@ -775,27 +724,6 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
 
       {/* Controls Overlay */}
       <div className="pointer-events-none">
-        {/* Weather Controls */}
-        <div
-          className="absolute top-4 left-1/2 z-[9999] flex gap-2 transform -translate-x-1/2 pointer-events-auto"
-          style={{ maxWidth: "calc(100% - 32px)", overflow: "auto" }}
-        >
-          {["sunny", "rainy", "windy", "foggy"].map((w) => (
-            <button
-              key={w}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                weather === w 
-                  ? "bg-black text-white" 
-                  : "bg-gray-200 text-black hover:bg-gray-300"
-              }`}
-              onClick={() => setWeather(w as any)}
-              aria-label={w}
-            >
-              {w.charAt(0).toUpperCase() + w.slice(1)}
-            </button>
-          ))}
-        </div>
-
         {/* Multiple FBX Navigation Controls */}
         {validFbxUrls.length > 1 && (
           <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-auto">

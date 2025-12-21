@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
+import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
 import Footer from "@/components/Footer";
 import { FaUserCircle, FaMapMarkerAlt, FaBell, FaCog, FaQuestionCircle } from "react-icons/fa";
 import { useState, useEffect } from "react";
@@ -46,9 +46,19 @@ export default function ProfileLayout({ children }: { children: React.ReactNode 
     }
   };
 
+  const menuItems = [
+    { label: "Overview", href: "/profile" },
+    { label: "Cart", href: "/profile/cart" },
+    { label: "Wishlist", href: "/profile/my-list" },
+    { label: "Reserve", href: "/profile/reserve" },
+    { label: "Orders", href: "/profile/order" },
+    { label: "Completed", href: "/profile/completed" },
+    { label: "Cancelled", href: "/profile/cancelled" },
+  ];
+
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
-      <TopNavBarLoggedIn />
+      <UnifiedTopNavBar />
       <main className="flex-1 flex flex-row">
         {/* Sidebar */}
         <aside className="w-64 bg-white border-r flex flex-col items-center py-8 px-4 min-h-screen">
@@ -92,10 +102,10 @@ export default function ProfileLayout({ children }: { children: React.ReactNode 
             <Link href="/FAQs" className="flex items-center gap-2 text-gray-700 hover:text-[#8B1C1C] font-semibold">
               <span className="font-bold text-lg">!</span> FAQs
             </Link>
-            <Link href="#" className="flex items-center gap-2 text-gray-700 hover:text-[#8B1C1C] font-semibold">
+            {/* <Link href="#" className="flex items-center gap-2 text-gray-700 hover:text-[#8B1C1C] font-semibold">
               <FaQuestionCircle /> Help Centre
-            </Link>
-            <Link href="#" className="flex items-center gap-2 text-gray-700 hover:text-[#8B1C1C] ">
+            </Link> */}
+            <Link href="/Inquire" className="flex items-center gap-2 text-gray-700 hover:text-[#8B1C1C] font-semibold">
               <span className="font-bold text-lg">?</span> Inquire
             </Link>
           </nav>
@@ -112,32 +122,17 @@ export default function ProfileLayout({ children }: { children: React.ReactNode 
           {/* Tabs (shared for all profile sub-pages) */}
           <div className="px-8 py-6 border-b bg-gray-50">
             <nav className="flex gap-2">
-              {[
-                { label: "All", href: "/profile" },
-                { label: "My List", href: "/profile/my-list" },
-                { label: "Reserve", href: "/profile/reserve" },
-                { label: "Order", href: "/profile/order" },
-                { label: "Completed", href: "/profile/completed" },
-                { label: "Cancelled", href: "/profile/cancelled" },
-              ].map((t) => {
-                const active =
-                  t.href === "/profile"
-                    ? pathname === "/profile" || pathname === "/profile/"
-                    : pathname.startsWith(t.href);
-                return (
-                  <Link
-                    key={t.href}
-                    href={t.href}
-                    className={
-                      (active
-                        ? "px-6 py-2 border rounded bg-[#8B1C1C] text-white font-semibold"
-                        : "px-6 py-2 border rounded bg-white text-gray-700 font-semibold")
-                    }
-                  >
-                    {t.label}
-                  </Link>
-                );
-              })}
+              {menuItems.map(item => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block px-4 py-2 rounded ${
+                    pathname === item.href ? "bg-[#8B1C1C] text-white" : "text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              ))}
             </nav>
           </div>
 

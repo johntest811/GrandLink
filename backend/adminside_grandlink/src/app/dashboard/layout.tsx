@@ -46,6 +46,7 @@ export default function DashboardLayout({
         { name: 'Update Products', path: '/dashboard/UpdateProducts' },
         { name: 'Add Products', path: '/dashboard/products' },
         { name: 'Inventory', path: '/dashboard/inventory' },
+        { name: 'Discounts', path: '/dashboard/discounts' },
       ],
     },
     {
@@ -171,7 +172,6 @@ export default function DashboardLayout({
           {/* Recent Activity - Popup Style */}
           <RecentActivity
             adminId={currentAdmin?.id}
-            adminName={currentAdmin?.username}
             limit={10}
             showAsDropdown={true}
           />
