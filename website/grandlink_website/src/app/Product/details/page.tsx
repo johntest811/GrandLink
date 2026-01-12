@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import TopNavBarLoggedIn from "@/components/TopNavBarLoggedIn";
+import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
 import Footer from "@/components/Footer";
 import dynamic from "next/dynamic";
 import { createClient } from "@supabase/supabase-js";
@@ -22,6 +22,10 @@ function ProductDetailsPageContent() {
   const [product, setProduct] = useState<any>(null);
   const [carouselIdx, setCarouselIdx] = useState(0);
   const [show3D, setShow3D] = useState(false);
+  const [weather, setWeather] = useState<"sunny" | "rainy" | "night" | "foggy">("sunny");
+  const [quantity, setQuantity] = useState(1);
+  const [adding, setAdding] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -38,6 +42,12 @@ function ProductDetailsPageContent() {
     };
     fetchProduct();
   }, [productId]);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUserId(data?.user?.id || null);
+    });
+  }, []);
 
   if (!product) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
@@ -57,13 +67,15 @@ function ProductDetailsPageContent() {
 
   // Add to Wishlist with confirmation
   const handleAddToWishlist = async () => {
-    if (!window.confirm("Add this product to your wishlist?")) return;
     const { data: userData } = await supabase.auth.getUser();
     const userId = (userData as any)?.user?.id;
     if (!userId) {
-      alert("Please log in to add to wishlist.");
+      if (window.confirm("Please log in to add to wishlist. Would you like to go to the login page?")) {
+        router.push("/login");
+      }
       return;
     }
+    if (!window.confirm("Add this product to your wishlist?")) return;
     const { error } = await supabase
       .from("user_items")
       .insert([
@@ -102,23 +114,80 @@ function ProductDetailsPageContent() {
     router.push(`/reservation?productId=${product.id}`);
   };
 
+  const handleAddToCart = async () => {
+    if (!userId || !product) {
+      if (window.confirm("Please sign in to add to cart. Would you like to go to the login page?")) {
+        router.push("/login");
+      }
+      return;
+    }
+    setAdding(true);
+    try {
+      const res = await fetch("/api/cart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          productId: product.id,
+          quantity,
+          meta: {
+            selected_image: images[carouselIdx] || null,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to add to cart");
+      router.push("/profile/cart");
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setAdding(false);
+    }
+  };
+
   const isOutOfStock = product.inventory <= 0;
   const has3DModels = fbxUrls.length > 0;
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-      <TopNavBarLoggedIn />
+      <UnifiedTopNavBar />
       <div className="flex-1 flex flex-col items-center py-10 bg-white">
         <div className="w-full max-w-4xl xl:max-w-6xl bg-white rounded shadow p-12">
+          {/* Back Button */}
+          <button
+            onClick={() => router.back()}
+            className="flex items-center gap-2 text-gray-600 hover:text-red-600 font-medium transition-colors duration-200 mb-6 group"
+          >
+            <svg 
+              className="w-5 h-5 transition-transform duration-200 group-hover:-translate-x-1" 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M10 19l-7-7m0 0l7-7m-7 7h18" 
+              />
+            </svg>
+            <span>Back</span>
+          </button>
+
           {/* Carousel */}
           <div className="relative flex flex-col items-center">
-            <Image
-              src={images[carouselIdx] || "https://placehold.co/800x500?text=No+Image"}
-              alt={product.name}
-              width={1200}
-              height={700}
-              className="w-full h-[36rem] object-cover rounded"
-            />
+            {/* Main image container - keep aspect and fit */}
+            <div className="relative w-full h-[36rem] bg-gray-100 rounded overflow-hidden">
+              <Image
+                src={images[carouselIdx] || "https://placehold.co/1200x700/png?text=No+Image"}
+                alt={product.name || "Product image"}
+                fill
+                priority
+                quality={95}
+                sizes="(max-width: 768px) 100vw, 1200px"
+                className="object-contain"
+              />
+            </div>
             {/* Arrow buttons */}
             <button
               className="absolute left-2 top-1/2 -translate-y-1/2 text-black hover:text-red-600 px-2 py-2 rounded-full transition flex items-center justify-center"
@@ -140,18 +209,26 @@ function ProductDetailsPageContent() {
                 <path d="M16 14L22 20L16 26" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
-            {/* Thumbnails */}
-            <div className="flex gap-2 mt-4 justify-center">
+            {/* Thumbnails - fixed square */}
+            <div className="flex gap-3 mt-4 justify-center">
               {images.map((img, idx) => (
-                <Image
+                <button
                   key={idx}
-                  src={img}
-                  alt={`Thumbnail ${idx + 1}`}
-                  width={90}
-                  height={90}
-                  className={`rounded border cursor-pointer ${carouselIdx === idx ? "border-red-600" : "border-gray-300"}`}
                   onClick={() => setCarouselIdx(idx)}
-                />
+                  className={`relative w-24 h-24 aspect-square rounded-lg overflow-hidden border transition-shadow ${
+                    carouselIdx === idx ? "border-red-600 shadow-md" : "border-gray-300 hover:shadow"
+                  }`}
+                  aria-label={`Show image ${idx + 1}`}
+                >
+                  <Image
+                    src={img || "https://placehold.co/200x200/png?text=No+Image"}
+                    alt={`Thumbnail ${idx + 1}`}
+                    fill
+                    quality={90}
+                    sizes="96px"
+                    className="object-cover"
+                  />
+                </button>
               ))}
             </div>
           </div>
@@ -198,41 +275,91 @@ function ProductDetailsPageContent() {
           </div>
           
           {/* Actions */}
-          <div className="flex gap-8 mt-10">
+          <div className="flex flex-wrap gap-4 mt-10">
+            {/* 3D View Button */}
             <button
               disabled={!has3DModels}
               onClick={() => setShow3D(true)}
-              className={`flex flex-col items-center px-6 py-4 rounded border transition-all duration-200
-                ${has3DModels
-                  ? "bg-black text-white hover:bg-gray-900 hover:scale-105"
-                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
-                }`}
+              className={`group relative flex items-center gap-3 px-8 py-4 rounded-lg font-semibold text-base shadow-lg transition-all duration-300 transform ${
+                has3DModels
+                  ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:scale-105 active:scale-95"
+                  : "bg-gray-300 text-gray-500 cursor-not-allowed shadow-md"
+              }`}
               title={has3DModels ? `View ${fbxUrls.length} 3D Model${fbxUrls.length > 1 ? 's' : ''}` : "No 3D models available"}
             >
-              <span className="font-bold text-base">3D</span>
-              <span className="text-base">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
+              </svg>
+              <span>
                 3D View {has3DModels && fbxUrls.length > 1 ? `(${fbxUrls.length})` : ''}
               </span>
             </button>
             
+            {/* Add to Wishlist Button */}
             <button
               onClick={handleAddToWishlist}
-              className="flex flex-col items-center px-6 py-4 rounded border bg-gray-100 text-gray-700 transition-all duration-200 hover:bg-red-100 hover:text-red-700 hover:scale-105"
+              className="group relative flex items-center gap-3 px-8 py-4 rounded-lg font-semibold text-base bg-gradient-to-r from-pink-500 to-red-500 text-white shadow-lg hover:from-pink-600 hover:to-red-600 hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95"
             >
-              <span className="font-bold text-base">♥</span>
-              <span className="text-base">Add to Wishlist</span>
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+              </svg>
+              <span>Add to Wishlist</span>
             </button>
             
+            {/* Reserve Now Button */}
             <button
               onClick={handleReserveNow}
               disabled={isOutOfStock}
-              className={`px-8 py-4 rounded font-semibold text-xl transition-all duration-200 ${
+              className={`group relative flex items-center gap-3 px-10 py-4 rounded-lg font-bold text-lg shadow-lg transition-all duration-300 transform ${
                 isOutOfStock
-                  ? 'bg-gray-400 text-white cursor-not-allowed'
-                  : 'bg-red-600 text-white hover:bg-red-700 hover:scale-105'
+                  ? 'bg-gray-400 text-white cursor-not-allowed shadow-md'
+                  : 'bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-700 hover:to-red-800 hover:shadow-xl hover:scale-105 active:scale-95'
               }`}
             >
-              {isOutOfStock ? 'Out of Stock' : 'Reserve Now (₱500)'}
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              <span>{isOutOfStock ? 'Out of Stock' : 'Reserve Now (₱500)'}</span>
+            </button>
+          </div>
+
+          {/* Quantity Selector and Add to Cart Button */}
+          <div className="flex items-center gap-4 mt-6">
+            {/* Quantity Selector */}
+            <div className="flex items-center border-2 border-gray-300 rounded-lg overflow-hidden shadow-sm hover:border-blue-400 transition-colors duration-200">
+              <button
+                onClick={() => setQuantity(q => Math.max(1, q - 1))}
+                className="px-5 py-3 bg-white hover:bg-blue-50 text-gray-700 hover:text-blue-600 font-semibold transition-colors duration-200 border-r border-gray-300"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M20 12H4" />
+                </svg>
+              </button>
+              <span className="px-8 py-3 text-lg font-bold text-gray-800 bg-white min-w-[60px] text-center">{quantity}</span>
+              <button
+                onClick={() => setQuantity(q => q + 1)}
+                className="px-5 py-3 bg-white hover:bg-blue-50 text-gray-700 hover:text-blue-600 font-semibold transition-colors duration-200 border-l border-gray-300"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Add to Cart Button */}
+            <button
+              onClick={handleAddToCart}
+              disabled={adding || isOutOfStock}
+              className={`flex items-center gap-3 px-8 py-3 rounded-lg font-semibold text-base shadow-lg transition-all duration-300 transform ${
+                adding || isOutOfStock
+                  ? 'bg-gray-400 text-white cursor-not-allowed'
+                  : 'bg-gradient-to-r from-green-600 to-green-700 text-white hover:from-green-700 hover:to-green-800 hover:shadow-xl hover:scale-105 active:scale-95'
+              }`}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+              <span>{adding ? "Adding..." : isOutOfStock ? "Out of Stock" : "Add to Cart"}</span>
             </button>
           </div>
 
@@ -313,8 +440,26 @@ function ProductDetailsPageContent() {
               <div className="absolute inset-0 rounded-full border-2 border-transparent group-hover:border-red-200 transition-all duration-300 scale-110 opacity-0 group-hover:opacity-100"></div>
             </button>
 
+            {/* Weather Controls - Fixed to modal frame */}
+            <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-20 flex gap-2">
+              {["sunny", "rainy", "night", "foggy"].map((w) => (
+                <button
+                  key={w}
+                  className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                    weather === w 
+                      ? "bg-black text-white" 
+                      : "bg-gray-200 text-black hover:bg-gray-300"
+                  }`}
+                  onClick={() => setWeather(w as any)}
+                  aria-label={w}
+                >
+                  {w.charAt(0).toUpperCase() + w.slice(1)}
+                </button>
+              ))}
+            </div>
+
             <div className="flex-1 w-full flex items-center justify-center overflow-hidden">
-              <ThreeDFBXViewer fbxUrls={fbxUrls} />
+              <ThreeDFBXViewer fbxUrls={fbxUrls} weather={weather} />
             </div>
           </div>
         </div>

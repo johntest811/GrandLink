@@ -14,6 +14,9 @@ type Item = {
   status: string;
   order_progress?: string;
   meta: any;
+  total_paid?: number;
+  total_amount?: number;
+  payment_method?: string;
 };
 
 type Product = { id: string; name?: string; price?: number; images?: string[]; image1?: string; image2?: string };
@@ -190,7 +193,7 @@ export default function ProfileCompletedPage() {
                 <div className="flex gap-4">
                   <img src={img} className="w-20 h-20 object-cover rounded" alt={p?.name || "Product"} />
                   <div className="flex-1">
-                    <div className="font-bold">{p?.name || "Completed Item"}</div>
+                    <div className="font-bold text-black">{p?.name || "Completed Item"}</div>
                     <div className="text-sm text-gray-600">Order ID: {it.id}</div>
                     <div className="text-xs text-gray-500">
                       Delivered: {new Date(it.updated_at || it.created_at).toLocaleString()}
@@ -249,17 +252,29 @@ export default function ProfileCompletedPage() {
                       <span>{selectedReceipt.item.quantity}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Subtotal</span>
-                      <span>{currency((product?.price || 0) * selectedReceipt.item.quantity)}</span>
+                      <span>Unit Price</span>
+                      <span>{currency(product?.price || 0)}</span>
                     </div>
+                    {selectedReceipt.item.meta?.addons_total > 0 && (
+                      <div className="flex justify-between">
+                        <span>Add-ons Total</span>
+                        <span>{currency(selectedReceipt.item.meta.addons_total)}</span>
+                      </div>
+                    )}
+                    {selectedReceipt.item.meta?.discount_value > 0 && (
+                      <div className="flex justify-between text-green-600">
+                        <span>Discount</span>
+                        <span>-{currency(selectedReceipt.item.meta.discount_value)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <span>Reservation Fee</span>
-                      <span>- {currency(500)}</span>
+                      <span>{currency(selectedReceipt.item.meta?.reservation_fee || 500)}</span>
                     </div>
                     <div className="flex justify-between font-semibold text-lg border-t border-black pt-2">
-                      <span>Balance Due</span>
+                      <span>Total Paid</span>
                       <span className="text-black">
-                        {currency((product?.price || 0) * selectedReceipt.item.quantity - 500)}
+                        {currency(selectedReceipt.item.total_amount || selectedReceipt.item.total_paid || (product?.price || 0) * selectedReceipt.item.quantity)}
                       </span>
                     </div>
                   </div>

@@ -27,6 +27,7 @@ To run next.js properly
 - npm install @fullcalendar/react @fullcalendar/daygrid @fullcalendar/timegrid @fullcalendar/list @fullcalendar/interaction
 - npm install --save-dev @types/fullcalendar__react
 - npm i jspdf jspdf-autotable chart.js react-chartjs-2
+- npm install three @types/three three-stdlib
 
 **Packages needs to Install Next.js**
 - npm install framer-motion

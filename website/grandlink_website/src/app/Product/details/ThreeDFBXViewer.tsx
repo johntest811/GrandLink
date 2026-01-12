@@ -1,23 +1,93 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { FBXLoader, OrbitControls } from "three-stdlib";
+import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 
 type Props = {
   fbxUrls: string[];
+  weather: "sunny" | "rainy" | "night" | "foggy";
   width?: number;
   height?: number;
 };
 
-export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }: Props) {
+type ModelUnits = "mm" | "cm" | "m";
+
+function mmPerUnit(units: ModelUnits): number {
+  switch (units) {
+    case "mm":
+      return 1;
+    case "cm":
+      return 10;
+    case "m":
+      return 1000;
+  }
+}
+
+function formatMm(valueMm: number): string {
+  if (!Number.isFinite(valueMm)) return "—";
+  // Keep Ikea-ish formatting: integers for >= 10mm, one decimal for small values
+  const abs = Math.abs(valueMm);
+  const rounded = abs >= 10 ? Math.round(valueMm) : Math.round(valueMm * 10) / 10;
+  return `${rounded.toLocaleString()} mm`;
+}
+
+export default function ThreeDFBXViewer({ fbxUrls, weather, width = 1200, height = 700 }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const [weather, setWeather] = useState<"sunny" | "rainy" | "windy" | "foggy">("sunny");
   const [currentFbxIndex, setCurrentFbxIndex] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [showMeasurements, setShowMeasurements] = useState(true);
+  const [modelUnits, setModelUnits] = useState<ModelUnits>("m");
+  const [dimsMm, setDimsMm] = useState<{ width: number; height: number; thickness: number } | null>(null);
+
+  const labelElsRef = useRef<{ w?: HTMLDivElement; h?: HTMLDivElement; t?: HTMLDivElement }>({});
+  const originalSizeRef = useRef<THREE.Vector3 | null>(null);
+  const showMeasurementsRef = useRef<boolean>(true);
+  const modelUnitsRef = useRef<ModelUnits>("m");
 
   // Ensure we have valid FBX URLs and current index
   const validFbxUrls = Array.isArray(fbxUrls) ? fbxUrls.filter(url => url && url.trim() !== '') : [];
   const currentFbx = validFbxUrls[currentFbxIndex] || validFbxUrls[0];
+
+  const storageKey = useMemo(() => (currentFbx ? `gl:fbxUnits:${currentFbx}` : ""), [currentFbx]);
+
+  useEffect(() => {
+    showMeasurementsRef.current = showMeasurements;
+  }, [showMeasurements]);
+
+  useEffect(() => {
+    modelUnitsRef.current = modelUnits;
+
+    // Update label DOM text without forcing a 3D reload
+    const s = originalSizeRef.current;
+    if (s && labelElsRef.current) {
+      const mpu = mmPerUnit(modelUnits);
+      const next = {
+        width: s.x * mpu,
+        height: s.y * mpu,
+        thickness: s.z * mpu,
+      };
+      setDimsMm(next);
+      if (labelElsRef.current.w) labelElsRef.current.w.textContent = formatMm(next.width);
+      if (labelElsRef.current.h) labelElsRef.current.h.textContent = formatMm(next.height);
+      if (labelElsRef.current.t) labelElsRef.current.t.textContent = formatMm(next.thickness);
+    }
+
+    if (storageKey) {
+      try {
+        localStorage.setItem(storageKey, modelUnits);
+      } catch {}
+    }
+  }, [modelUnits, storageKey]);
+
+  // Restore per-model unit preference (helps when different FBX files use different authoring units)
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const saved = localStorage.getItem(storageKey) as ModelUnits | null;
+      if (saved === "mm" || saved === "cm" || saved === "m") setModelUnits(saved);
+    } catch {}
+  }, [storageKey]);
 
   // Navigation functions
   const goToPrevious = () => {
@@ -84,6 +154,11 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
     const renderWidth = Math.floor(container.clientWidth || width);
     const renderHeight = Math.floor(container.clientHeight || height);
 
+    // Ensure container can host overlay renderers
+    try {
+      container.style.position = "relative";
+    } catch {}
+
     // clear previous children
     while (container.firstChild) container.removeChild(container.firstChild);
 
@@ -114,11 +189,14 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
       renderer.shadowMap.type = THREE.BasicShadowMap; // Performance mode
     }
 
-    // runtime-safe color management
-    const sRGB = (THREE as any).sRGBEncoding ?? (THREE as any).SRGBColorSpace ?? (THREE as any).SRGBEncoding;
+    // runtime-safe color management - use SRGBColorSpace for Three.js r152+
+    const sRGB = THREE.SRGBColorSpace ?? 3001; // SRGBColorSpace constant or fallback to sRGBEncoding value
     try {
-      if ("outputEncoding" in renderer && sRGB !== undefined) (renderer as any).outputEncoding = sRGB;
-      else if ("outputColorSpace" in renderer && sRGB !== undefined) (renderer as any).outputColorSpace = sRGB;
+      if ("outputColorSpace" in renderer) {
+        (renderer as any).outputColorSpace = sRGB;
+      } else if ("outputEncoding" in renderer) {
+        (renderer as any).outputEncoding = sRGB;
+      }
     } catch (e) {}
     if ("physicallyCorrectLights" in renderer) try { (renderer as any).physicallyCorrectLights = true; } catch(e){}
 
@@ -126,6 +204,21 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2; // Slightly increased exposure for better reflections
     container.appendChild(renderer.domElement);
+
+    // 2D label renderer for dimension callouts
+    let labelRenderer: CSS2DRenderer | null = null;
+    try {
+      labelRenderer = new CSS2DRenderer();
+      labelRenderer.setSize(renderWidth, renderHeight);
+      labelRenderer.domElement.style.position = "absolute";
+      labelRenderer.domElement.style.top = "0";
+      labelRenderer.domElement.style.left = "0";
+      labelRenderer.domElement.style.pointerEvents = "none";
+      labelRenderer.domElement.style.zIndex = "2";
+      container.appendChild(labelRenderer.domElement);
+    } catch (e) {
+      console.warn("CSS2DRenderer init failed", e);
+    }
 
     // controls - set up for center focus
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -255,6 +348,87 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
     let windLifetime: Float32Array | null = null;
     let windBaseOpacity = 0.3;
     let modelBounds: THREE.Box3 | null = null;
+    let measurementGroup: THREE.Group | null = null;
+
+    const disposeMeasurementGroup = () => {
+      if (!measurementGroup) return;
+      try {
+        measurementGroup.traverse((obj: any) => {
+          if (obj.geometry) {
+            try { obj.geometry.dispose(); } catch {}
+          }
+          if (obj.material) {
+            if (Array.isArray(obj.material)) {
+              obj.material.forEach((m: any) => {
+                try { m.dispose(); } catch {}
+              });
+            } else {
+              try { obj.material.dispose(); } catch {}
+            }
+          }
+        });
+      } catch {}
+      try { scene.remove(measurementGroup); } catch {}
+      measurementGroup = null;
+    };
+
+    const makeLabel = (initialText: string, kind: "w" | "h" | "t") => {
+      const el = document.createElement("div");
+      el.textContent = initialText;
+      el.style.padding = "6px 10px";
+      el.style.borderRadius = "999px";
+      el.style.background = "rgba(15, 23, 42, 0.78)";
+      el.style.color = "white";
+      el.style.fontSize = "12px";
+      el.style.fontWeight = "600";
+      el.style.letterSpacing = "0.2px";
+      el.style.whiteSpace = "nowrap";
+      el.style.boxShadow = "0 6px 18px rgba(0,0,0,0.25)";
+      el.style.backdropFilter = "blur(6px)";
+      labelElsRef.current[kind] = el;
+      return new CSS2DObject(el);
+    };
+
+    const addDimension = (opts: {
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+      extAStart?: THREE.Vector3;
+      extAEnd?: THREE.Vector3;
+      extBStart?: THREE.Vector3;
+      extBEnd?: THREE.Vector3;
+      tickDir: THREE.Vector3;
+      label: CSS2DObject;
+      color?: number;
+    }) => {
+      const color = opts.color ?? 0x1e88e5;
+      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 });
+      const group = new THREE.Group();
+
+      const mkLine = (a: THREE.Vector3, b: THREE.Vector3) => {
+        const geom = new THREE.BufferGeometry().setFromPoints([a, b]);
+        const line = new THREE.Line(geom, mat);
+        group.add(line);
+      };
+
+      mkLine(opts.start, opts.end);
+
+      // extension lines (from object edge to dimension line)
+      if (opts.extAStart && opts.extAEnd) mkLine(opts.extAStart, opts.extAEnd);
+      if (opts.extBStart && opts.extBEnd) mkLine(opts.extBStart, opts.extBEnd);
+
+      // ticks
+      const tickLen = opts.start.distanceTo(opts.end) * 0.03;
+      const tick = opts.tickDir.clone().normalize().multiplyScalar(Math.max(1.5, tickLen));
+      mkLine(opts.start.clone().add(tick), opts.start.clone().sub(tick));
+      mkLine(opts.end.clone().add(tick), opts.end.clone().sub(tick));
+
+      // label at midpoint
+      const mid = opts.start.clone().add(opts.end).multiplyScalar(0.5);
+      opts.label.position.copy(mid);
+      group.add(opts.label);
+
+      return group;
+    };
 
     // ENHANCED ENVIRONMENT MAPPING FOR REFLECTIONS
     const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(isLowEnd ? 256 : 512, { 
@@ -273,7 +447,7 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
     // frame counter
     let frameCounter = 0;
 
-    const applyWeather = (type: string) => {
+  const applyWeather = (type: string) => {
       // cleanup previous weather effects
       if (rainSystem) {
         try {
@@ -337,70 +511,16 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
 
         const fogDensity = performanceFactor > 0.5 ? 0.001 : 0.0006;
         scene.fog = new THREE.FogExp2(0xbfd1e5, fogDensity);
-      } else if (type === "windy") {
-        scene.background = new THREE.Color(0xe6f2ff);
-        ambient.intensity = 0.5;
-        sunLight.intensity = 1.8;
-        renderer.setClearColor(0xe6f2ff, 1);
-
-        const windCount = performanceFactor > 0.6 ? STRONG_WIND : BASE_WIND;
-        const positions = new Float32Array(windCount * 3);
-        windVel = new Float32Array(windCount * 3);
-        windLifetime = new Float32Array(windCount);
-
-        const modelCenter = modelBounds ? modelBounds.getCenter(new THREE.Vector3()) : new THREE.Vector3(0, 0, 0);
-        const modelSize = modelBounds ? modelBounds.getSize(new THREE.Vector3()) : new THREE.Vector3(100, 100, 100);
-        const windRange = Math.max(modelSize.x, modelSize.y, modelSize.z) * 3;
-        
-        for (let i = 0; i < windCount; i++) {
-          const side = Math.random();
-          let startX, startY, startZ;
-          
-          if (side < 0.7) {
-            startX = modelCenter.x - windRange * (0.8 + Math.random() * 0.4);
-            startY = modelCenter.y + (Math.random() - 0.5) * modelSize.y * 2;
-            startZ = modelCenter.z + (Math.random() - 0.5) * windRange;
-          } else if (side < 0.9) {
-            startX = modelCenter.x + (Math.random() - 0.5) * windRange;
-            startY = modelCenter.y + (Math.random() - 0.5) * modelSize.y * 2;
-            startZ = modelCenter.z - windRange * (0.8 + Math.random() * 0.4);
-          } else {
-            startX = modelCenter.x + (Math.random() - 0.5) * windRange * 0.5;
-            startY = modelCenter.y + windRange * (0.5 + Math.random() * 0.3);
-            startZ = modelCenter.z + (Math.random() - 0.5) * windRange * 0.5;
-          }
-
-          positions[i * 3 + 0] = startX;
-          positions[i * 3 + 1] = startY;
-          positions[i * 3 + 2] = startZ;
-
-          const baseWindSpeed = 8 + Math.random() * 12;
-          const windDirection = Math.PI * 0.1 * (Math.random() - 0.5);
-          
-          windVel[i * 3 + 0] = baseWindSpeed * Math.cos(windDirection);
-          windVel[i * 3 + 1] = (Math.random() - 0.5) * 2;
-          windVel[i * 3 + 2] = baseWindSpeed * Math.sin(windDirection) * 0.3;
-          
-          windLifetime[i] = Math.random() * 100;
-        }
-        
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-        const mat = new THREE.PointsMaterial({
-          map: windTexture,
-          size: Math.max(20, 30 * performanceFactor),
-          sizeAttenuation: true,
-          transparent: true,
-          opacity: windBaseOpacity,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        });
-        windSystem = new THREE.Points(geo, mat);
-        windSystem.frustumCulled = false;
-        windSystem.renderOrder = 1;
-        scene.add(windSystem);
-
-        scene.fog = new THREE.FogExp2(0xe6f2ff, 0.0008);
+      } else if (type === "night") {
+        // Night mode: dark blue sky, cooler moonlight, reduced ambient
+        scene.background = new THREE.Color(0x0b1020);
+        renderer.setClearColor(0x0b1020, 1);
+        ambient.intensity = 0.2;
+        // Set main directional as moonlight with bluish tone
+        try { sunLight.color.set(0xbdd1ff); } catch {}
+        sunLight.intensity = 0.6;
+        // Slight, subtle fog for depth at night
+        scene.fog = new THREE.FogExp2(0x0b1020, 0.0006);
       } else if (type === "foggy") {
         scene.background = new THREE.Color(0xd6dbe0);
         ambient.intensity = 0.6;
@@ -539,6 +659,16 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
         const box = new THREE.Box3().setFromObject(object);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
+
+        // Save original (pre-viewer-scale) dimensions for mm display
+        originalSizeRef.current = size.clone();
+        const mpuNow = mmPerUnit(modelUnitsRef.current);
+        const computedMm = {
+          width: size.x * mpuNow,
+          height: size.y * mpuNow,
+          thickness: size.z * mpuNow,
+        };
+        setDimsMm(computedMm);
         
         modelBounds = box.clone();
         
@@ -561,6 +691,87 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
         modelGroup.position.set(0, 0, 0); // Centered at origin without ground offset
 
         scene.add(modelGroup);
+
+        // Measurement overlay (Ikea-style dimension lines)
+        disposeMeasurementGroup();
+        labelElsRef.current = {};
+        if (modelBounds && showMeasurementsRef.current) {
+          const bounds = modelBounds.clone();
+          const bSize = bounds.getSize(new THREE.Vector3());
+          const maxS = Math.max(bSize.x, bSize.y, bSize.z);
+          const offset = Math.max(maxS * 0.08, 3);
+
+          measurementGroup = new THREE.Group();
+          measurementGroup.renderOrder = 3;
+
+          const min = bounds.min;
+          const max = bounds.max;
+
+          // Width (X) - front/bottom
+          const wStart = new THREE.Vector3(min.x, min.y, max.z + offset);
+          const wEnd = new THREE.Vector3(max.x, min.y, max.z + offset);
+          const wExtAStart = new THREE.Vector3(min.x, min.y, max.z);
+          const wExtAEnd = wStart.clone();
+          const wExtBStart = new THREE.Vector3(max.x, min.y, max.z);
+          const wExtBEnd = wEnd.clone();
+          const wLabel = makeLabel(formatMm(computedMm.width), "w");
+          measurementGroup.add(
+            addDimension({
+              start: wStart,
+              end: wEnd,
+              extAStart: wExtAStart,
+              extAEnd: wExtAEnd,
+              extBStart: wExtBStart,
+              extBEnd: wExtBEnd,
+              tickDir: new THREE.Vector3(0, 1, 0),
+              label: wLabel,
+            })
+          );
+
+          // Height (Y) - front/right
+          const hStart = new THREE.Vector3(max.x + offset, min.y, max.z + offset);
+          const hEnd = new THREE.Vector3(max.x + offset, max.y, max.z + offset);
+          const hExtAStart = new THREE.Vector3(max.x, min.y, max.z);
+          const hExtAEnd = hStart.clone();
+          const hExtBStart = new THREE.Vector3(max.x, max.y, max.z);
+          const hExtBEnd = hEnd.clone();
+          const hLabel = makeLabel(formatMm(computedMm.height), "h");
+          measurementGroup.add(
+            addDimension({
+              start: hStart,
+              end: hEnd,
+              extAStart: hExtAStart,
+              extAEnd: hExtAEnd,
+              extBStart: hExtBStart,
+              extBEnd: hExtBEnd,
+              tickDir: new THREE.Vector3(1, 0, 0),
+              label: hLabel,
+            })
+          );
+
+          // Thickness (Z) - bottom/left
+          const tStart = new THREE.Vector3(min.x - offset, min.y, min.z);
+          const tEnd = new THREE.Vector3(min.x - offset, min.y, max.z);
+          const tExtAStart = new THREE.Vector3(min.x, min.y, min.z);
+          const tExtAEnd = tStart.clone();
+          const tExtBStart = new THREE.Vector3(min.x, min.y, max.z);
+          const tExtBEnd = tEnd.clone();
+          const tLabel = makeLabel(formatMm(computedMm.thickness), "t");
+          measurementGroup.add(
+            addDimension({
+              start: tStart,
+              end: tEnd,
+              extAStart: tExtAStart,
+              extAEnd: tExtAEnd,
+              extBStart: tExtBStart,
+              extBEnd: tExtBEnd,
+              tickDir: new THREE.Vector3(0, 1, 0),
+              label: tLabel,
+            })
+          );
+
+          scene.add(measurementGroup);
+        }
 
         // Camera positioning
         const scaledSize = maxDimension * modelGroup.scale.x;
@@ -728,6 +939,11 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
 
       controls.update();
       renderer.render(scene, camera);
+      if (labelRenderer) {
+        try {
+          labelRenderer.render(scene, camera);
+        } catch {}
+      }
       rafId = requestAnimationFrame(animate);
     };
     animate();
@@ -735,12 +951,18 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
     // Cleanup
     return () => {
       cancelAnimationFrame(rafId);
+      disposeMeasurementGroup();
       try { controls.dispose(); } catch(e) {}
       try { renderer.dispose(); } catch(e) {}
       try { pmremGenerator.dispose(); } catch(e) {}
       try { cubeRenderTarget.dispose(); } catch(e) {}
       try { rainTexture.dispose(); } catch(e) {}
       try { windTexture.dispose(); } catch(e) {}
+      if (labelRenderer) {
+        try {
+          container.removeChild(labelRenderer.domElement);
+        } catch {}
+      }
       while (container && container.firstChild) container.removeChild(container.firstChild);
     };
   }, [currentFbx, weather]);
@@ -773,29 +995,58 @@ export default function ThreeDFBXViewer({ fbxUrls, width = 1200, height = 700 }:
       {/* 3D Viewer */}
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
 
+      {/* Measurements UI */}
+      <div className="absolute top-3 left-3 z-[9999] pointer-events-auto">
+        <div className="bg-black/70 backdrop-blur-md rounded-xl px-4 py-3 shadow-lg text-white min-w-[220px]">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold">Measurements</div>
+            <label className="flex items-center gap-2 text-xs text-white/90">
+              <input
+                type="checkbox"
+                checked={showMeasurements}
+                onChange={(e) => setShowMeasurements(e.target.checked)}
+              />
+              Show
+            </label>
+          </div>
+
+          <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-white/90">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-white/70">Width</span>
+              <span className="font-semibold">{dimsMm ? formatMm(dimsMm.width) : "—"}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-white/70">Height</span>
+              <span className="font-semibold">{dimsMm ? formatMm(dimsMm.height) : "—"}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-white/70">Thickness</span>
+              <span className="font-semibold">{dimsMm ? formatMm(dimsMm.thickness) : "—"}</span>
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <label className="text-xs text-white/70">Model units</label>
+            <select
+              value={modelUnits}
+              onChange={(e) => setModelUnits(e.target.value as ModelUnits)}
+              className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs text-white outline-none"
+              aria-label="Model units"
+            >
+              <option value="mm">mm</option>
+              <option value="cm">cm</option>
+              <option value="m">m</option>
+            </select>
+          </div>
+
+          <div className="mt-2 text-[11px] text-white/60 leading-snug">
+            If numbers look off, switch “Model units” (saved per model).
+          </div>
+        </div>
+      </div>
+
       {/* Controls Overlay */}
       <div className="pointer-events-none">
-        {/* Weather Controls */}
-        <div
-          className="absolute top-4 left-1/2 z-[9999] flex gap-2 transform -translate-x-1/2 pointer-events-auto"
-          style={{ maxWidth: "calc(100% - 32px)", overflow: "auto" }}
-        >
-          {["sunny", "rainy", "windy", "foggy"].map((w) => (
-            <button
-              key={w}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                weather === w 
-                  ? "bg-black text-white" 
-                  : "bg-gray-200 text-black hover:bg-gray-300"
-              }`}
-              onClick={() => setWeather(w as any)}
-              aria-label={w}
-            >
-              {w.charAt(0).toUpperCase() + w.slice(1)}
-            </button>
-          ))}
-        </div>
-
         {/* Multiple FBX Navigation Controls */}
         {validFbxUrls.length > 1 && (
           <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-auto">

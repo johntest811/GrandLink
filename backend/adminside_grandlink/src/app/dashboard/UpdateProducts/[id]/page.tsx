@@ -1,9 +1,12 @@
 "use client";
-import { useState, useEffect } from "react";
+
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
-import { logActivity } from "../../../lib/activity";
-import { notifyProductUpdated, notifyProductFileUploaded } from "../../../lib/notifications";
+import { logActivity } from "@/app/lib/activity";
+import { notifyProductUpdated, notifyProductFileUploaded } from "@/app/lib/notifications";
+import * as THREE from "three";
+import { FBXLoader, OrbitControls } from "three-stdlib";
 
 type Product = {
   id: string;
@@ -12,6 +15,7 @@ type Product = {
   price: number;
   category: string;
   type?: string;
+  images?: string[]; // unlimited images
   image1?: string;
   image2?: string;
   image3?: string;
@@ -41,6 +45,69 @@ export default function EditProductPage() {
   const [show3DViewer, setShow3DViewer] = useState(false);
   const [currentFbxIndex, setCurrentFbxIndex] = useState(0);
   const [uploadingFbx, setUploadingFbx] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
+
+  // Persist images (already exists)
+  const persistImages = async (imgs: string[]) => {
+    try {
+      const res = await fetch(`/api/products/${productId}` , {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          // Pass admin as JSON for activity logs on server
+          Authorization: JSON.stringify(currentAdmin || {})
+        },
+        body: JSON.stringify({ images: imgs }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `Failed to persist images (${res.status})`);
+      }
+      const j = await res.json().catch(() => null);
+      if (j?.product) {
+        setOriginalProduct((prev) => ({ ...(prev || {} as any), ...j.product } as Product));
+        setProduct((prev) => ({ ...(prev || {} as any), ...j.product } as Product));
+      }
+    } catch (err) {
+      console.error('persistImages error:', err);
+      setMessage(`Warning: images saved locally but failed to persist: ${String((err as any)?.message || err)}`);
+    }
+  };
+
+  // Persist FBX URLs (keeps legacy fbx_url in sync)
+  const persistFbx = async (fbxUrls: string[] | null) => {
+    try {
+      const payload: any = { fbx_urls: fbxUrls || [] };
+      payload.fbx_url = (fbxUrls && fbxUrls.length > 0) ? fbxUrls[0] : null;
+
+      const res = await fetch(`/api/products/${productId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: JSON.stringify(currentAdmin || {})
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `Failed to persist FBX (${res.status})`);
+      }
+
+      // Always reload product after update to sync state
+      const reload = await fetch(`/api/products/${productId}`);
+      if (reload.ok) {
+        const result = await reload.json();
+        if (result?.product) {
+          setOriginalProduct(result.product);
+          setProduct(result.product);
+        }
+      }
+    } catch (err) {
+      console.error('persistFbx error:', err);
+      setMessage(`Warning: FBX update saved locally but failed to persist: ${String((err as any)?.message || err)}`);
+    }
+  };
 
   useEffect(() => {
     // Load current admin
@@ -453,6 +520,144 @@ export default function EditProductPage() {
     }
   };
 
+  // Images management (unlimited)
+  const syncLegacyImages = async (imgs: string[]) => {
+    // Keep legacy fields in sync for backward compatibility
+    await handleChange('image1', imgs[0] || null);
+    await handleChange('image2', imgs[1] || null);
+    await handleChange('image3', imgs[2] || null);
+    await handleChange('image4', imgs[3] || null);
+    await handleChange('image5', imgs[4] || null);
+  };
+
+  const getCurrentImages = (): string[] => {
+    if (product?.images && Array.isArray(product.images)) return product.images;
+    // Build array from legacy fields as fallback
+    const legacy = [product?.image1, product?.image2, product?.image3, product?.image4, product?.image5]
+      .filter(Boolean) as string[];
+    return legacy;
+  };
+
+  const handleImagesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !currentAdmin || !product) return;
+
+    setUploadingImages(true);
+    setMessage("Uploading images...");
+
+    try {
+      const uploadedUrls: string[] = [];
+      for (const file of files) {
+        const url = await uploadFile(file, 'images', productId);
+        uploadedUrls.push(url);
+
+        // Log individual image upload
+        await logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: 'upload',
+          entity_type: 'product_image',
+          entity_id: product.id,
+          page: 'UpdateProducts',
+          details: `Uploaded product image: ${file.name} for "${product.name}"`,
+          metadata: {
+            fileName: file.name,
+            fileSize: file.size,
+            productName: product.name,
+            productId: product.id,
+            adminAccount: currentAdmin.username,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+
+      const current = getCurrentImages();
+      const next = [...current, ...uploadedUrls];
+
+  await handleChange('images', next);
+  await syncLegacyImages(next);
+  // Persist immediately so images don't disappear on re-fetch
+  await persistImages(next);
+
+      setMessage(`${files.length} image(s) uploaded successfully!`);
+      setTimeout(() => setMessage(""), 3000);
+    } catch (error) {
+      console.error('Images upload error:', error);
+      setMessage('Error uploading images');
+    } finally {
+      setUploadingImages(false);
+    }
+  };
+
+  const handleRemoveImage = async (url: string, index: number) => {
+    if (!currentAdmin || !product) return;
+    const current = getCurrentImages();
+    const next = current.filter((u) => u !== url);
+    await handleChange('images', next);
+    await syncLegacyImages(next);
+    await persistImages(next);
+
+    await logActivity({
+      admin_id: currentAdmin.id,
+      admin_name: currentAdmin.username,
+      action: 'delete',
+      entity_type: 'product_image',
+      entity_id: product.id,
+      page: 'UpdateProducts',
+      details: `Removed product image (${index + 1}) from "${product.name}"`,
+      metadata: {
+        removedUrl: url,
+        imageIndex: index + 1,
+        remaining: next.length,
+        productName: product.name,
+        productId: product.id,
+        adminAccount: currentAdmin.username,
+        timestamp: new Date().toISOString()
+      }
+    });
+  };
+
+  const handleReplaceImage = async (idx: number, file: File) => {
+    if (!currentAdmin || !product) return;
+    setUploadingImages(true);
+    setMessage('Replacing image...');
+    try {
+      const url = await uploadFile(file, 'images', productId);
+        const current = getCurrentImages();
+        const next = current.slice();
+      next[idx] = url;
+      await handleChange('images', next);
+      await syncLegacyImages(next);
+      await persistImages(next);
+
+      await logActivity({
+        admin_id: currentAdmin.id,
+        admin_name: currentAdmin.username,
+        action: 'update',
+        entity_type: 'product_image',
+        entity_id: product.id,
+        page: 'UpdateProducts',
+        details: `Replaced product image ${idx + 1} for "${product.name}" with ${file.name}`,
+        metadata: {
+          fileName: file.name,
+          imageIndex: idx + 1,
+          productName: product.name,
+          productId: product.id,
+          adminAccount: currentAdmin.username,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      setMessage('Image replaced successfully');
+      setTimeout(() => setMessage(''), 2500);
+    } catch (error) {
+      console.error('Replace image error:', error);
+      setMessage('Error replacing image');
+    } finally {
+      setUploadingImages(false);
+    }
+  };
+
   // Enhanced FBX file upload handler
   const handleFbxUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -500,16 +705,16 @@ export default function EditProductPage() {
         }
       }
       
-      // Update product state with new FBX URLs
-      const currentFbxUrls = product.fbx_urls || [];
+      // Merge with current FBX list (handle legacy fbx_url)
+      const currentFbxUrls = getCurrentFbxUrls();
       const newFbxUrls = [...currentFbxUrls, ...uploadedUrls];
-      
+
+      // Update UI state immediately
       await handleChange('fbx_urls', newFbxUrls);
-      
-      // Also update the legacy fbx_url field for backward compatibility
-      if (newFbxUrls.length > 0 && !product.fbx_url) {
-        await handleChange('fbx_url', newFbxUrls[0]);
-      }
+      await handleChange('fbx_url', newFbxUrls.length > 0 ? newFbxUrls[0] : null);
+
+      // Persist immediately so files don't disappear on refresh
+      await persistFbx(newFbxUrls);
       
       setMessage(`${files.length} FBX file(s) uploaded successfully!`);
       setTimeout(() => setMessage(""), 3000);
@@ -547,17 +752,15 @@ export default function EditProductPage() {
   const handleRemoveFbx = async (url: string, index: number) => {
     if (!currentAdmin || !product) return;
     
-    const currentFbxUrls = product.fbx_urls || [];
+    const currentFbxUrls = getCurrentFbxUrls();
     const newFbxUrls = currentFbxUrls.filter((u) => u !== url);
-    
+
+    // Update UI state
     await handleChange('fbx_urls', newFbxUrls);
-    
-    // Update legacy fbx_url field
-    if (newFbxUrls.length > 0) {
-      await handleChange('fbx_url', newFbxUrls[0]);
-    } else {
-      await handleChange('fbx_url', null);
-    }
+    await handleChange('fbx_url', newFbxUrls.length > 0 ? newFbxUrls[0] : null);
+
+    // Persist and reload product to sync state
+    await persistFbx(newFbxUrls);
     
     await logActivity({
       admin_id: currentAdmin.id,
@@ -625,7 +828,7 @@ export default function EditProductPage() {
       
       {/* 3D Viewer Modal */}
       {show3DViewer && currentFbxUrls.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.8)" }}>
           <div className="bg-white rounded-lg p-6 shadow-lg relative max-w-4xl w-full mx-4">
             <button
               onClick={() => setShow3DViewer(false)}
@@ -639,51 +842,31 @@ export default function EditProductPage() {
               <div className="text-sm text-gray-600 mb-2">
                 Viewing FBX {currentFbxIndex + 1} of {currentFbxUrls.length}
               </div>
-              
-              {/* FBX Navigation */}
+
               {currentFbxUrls.length > 1 && (
-                <div className="flex justify-center items-center gap-4 mb-4">
+                <div className="flex gap-2 mb-2">
                   <button
-                    onClick={() => setCurrentFbxIndex(Math.max(0, currentFbxIndex - 1))}
-                    disabled={currentFbxIndex === 0}
-                    className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+                    onClick={() => setCurrentFbxIndex((i) => (i > 0 ? i - 1 : currentFbxUrls.length - 1))}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
                   >
-                    ← Previous
+                    Previous
                   </button>
-                  
-                  <div className="flex space-x-1">
-                    {currentFbxUrls.map((_, index) => (
-                      <button
-                        key={index}
-                        onClick={() => setCurrentFbxIndex(index)}
-                        className={`w-8 h-8 rounded-full text-xs font-bold ${
-                          index === currentFbxIndex 
-                            ? 'bg-blue-600 text-white' 
-                            : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                        }`}
-                      >
-                        {index + 1}
-                      </button>
-                    ))}
-                  </div>
-                  
                   <button
-                    onClick={() => setCurrentFbxIndex(Math.min(currentFbxUrls.length - 1, currentFbxIndex + 1))}
-                    disabled={currentFbxIndex === currentFbxUrls.length - 1}
-                    className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+                    onClick={() => setCurrentFbxIndex((i) => (i < currentFbxUrls.length - 1 ? i + 1 : 0))}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
                   >
-                    Next →
+                    Next
                   </button>
                 </div>
               )}
+
+              <div className="text-xs text-gray-500 mb-2">
+                Use mouse to rotate, zoom, and pan. Background is transparent for clean previews.
+              </div>
             </div>
-            
-            <div className="flex-1 w-full flex items-center justify-center overflow-hidden">
-              <iframe
-                src={currentFbxUrls[currentFbxIndex]}
-                className="w-full h-96 border rounded"
-                title={`3D Model ${currentFbxIndex + 1}`}
-              />
+
+            <div className="h-96 w-full">
+              <FBXViewer fbxUrl={currentFbxUrls[currentFbxIndex]} />
             </div>
           </div>
         </div>
@@ -725,16 +908,6 @@ export default function EditProductPage() {
                 onChange={e => handleChange("price", Number(e.target.value))}
                 className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
                 required
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium mb-1 text-black">Inventory Count</label>
-              <input
-                type="number"
-                value={product.inventory || ""}
-                onChange={e => handleChange("inventory", Number(e.target.value) || 0)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
               />
             </div>
           </div>
@@ -933,47 +1106,74 @@ export default function EditProductPage() {
           )}
         </div>
 
-        {/* File Uploads */}
+        {/* Images Management (unlimited) */}
         <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Product Images</h2>
-          
-          {/* Legacy FBX File Upload (for backward compatibility) */}
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            Images Management ({getCurrentImages().length} files)
+          </h2>
+
           <div className="mb-4">
-            <label className="block font-medium mb-1 text-black">Single 3D Model (FBX File) - Legacy</label>
+            <label className="block font-medium mb-1 text-black">Upload Images</label>
             <input
               type="file"
-              accept=".fbx"
-              onChange={e => handleFileUpload(e, "fbx_url")}
-              className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
+              accept="image/*"
+              multiple
+              onChange={handleImagesUpload}
+              disabled={uploadingImages}
+              className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
             />
             <div className="text-sm text-gray-500 mt-1">
-              This is for backward compatibility. Use "3D Models Management" section above for multiple files.
+              You can upload any number of images. They will be added to this product.
             </div>
-            {product.fbx_url && (
-              <a href={product.fbx_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-sm mt-2 block">
-                View current legacy FBX file
-              </a>
-            )}
           </div>
 
-          {/* Image Uploads */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1,2,3,4,5].map(i => (
-              <div key={i} className="border border-gray-200 rounded-lg p-4">
-                <label className="block font-medium mb-2 text-black">{`Image ${i}`}</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={e => handleFileUpload(e, `image${i}` as keyof Product)}
-                  className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500 mb-2"
-                />
-                {product[`image${i}` as keyof Product] && (
-                  <img
-                    src={product[`image${i}` as keyof Product] as string}
-                    alt={`Image ${i}`}
-                    className="w-full h-32 object-cover rounded border"
-                  />
-                )}
+          {uploadingImages && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
+              <div className="flex items-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
+                Uploading images...
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {getCurrentImages().map((url, index) => (
+              <div key={index} className="flex items-center justify-between p-3 bg-gray-100 rounded-lg border">
+                <div className="flex items-center gap-3 flex-1">
+                  <img src={url} alt={`Image ${index + 1}`} className="w-20 h-20 object-cover rounded border" />
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">Image {index + 1}</div>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline text-xs break-all"
+                    >
+                      {url.split('/').pop() || url}
+                    </a>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 ml-4">
+                  <label className="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 transition-colors cursor-pointer">
+                    Replace
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleReplaceImage(index, f);
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveImage(url, index)}
+                    className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -1048,4 +1248,292 @@ async function uploadFile(file: File, field: string, productId: string): Promise
     .getPublicUrl(data.path);
 
   return urlData.publicUrl;
+}
+
+// FBX Viewer Component (adapted from products page for consistency)
+function FBXViewer({ fbxUrl }: { fbxUrl: string }) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const container = mountRef.current;
+    if (!container || !fbxUrl) return;
+
+    setIsLoading(true);
+    setLoadError(null);
+
+    let disposed = false;
+    let frameId = 0;
+    let objectURLToRevoke: string | null = null;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+      45,
+      (container.clientWidth || 800) / (container.clientHeight || 480),
+      0.1,
+      4000
+    );
+    camera.position.set(0, 160, 260);
+
+    // Color management (r152+ and <=r151)
+    const setOutputCS = (r: any) => {
+      const anyTHREE: any = THREE;
+      if ("outputColorSpace" in r && anyTHREE.SRGBColorSpace !== undefined) {
+        r.outputColorSpace = anyTHREE.SRGBColorSpace;
+      } else if ("outputEncoding" in r && anyTHREE.sRGBEncoding !== undefined) {
+        r.outputEncoding = anyTHREE.sRGBEncoding;
+      }
+    };
+    setOutputCS(renderer);
+
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(container.clientWidth || 800, container.clientHeight || 480);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+
+  // Mount canvas safely without disturbing React's DOM tracking
+  const canvasEl = renderer.domElement;
+  container.appendChild(canvasEl);
+
+  // Lights (no platform/grid); keep transparent background to focus on model
+  scene.background = null;
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.15);
+    hemi.position.set(0, 400, 0);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(180, 240, 200);
+    dir.castShadow = true;
+    scene.add(dir);
+
+    const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+    fill.position.set(-160, 160, -180);
+    scene.add(fill);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 20;
+    controls.maxDistance = 800;
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    const manager = new THREE.LoadingManager();
+    manager.onError = (url) => !disposed && setLoadError(`Failed to load: ${url}`);
+    const loader = new FBXLoader(manager);
+    loader.setCrossOrigin("anonymous");
+
+    // Try to fetch the file as a Blob first to avoid any CORS/content-type hiccups,
+    // then fall back to direct URL if needed.
+    const tryLoad = async () => {
+      const tryUrls: string[] = [fbxUrl];
+      // If the URL might contain spaces, also try an encoded version
+      if (fbxUrl.includes(" ")) tryUrls.push(encodeURI(fbxUrl));
+
+      for (const url of tryUrls) {
+        try {
+          const res = await fetch(url, { mode: "cors" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          objectURLToRevoke = URL.createObjectURL(blob);
+
+          return new Promise<void>((resolve, reject) => {
+            loader.load(
+              objectURLToRevoke as string,
+              (object) => {
+                if (disposed) return;
+                // attach object to scene with centering, scaling, and camera fit
+                object.traverse((child: any) => {
+                  if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    if (Array.isArray(child.material)) {
+                      child.material.forEach((m: any) => {
+                        m.side = THREE.DoubleSide;
+                        m.needsUpdate = true;
+                      });
+                    } else if (child.material) {
+                      child.material.side = THREE.DoubleSide;
+                      child.material.needsUpdate = true;
+                    }
+                  }
+                });
+
+                // Center and scale
+                const box1 = new THREE.Box3().setFromObject(object);
+                const center1 = box1.getCenter(new THREE.Vector3());
+                object.position.sub(center1);
+                const size1 = box1.getSize(new THREE.Vector3());
+                const maxAxis1 = Math.max(size1.x, size1.y, size1.z) || 1;
+                const targetSize = 200;
+                object.scale.setScalar(targetSize / maxAxis1);
+
+                // Fit camera
+                const box2 = new THREE.Box3().setFromObject(object);
+                const size2 = box2.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size2.x, size2.y, size2.z) || 1;
+                const center2 = box2.getCenter(new THREE.Vector3());
+                const fov = THREE.MathUtils.degToRad(camera.fov);
+                const fitHeightDistance = maxDim / (2 * Math.tan(fov / 2));
+                const fitWidthDistance = fitHeightDistance / camera.aspect;
+                const distance = 1.15 * Math.max(fitHeightDistance, fitWidthDistance);
+
+                camera.near = Math.max(0.1, maxDim / 100);
+                camera.far = Math.max(1000, maxDim * 100);
+                camera.updateProjectionMatrix();
+                camera.position.set(center2.x + distance, center2.y + distance * 0.2, center2.z + distance);
+                controls.target.copy(center2);
+                controls.minDistance = distance * 0.1;
+                controls.maxDistance = distance * 8;
+                controls.update();
+
+                scene.add(object);
+                setIsLoading(false);
+                resolve();
+              },
+              undefined,
+              (err) => {
+                reject(err);
+              }
+            );
+          });
+        } catch (e) {
+          // Try next variant
+          continue;
+        }
+      }
+      // If all blob attempts failed, try direct URL once
+      return new Promise<void>((resolve, reject) => {
+        loader.load(
+          fbxUrl,
+          (object) => {
+        if (disposed) return;
+            object.traverse((child: any) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                if (Array.isArray(child.material)) {
+                  child.material.forEach((m: any) => {
+                    m.side = THREE.DoubleSide;
+                    m.needsUpdate = true;
+                  });
+                } else if (child.material) {
+                  child.material.side = THREE.DoubleSide;
+                  child.material.needsUpdate = true;
+                }
+              }
+            });
+
+            const box1 = new THREE.Box3().setFromObject(object);
+            const center1 = box1.getCenter(new THREE.Vector3());
+            object.position.sub(center1);
+            const size1 = box1.getSize(new THREE.Vector3());
+            const maxAxis1 = Math.max(size1.x, size1.y, size1.z) || 1;
+            const targetSize = 200;
+            object.scale.setScalar(targetSize / maxAxis1);
+
+            const box2 = new THREE.Box3().setFromObject(object);
+            const size2 = box2.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size2.x, size2.y, size2.z) || 1;
+            const center2 = box2.getCenter(new THREE.Vector3());
+            const fov = THREE.MathUtils.degToRad(camera.fov);
+            const fitHeightDistance = maxDim / (2 * Math.tan(fov / 2));
+            const fitWidthDistance = fitHeightDistance / camera.aspect;
+            const distance = 1.15 * Math.max(fitHeightDistance, fitWidthDistance);
+
+            camera.near = Math.max(0.1, maxDim / 100);
+            camera.far = Math.max(1000, maxDim * 100);
+            camera.updateProjectionMatrix();
+            camera.position.set(center2.x + distance, center2.y + distance * 0.2, center2.z + distance);
+            controls.target.copy(center2);
+            controls.minDistance = distance * 0.1;
+            controls.maxDistance = distance * 8;
+            controls.update();
+
+            scene.add(object);
+            setIsLoading(false);
+            resolve();
+          },
+          undefined,
+          (err) => reject(err)
+        );
+      });
+    };
+
+    tryLoad().catch((err) => {
+      if (disposed) return;
+      console.error("FBX load error:", err);
+      setLoadError("Unable to render 3D model. Re-upload the FBX if the issue persists.");
+      setIsLoading(false);
+    });
+
+    const handleResize = () => {
+      if (disposed) return;
+      const w = container.clientWidth || 800;
+      const h = container.clientHeight || 480;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    };
+
+    const ro = new ResizeObserver(handleResize);
+    ro.observe(container);
+
+    const animate = () => {
+      if (disposed) return;
+      frameId = requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frameId);
+      ro.disconnect();
+      controls.dispose();
+
+      // Safe DOM removal (no NotFoundError)
+      try {
+        if (canvasEl?.parentNode === container) container.removeChild(canvasEl);
+      } catch {}
+
+      if (objectURLToRevoke) {
+        try { URL.revokeObjectURL(objectURLToRevoke); } catch {}
+        objectURLToRevoke = null;
+      }
+
+      // Dispose WebGL resources
+      scene.traverse((child) => {
+        const m = child as any;
+        if (m.isMesh) {
+          m.geometry?.dispose();
+          const mat = m.material;
+          if (Array.isArray(mat)) mat.forEach((mm: any) => mm?.dispose?.());
+          else mat?.dispose?.();
+        }
+      });
+      renderer.dispose();
+      (renderer as any).forceContextLoss?.();
+    };
+  }, [fbxUrl]);
+
+  return (
+    <div ref={mountRef} className="relative h-full w-full rounded-lg bg-transparent">
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/80 text-sm text-gray-600">
+          Loading 3D model…
+        </div>
+      )}
+      {loadError && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/90 px-4 text-center text-sm text-red-600">
+          {loadError}
+        </div>
+      )}
+    </div>
+  );
 }

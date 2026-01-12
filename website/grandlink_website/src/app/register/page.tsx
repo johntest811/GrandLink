@@ -2,7 +2,7 @@
 import { FaEnvelope, FaLock, FaUser, FaGoogle, FaCheckCircle } from "react-icons/fa";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { useState } from "react";
-import TopNavBar from "@/components/TopNavBar";
+import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
 import { ReactNode } from "react";
 
 export default function RegisterPage() {
@@ -11,18 +11,41 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [popup, setPopup] = useState<{ success: boolean; message: ReactNode } | null>(null);
+  const baseUrl =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "https://grandlnik-website.vercel.app");
   // Google OAuth registration
   const handleGoogleRegister = async () => {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: "http://localhost:3000/home", // or your deployed URL
+        redirectTo: `${baseUrl}/home`,
       },
     });
   };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const passwordChecks = {
+      length: password.length >= 8,
+      lower: /[a-z]/.test(password),
+      upper: /[A-Z]/.test(password),
+      number: /\d/.test(password),
+      special: /[^A-Za-z0-9]/.test(password),
+    };
+    const meetsMinimum =
+      passwordChecks.length && passwordChecks.lower && passwordChecks.upper && passwordChecks.number;
+
+    if (!meetsMinimum) {
+      setPopup({
+        success: false,
+        message:
+          "Password is too weak. Use 8+ characters with uppercase, lowercase, and a number (special character recommended).",
+      });
+      return;
+    }
+
     if (password !== confirmPassword) {
       setPopup({ success: false, message: "Passwords do not match." });
       return;
@@ -52,7 +75,7 @@ export default function RegisterPage() {
       email,
       password,
       options: {
-        emailRedirectTo: "http://localhost:3000/register/success",
+        emailRedirectTo: `${baseUrl}/register/success`,
         data: { name }
       }
     });
@@ -86,12 +109,39 @@ export default function RegisterPage() {
     }
   };
 
+  const passwordChecks = {
+    length: password.length >= 8,
+    lower: /[a-z]/.test(password),
+    upper: /[A-Z]/.test(password),
+    number: /\d/.test(password),
+    special: /[^A-Za-z0-9]/.test(password),
+  };
+
+  const strengthScore =
+    Number(passwordChecks.length) +
+    Number(passwordChecks.lower) +
+    Number(passwordChecks.upper) +
+    Number(passwordChecks.number) +
+    Number(passwordChecks.special);
+
+  const strengthLabel =
+    strengthScore <= 2 ? "Weak" : strengthScore <= 4 ? "Medium" : "Strong";
+
+  const strengthColorClass =
+    strengthLabel === "Strong" ? "text-green-600" : strengthLabel === "Medium" ? "text-yellow-600" : "text-red-600";
+
+  const meetsMinimumStrength =
+    passwordChecks.length && passwordChecks.lower && passwordChecks.upper && passwordChecks.number;
+
+  const passwordsMatch =
+    confirmPassword.length === 0 ? true : password === confirmPassword;
+
   return (
     <div
       className="relative min-h-screen font-sans bg-cover bg-center flex flex-col"
       style={{ backgroundImage: 'url("/sevices.avif")' }}
     >
-      <TopNavBar />
+      <UnifiedTopNavBar />
       {/* Main Content */}
       <main className="flex-1 flex items-center justify-center">
         <div className="bg-white/95 rounded-xl shadow-lg px-8 py-10 w-full max-w-md flex flex-col items-center relative z-10 mt-12 mb-12">
@@ -147,6 +197,30 @@ export default function RegisterPage() {
                   onChange={e => setPassword(e.target.value)}
                 />
               </div>
+              <div className="mt-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-black">Password strength:</span>
+                  <span className={`font-semibold ${strengthColorClass}`}>{strengthLabel}</span>
+                </div>
+
+                <div className="mt-2 grid grid-cols-1 gap-1 text-black">
+                  <div className={passwordChecks.length ? "text-green-600" : "text-red-600"}>
+                    {passwordChecks.length ? "OK" : "X"} 8+ characters
+                  </div>
+                  <div className={passwordChecks.upper ? "text-green-600" : "text-red-600"}>
+                    {passwordChecks.upper ? "OK" : "X"} uppercase letter
+                  </div>
+                  <div className={passwordChecks.lower ? "text-green-600" : "text-red-600"}>
+                    {passwordChecks.lower ? "OK" : "X"} lowercase letter
+                  </div>
+                  <div className={passwordChecks.number ? "text-green-600" : "text-red-600"}>
+                    {passwordChecks.number ? "OK" : "X"} number
+                  </div>
+                  <div className={passwordChecks.special ? "text-green-600" : "text-gray-600"}>
+                    {passwordChecks.special ? "OK" : "Optional"} special character
+                  </div>
+                </div>
+              </div>
             </div>
             <div>
               <label className="font-semibold text-sm mb-1 block text-black" htmlFor="confirm-password">
@@ -164,10 +238,16 @@ export default function RegisterPage() {
                   onChange={e => setConfirmPassword(e.target.value)}
                 />
               </div>
+              {!passwordsMatch ? (
+                <div className="mt-2 text-xs text-red-600">Passwords do not match.</div>
+              ) : null}
             </div>
             <button
               type="submit"
-              className="bg-[#232d3b] text-white font-semibold rounded w-full py-2 mt-2 hover:bg-[#1a222e] transition"
+              disabled={!meetsMinimumStrength || !passwordsMatch}
+              className={`bg-[#232d3b] text-white font-semibold rounded w-full py-2 mt-2 transition ${
+                !meetsMinimumStrength || !passwordsMatch ? "opacity-60 cursor-not-allowed" : "hover:bg-[#1a222e]"
+              }`}
             >
               REGISTER
             </button>

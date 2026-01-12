@@ -14,23 +14,40 @@ export default function LoginPage() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [error, setError] = useState("");
   const [confirmationSent, setConfirmationSent] = useState(false);
+  const [sending, setSending] = useState(false);
   const router = useRouter();
+
+  const baseUrl =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "https://grandlnik-website.vercel.app");
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (sending) return; // prevent double submit
+    setSending(true);
     setError("");
-    // Send magic link to user's email
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: "http://localhost:3000/login/confirm" // or your deployed URL
+    try {
+      const res = await fetch("/api/auth/request-magic-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error || "Failed to start login");
+        setSending(false);
+        return;
       }
-    });
-    if (error) {
-      setError(error.message);
-      return;
+      // Store credentials temporarily so /login/verify can complete sign-in after code verification
+      sessionStorage.setItem("login_email", email);
+      sessionStorage.setItem("login_password", password);
+      sessionStorage.setItem("login_flow", "password");
+
+      router.push("/login/verify");
+    } catch (e: any) {
+      setError("Failed to start login");
+      setSending(false);
     }
-    setShowSuccess(true); // Show "Check your email" message
   };
 
   const sendConfirmationEmail = async (email: string) => {
@@ -38,7 +55,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: "http://localhost:3000/login"
+        emailRedirectTo: "https://grandlnik-website.vercel.app/login"
       }
     });
     return error;
@@ -57,7 +74,8 @@ export default function LoginPage() {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: "http://localhost:3000/home", // or your deployed URL
+        // After Google OAuth completes, we still require a verification code.
+        redirectTo: `${baseUrl}/login/confirm`,
       },
     });
   };
@@ -107,7 +125,7 @@ export default function LoginPage() {
             <div className="flex justify-end text-xs">
               <a href="forgotpass" className="text-blue-600 hover:underline">Forgot Password</a>
             </div>
-            <button type="submit" className="bg-[#232d3b] text-white font-semibold rounded w-full py-2 mt-2 hover:bg-[#1a222e] transition">LOGIN</button>
+            <button type="submit" disabled={sending} className={`bg-[#232d3b] text-white font-semibold rounded w-full py-2 mt-2 transition ${sending ? 'opacity-60 cursor-not-allowed' : 'hover:bg-[#1a222e]'}`}>{sending ? 'Sending link…' : 'LOGIN'}</button>
             {error && (
               <div className="text-red-600 text-xs text-center mt-2">{error}</div>
             )}

@@ -88,7 +88,7 @@ export default function UpdateProductsPage() {
       setLoading(true);
       const { data, error } = await supabase
         .from("products")
-        .select("id, name, price, category, type, inventory, image1, created_at")
+        .select("id, name, price, category, type, inventory, image1, images, created_at")
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -204,14 +204,19 @@ export default function UpdateProductsPage() {
     try {
       // Get full product details before deletion for comprehensive logging
       const productToDelete = products.find(p => p.id === productId);
-      
-      const { error } = await supabase
-        .from("products")
-        .delete()
-        .eq("id", productId);
 
-      if (error) {
-        throw error;
+      // Use secure server-side API to permanently delete (bypasses RLS)
+      const res = await fetch(`/api/products/${productId}`, {
+        method: "DELETE",
+        headers: {
+          // API expects JSON-serialized admin in Authorization header for audit logs
+          Authorization: JSON.stringify({ id: currentAdmin.id, username: currentAdmin.username })
+        }
+      });
+
+      if (!res.ok) {
+        const { error: apiError } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(apiError || `Failed to delete product (${res.status})`);
       }
 
       // Remove from local state
@@ -348,12 +353,29 @@ export default function UpdateProductsPage() {
 
   // Filter products
   const filteredProducts = products.filter(product => {
-    const matchesName = product.name.toLowerCase().includes(filter.toLowerCase());
-    const matchesCategory = !categoryFilter || product.category === categoryFilter;
+    const normalize = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const keyFor = (s: string | null | undefined) => {
+      const k = normalize(s);
+      if (k.includes("curtain") && k.includes("wall")) return "curtainwall";
+      if (k.includes("enclosure")) return "enclosure";
+      return k;
+    };
+
+    const matchesName = (product.name || "").toLowerCase().includes((filter || "").toLowerCase());
+    const matchesCategory = !categoryFilter || keyFor(product.category) === keyFor(categoryFilter);
     return matchesName && matchesCategory;
   });
 
-  const categories = [...new Set(products.map(p => p.category))].filter(Boolean);
+  // Build categories list and ensure "Curtain Walls" option is available
+  const existingCategories = (products.map(p => p.category).filter(Boolean) as string[]);
+  const hasCurtainWalls = existingCategories.some(c => {
+    const k = (c || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    return k.includes("curtain") && k.includes("wall");
+  });
+  const categories = Array.from(new Set([...
+    existingCategories,
+    ...(hasCurtainWalls ? [] as string[] : ["Curtain Walls"]) 
+  ]));
 
   return (
     <div className="space-y-6">
@@ -402,7 +424,7 @@ export default function UpdateProductsPage() {
               placeholder="Search products..."
               value={filter}
               onChange={(e) => handleFilterChange(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full px-3 py-2 border border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-black"
             />
           </div>
           
@@ -410,7 +432,7 @@ export default function UpdateProductsPage() {
             <select
               value={categoryFilter}
               onChange={(e) => handleCategoryFilterChange(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 focus:ring-2 focus:ring-indigo-500"
+              className="px-4 py-2 border border-gray-600 rounded-lg bg-white hover:bg-gray-50 focus:ring-2 focus:ring-indigo-500 text-black"
             >
               <option value="">All Categories</option>
               {categories.map(category => (
@@ -445,9 +467,9 @@ export default function UpdateProductsPage() {
             <div key={product.id} className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
               {/* Product Image */}
               <div className="h-48 bg-gray-200 relative">
-                {product.image1 ? (
+                {product.image1 || (product as any).images?.[0] ? (
                   <img
-                    src={product.image1}
+                    src={product.image1 || (product as any).images?.[0]}
                     alt={product.name}
                     className="w-full h-full object-cover"
                     onError={(e) => {
@@ -464,7 +486,7 @@ export default function UpdateProductsPage() {
                           metadata: {
                             productName: product.name,
                             productId: product.id,
-                            imageUrl: product.image1,
+                            imageUrl: product.image1 || (product as any).images?.[0],
                             adminAccount: currentAdmin.username
                           }
                         });

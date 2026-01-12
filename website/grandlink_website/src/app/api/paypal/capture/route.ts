@@ -78,13 +78,26 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (!fetchError && userItem) {
+        // Calculate total amount from metadata
+        const unit = Number(userItem.meta?.unit_price || 0);
+        const qty = Number(userItem.quantity || 1);
+        const addons: any[] = Array.isArray(userItem.meta?.addons) ? userItem.meta.addons : [];
+        const addonsLine = addons.reduce((s, a) => s + Number(a?.fee || 0), 0) * qty;
+        const subtotal = unit * qty;
+        const addonsTotal = addonsLine;
+        const discountValue = Number(userItem.meta?.voucher_discount || 0);
+        const totalAmount = Math.max(0, subtotal + addonsTotal - discountValue);
+
         // Update user_item status
         await supabase
           .from('user_items')
           .update({ 
-            status: 'reserved',
+            status: 'pending_payment',
+            order_status: 'pending_payment',
             payment_status: 'completed',
             payment_id: orderId,
+            total_paid: totalAmount,
+            payment_method: 'paypal',
             meta: {
               ...userItem.meta,
               payment_confirmed_at: new Date().toISOString(),
@@ -94,19 +107,33 @@ export async function POST(request: NextRequest) {
           })
           .eq('id', userItemId);
 
-        // Deduct inventory
-        const { data: product } = await supabase
-          .from('products')
-          .select('inventory')
-          .eq('id', userItem.product_id)
-          .single();
-
-        if (product) {
-          const newInventory = Math.max(0, (product.inventory || 0) - userItem.quantity);
-          await supabase
+        // Deduct inventory unless already reserved/deducted earlier
+        const alreadyDeducted = Boolean(userItem.meta?.inventory_deducted);
+        if (!alreadyDeducted) {
+          const { data: product } = await supabase
             .from('products')
-            .update({ inventory: newInventory })
-            .eq('id', userItem.product_id);
+            .select('inventory')
+            .eq('id', userItem.product_id)
+            .single();
+
+          if (product) {
+            const newInventory = Math.max(0, (product.inventory || 0) - userItem.quantity);
+            await supabase
+              .from('products')
+              .update({ inventory: newInventory })
+              .eq('id', userItem.product_id);
+            await supabase
+              .from('user_items')
+              .update({
+                meta: {
+                  ...(userItem.meta || {}),
+                  inventory_deducted: true,
+                  product_stock_before: product.inventory,
+                  product_stock_after: newInventory,
+                },
+              })
+              .eq('id', userItemId);
+          }
         }
       }
     }

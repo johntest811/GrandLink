@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { useSearchParams, useRouter } from "next/navigation";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -37,11 +37,13 @@ type Address = {
   is_default: boolean;
 };
 
+type VoucherInfo = { code: string; type: "percent" | "amount"; value: number };
+
 function ReservationPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const productId = searchParams.get("productId");
-  
+
   const [product, setProduct] = useState<Product | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string>("");
@@ -49,21 +51,26 @@ function ReservationPageContent() {
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     quantity: 1,
     customWidth: "",
     customHeight: "",
     customThickness: "",
-    specialInstructions: ""
+    specialInstructions: "",
+    colorCustomization: false,
+    colorText: "",
   });
-  
-  const [paymentMethod, setPaymentMethod] = useState<"paymongo" | "paypal">("paymongo");
+  const [voucherCode, setVoucherCode] = useState("");
+  const [voucherInfo, setVoucherInfo] = useState<VoucherInfo | null>(null);
+  const [applyingVoucher, setApplyingVoucher] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<"paymongo" | "paypal">(
+    "paymongo"
+  );
 
-  // Branch options
   const branches = [
     "BALINTAWAK BRANCH",
-    "STA. ROSA BRANCH", 
+    "STA. ROSA BRANCH",
     "UGONG BRANCH",
     "ALABANG SHOWROOM",
     "IMUS BRANCH",
@@ -72,110 +79,170 @@ function ReservationPageContent() {
     "MC HOME DEPO ORTIGAS",
     "SAN JUAN CITY",
     "CW COMMONWEALTH",
-    "MC HOME DEPO BGC"
+    "MC HOME DEPO BGC",
   ];
 
-  // Back button handler
   const handleGoBack = () => {
-    if (productId) {
-      // Go back to product details page
-      router.push(`/Product/details?id=${productId}`);
-    } else {
-      // Fallback to products listing
-      router.push("/Product");
-    }
+    if (productId) router.push(`/Product/details?id=${productId}`);
+    else router.push("/Product");
   };
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Get current user
-        const { data: userData, error: userError } = await supabase.auth.getUser();
-        
-        if (userError || !userData?.user) {
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData?.user) {
           router.push("/login");
           return;
         }
+        const uid = userData.user.id;
+        setUserId(uid);
 
-        const currentUserId = userData.user.id;
-        setUserId(currentUserId);
-
-        // Load product
         if (productId) {
           const { data: productData, error: productError } = await supabase
             .from("products")
             .select("*")
             .eq("id", productId)
             .single();
-
-          if (productError) {
-            console.error("Error loading product:", productError);
-            alert("Product not found");
-            router.push("/Product");
-            return;
-          }
-
-          setProduct(productData);
+          if (productError) throw productError;
+          setProduct(productData as any);
         }
 
-        // Load user addresses
-        const { data: addressData, error: addressError } = await supabase
+        const { data: addressData } = await supabase
           .from("addresses")
           .select("*")
-          .eq("user_id", currentUserId)
+          .eq("user_id", uid)
           .order("is_default", { ascending: false });
 
-        if (!addressError && addressData) {
-          setAddresses(addressData);
-          const defaultAddress = addressData.find(addr => addr.is_default);
-          if (defaultAddress) {
-            setSelectedAddressId(defaultAddress.id);
-          }
+        if (addressData) {
+          setAddresses(addressData as any);
+          const def = addressData.find((a: any) => a.is_default);
+          if (def) setSelectedAddressId(def.id);
         }
-
-      } catch (error) {
-        console.error("Error loading data:", error);
+      } catch (e) {
+        console.error(e);
       } finally {
         setLoading(false);
       }
     };
-
     loadData();
   }, [productId, router]);
+
+  const qty = Math.max(1, Number(formData.quantity || 1));
+  const productSubtotal = (product?.price || 0) * qty;
+  const addonsTotal = formData.colorCustomization ? 2500 * qty : 0;
+  const preDiscount = productSubtotal + addonsTotal;
+  const discountValue = voucherInfo
+    ? voucherInfo.type === "percent"
+      ? Math.min(preDiscount, preDiscount * (voucherInfo.value / 100))
+      : Math.min(preDiscount, voucherInfo.value)
+    : 0;
+  const discountedTotal = Math.max(0, preDiscount - discountValue);
+  const reservationFee = 500;
+  const balanceDue = Math.max(0, discountedTotal - reservationFee);
+
+  const applyVoucher = async () => {
+    if (preDiscount <= 0) {
+      alert("Please set quantity first.");
+      return;
+    }
+    setApplyingVoucher(true);
+    try {
+      const res = await fetch("/api/discount-codes/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: voucherCode.trim(),
+          subtotal: preDiscount,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Invalid code");
+      setVoucherInfo(data.discount);
+    } catch (e: any) {
+      alert(e.message);
+      setVoucherInfo(null);
+    } finally {
+      setApplyingVoucher(false);
+    }
+  };
+
+  const addToCartInstead = async () => {
+    if (!userId || !product) return;
+    try {
+      const addons = formData.colorCustomization
+        ? [
+            {
+              key: "color_customization",
+              label: "Color Customization",
+              fee: 2500,
+              // Do not prefill text; leave empty until user types
+              value: formData.colorText || "",
+            },
+          ]
+        : [];
+      const res = await fetch("/api/cart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          productId: product.id,
+          quantity: qty,
+          meta: {
+            custom_dimensions: {
+              width: parseFloat(formData.customWidth) || product.width,
+              height: parseFloat(formData.customHeight) || product.height,
+              thickness: parseFloat(formData.customThickness) || product.thickness,
+            },
+            addons,
+            voucher_code: voucherInfo?.code || null,
+            voucher_discount: discountValue,
+          },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Failed to add to cart");
+      router.push("/profile/cart");
+    } catch (e: any) {
+      alert(e.message);
+    }
+  };
 
   const handleReservation = async () => {
     if (!userId || !product || !selectedAddressId || !selectedBranch) {
       alert("Please complete all required fields including branch selection");
       return;
     }
-
-    if (product.inventory < formData.quantity) {
+    if (product.inventory < qty) {
       alert("Insufficient inventory for this quantity");
       return;
     }
-
     setSubmitting(true);
-
     try {
-      const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
+      const selectedAddress = addresses.find((a) => a.id === selectedAddressId);
       if (!selectedAddress) throw new Error("Selected address not found");
 
-      console.log('🛒 Creating reservation for user:', userId);
-      console.log('📦 Product:', product.name);
-      console.log('📊 Quantity:', formData.quantity);
-      console.log('🏢 Branch:', selectedBranch);
+      const addons = formData.colorCustomization
+        ? [
+            {
+              key: "color_customization",
+              label: "Color Customization",
+              fee: 2500,
+              value: formData.colorText || "",
+            },
+          ]
+        : [];
 
-      // Insert into user_items table
       const userItemData = {
         user_id: userId,
         product_id: product.id,
         item_type: "reservation",
         status: "pending_payment",
-        quantity: formData.quantity,
+        quantity: qty,
         delivery_address_id: selectedAddressId,
         special_instructions: formData.specialInstructions || null,
         payment_status: "pending",
-        reservation_fee: 500,
+        reservation_fee: reservationFee,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         meta: {
@@ -187,98 +254,75 @@ function ReservationPageContent() {
           product_material: product.material,
           product_description: product.description,
           additional_features: product.additionalfeatures,
-          reservation_fee: 500,
           payment_method: paymentMethod,
           selected_branch: selectedBranch,
           custom_dimensions: {
             width: parseFloat(formData.customWidth) || product.width,
             height: parseFloat(formData.customHeight) || product.height,
-            thickness: parseFloat(formData.customThickness) || product.thickness,
+            thickness:
+              parseFloat(formData.customThickness) || product.thickness,
           },
           delivery_address: {
             first_name: selectedAddress.first_name,
             last_name: selectedAddress.last_name,
             full_name: selectedAddress.full_name,
             phone: selectedAddress.phone,
-            address: selectedAddress.address
+            address: selectedAddress.address,
           },
-          total_amount: product.price * formData.quantity,
-          balance_due: (product.price * formData.quantity) - 500,
-          created_by: 'user',
-          reservation_created_at: new Date().toISOString()
-        }
+          addons,
+          subtotal: productSubtotal,
+          addons_total: addonsTotal,
+          discount_value: discountValue,
+          total_amount: discountedTotal,
+          reservation_fee: reservationFee,
+          balance_due: balanceDue,
+          voucher_code: voucherInfo?.code || null,
+          created_by: "user",
+          reservation_created_at: new Date().toISOString(),
+        },
       };
-
-      console.log('💾 Inserting user_item:', userItemData);
 
       const { data: userItem, error: userItemError } = await supabase
         .from("user_items")
-        .insert([userItemData])
+        .insert([userItemData as any])
         .select()
         .single();
 
-      if (userItemError) {
-        console.error("❌ Failed to create user_item:", userItemError);
-        throw new Error(`Database error: ${userItemError.message}`);
-      }
+      if (userItemError) throw new Error(`Database error: ${userItemError.message}`);
 
-      console.log("✅ User item created successfully:", userItem.id);
-
-      // Create payment session
-      const paymentData = {
-        amount: 500,
-        currency: paymentMethod === 'paypal' ? 'USD' : 'PHP',
-        user_item_id: userItem.id,
-        product_name: product.name,
-        payment_type: 'reservation',
+      // IMPORTANT: send user_item_ids array to the API
+      const paymentPayload = {
+        user_item_ids: [userItem.id],
         payment_method: paymentMethod,
+        payment_type: "reservation",
         success_url: `${window.location.origin}/reservation/success?reservation_id=${userItem.id}`,
         cancel_url: `${window.location.origin}/reservation?productId=${product.id}`,
+        voucher: voucherInfo || undefined,
       };
 
-      console.log('💳 Creating payment session...');
+      const response = await fetch("/api/create-payment-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(paymentPayload),
+      });
+      const { checkoutUrl, sessionId, error: paymentError } = await response.json();
+      if (paymentError || !checkoutUrl)
+        throw new Error(paymentError || "Payment session creation failed");
 
-      const response = await fetch('/api/create-payment-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(paymentData)
+      await supabase.from("payment_sessions").insert({
+        user_id: userId,
+        user_item_id: userItem.id,
+        stripe_session_id: sessionId,
+        amount: reservationFee,
+        currency: paymentMethod === "paypal" ? "USD" : "PHP",
+        status: "pending",
+        payment_type: "reservation",
+        payment_provider: paymentMethod,
+        created_at: new Date().toISOString(),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Payment session creation failed');
-      }
-
-      const { checkoutUrl, sessionId, error: paymentError } = await response.json();
-      
-      if (paymentError) throw new Error(paymentError);
-
-      console.log('✅ Payment session created, redirecting to:', checkoutUrl);
-
-      // Store payment session
-      await supabase
-        .from('payment_sessions')
-        .insert({
-          user_id: userId,
-          user_item_id: userItem.id,
-          stripe_session_id: sessionId,
-          amount: 500,
-          currency: paymentMethod === 'paypal' ? 'USD' : 'PHP',
-          status: 'pending',
-          payment_type: 'reservation',
-          payment_provider: paymentMethod,
-          created_at: new Date().toISOString()
-        });
-
-      // Redirect to payment
-      if (checkoutUrl) {
-        window.location.href = checkoutUrl;
-      } else {
-        throw new Error("No checkout URL received");
-      }
-
+      window.location.href = checkoutUrl;
     } catch (error: any) {
-      console.error("💥 Reservation error:", error);
       alert("Error creating reservation: " + (error?.message || "Unknown error occurred"));
     } finally {
       setSubmitting(false);
@@ -308,288 +352,335 @@ function ReservationPageContent() {
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="container mx-auto px-4 max-w-6xl">
-        <div className="bg-white rounded-lg shadow-lg p-8">
-          {/* Back Button and Header */}
-          <div className="flex items-center justify-between mb-8">
-            <button
-              onClick={handleGoBack}
-              className="flex items-center text-gray-600 hover:text-gray-800 transition-colors duration-200"
-            >
-              <svg
-                className="w-5 h-5 mr-2"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                />
-              </svg>
-              Back to Product
-            </button>
-            
-            <h1 className="text-3xl font-bold text-gray-900">
-              Reserve Your Product
-            </h1>
-            
-            {/* Spacer for centering */}
-            <div className="w-32"></div>
-          </div>
+        <button
+          onClick={handleGoBack}
+          className="flex items-center gap-2 text-gray-700 hover:text-[#8B1C1C] mb-3"
+        >
+          <span>←</span> Back to Product
+        </button>
 
-          <div className="grid lg:grid-cols-3 gap-8">
-            {/* Product Info - Left Column */}
-            <div className="lg:col-span-2">
-              <div className="mb-6">
+        <h1 className="text-2xl md:text-3xl font-bold text-center text-black mb-4">
+          Reserve Your Product
+        </h1>
+
+        <div className="bg-white rounded-lg shadow-lg p-6 md:p-8 text-black">
+          <div className="flex flex-col md:flex-row gap-8">
+            {/* Left */}
+            <div className="flex-1">
+              <div className="w-full aspect-[16/9] bg-gray-100 rounded overflow-hidden mb-4">
                 <img
-                  src={product.images?.[0] || product.image1 || "/no-image.png"}
-                  alt={product.name}
-                  className="w-full h-80 object-cover rounded-lg shadow-md"
+                  src={
+                    (product?.images && product.images[0]) ||
+                    product?.image1 ||
+                    "/no-orders.png"
+                  }
+                  alt={product?.name || "Product"}
+                  className="w-full h-full object-cover"
                 />
               </div>
-              
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-900">{product.name}</h2>
-                  {product.fullproductname && (
-                    <p className="text-lg text-gray-600 mt-1">{product.fullproductname}</p>
-                  )}
+
+              <h2 className="text-2xl font-bold">{product.name}</h2>
+              <div className="text-gray-600 mt-1">{product.fullproductname || ""}</div>
+
+              <div className="mt-3 flex items-center gap-3">
+                <div className="text-2xl font-extrabold text-green-600">
+                  ₱{Number(product.price).toLocaleString()}
                 </div>
-
-                <div className="flex items-center space-x-4">
-                  <span className="text-3xl font-bold text-green-600">₱{product.price?.toLocaleString()}</span>
-                  <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                    Stock: {product.inventory}
-                  </span>
-                </div>
-
-                {product.description && (
-                  <div>
-                    <h3 className="font-semibold text-gray-800 mb-2">Description</h3>
-                    <p className="text-gray-600">{product.description}</p>
-                  </div>
-                )}
-
-                {/* Product Specifications */}
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h3 className="font-semibold text-gray-800 mb-3">Product Specifications</h3>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    {product.category && (
-                      <div>
-                        <span className="text-gray-600">Category:</span>
-                        <span className="ml-2 font-medium">{product.category}</span>
-                      </div>
-                    )}
-                    {product.type && (
-                      <div>
-                        <span className="text-gray-600">Type:</span>
-                        <span className="ml-2 font-medium">{product.type}</span>
-                      </div>
-                    )}
-                    {product.material && (
-                      <div>
-                        <span className="text-gray-600">Material:</span>
-                        <span className="ml-2 font-medium">{product.material}</span>
-                      </div>
-                    )}
-                    {product.width && (
-                      <div>
-                        <span className="text-gray-600">Width:</span>
-                        <span className="ml-2 font-medium">{product.width} cm</span>
-                      </div>
-                    )}
-                    {product.height && (
-                      <div>
-                        <span className="text-gray-600">Height:</span>
-                        <span className="ml-2 font-medium">{product.height} cm</span>
-                      </div>
-                    )}
-                    {product.thickness && (
-                      <div>
-                        <span className="text-gray-600">Thickness:</span>
-                        <span className="ml-2 font-medium">{product.thickness} cm</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {product.additionalfeatures && (
-                  <div>
-                    <h3 className="font-semibold text-gray-800 mb-2">Additional Features</h3>
-                    <p className="text-gray-600">{product.additionalfeatures}</p>
-                  </div>
-                )}
+                <span className="text-xs px-2 py-1 bg-gray-100 rounded">
+                  Stock: {product.inventory}
+                </span>
               </div>
+
+              <div className="mt-6">
+                <h3 className="font-semibold text-gray-800 mb-2">Description</h3>
+                <p className="text-gray-700 text-sm leading-6">
+                  {product.description || "—"}
+                </p>
+              </div>
+
+              <div className="mt-6">
+                <h3 className="font-semibold text-gray-800 mb-2">
+                  Product Specifications
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-3 text-sm text-gray-700">
+                  <div>
+                    <span className="text-gray-500">Category:</span>{" "}
+                    {product.category || "—"}
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Type:</span>{" "}
+                    {product.type || "—"}
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Material:</span>{" "}
+                    {product.material || "—"}
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Width:</span>{" "}
+                    {product.width ?? "—"} cm
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Height:</span>{" "}
+                    {product.height ?? "—"} cm
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Thickness:</span>{" "}
+                    {product.thickness ?? "—"} cm
+                  </div>
+                </div>
+              </div>
+
+              {!!product.additionalfeatures && (
+                <div className="mt-6">
+                  <h3 className="font-semibold text-gray-800 mb-2">
+                    Additional Features
+                  </h3>
+                  <ul className="list-disc ml-6 text-sm text-gray-700 whitespace-pre-line">
+                    {String(product.additionalfeatures)
+                      .split("\n")
+                      .filter(Boolean)
+                      .map((l, i) => (
+                        <li key={i}>{l}</li>
+                      ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
-            {/* Reservation Form - Right Column */}
-            <div className="lg:col-span-1">
-              <div className="bg-gray-50 p-6 rounded-lg space-y-6 sticky top-8">
-                <h3 className="text-xl font-bold text-gray-900">Reservation Details</h3>
-                
+            {/* Right */}
+            <div className="w-full md:w-80">
+              <h2 className="text-lg font-semibold mb-3">Reservation Details</h2>
+
+              <div className="space-y-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Quantity *
-                  </label>
+                  <label className="text-sm text-gray-600">Quantity *</label>
                   <input
                     type="number"
-                    min="1"
-                    max={product.inventory}
-                    value={formData.quantity}
-                    onChange={(e) => setFormData(prev => ({ ...prev, quantity: parseInt(e.target.value) || 1 }))}
-                    className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-600 text-gray-500"
+                    min={1}
+                    value={qty}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        quantity: Math.max(1, Number(e.target.value || 1)),
+                      })
+                    }
+                    className="w-full border rounded px-3 py-2"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Delivery Address *
-                  </label>
+                  <label className="text-sm text-gray-600">Delivery Address *</label>
                   <select
+                    className="w-full border rounded px-3 py-2"
                     value={selectedAddressId}
                     onChange={(e) => setSelectedAddressId(e.target.value)}
-                    className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-600 text-gray-500"
-                    required
                   >
-                    <option value="">Select delivery address</option>
-                    {addresses.map(address => (
-                      <option key={address.id} value={address.id}>
-                        {address.first_name} {address.last_name} - {address.address}
-                        {address.is_default && " (Default)"}
+                    <option value="">Select Address</option>
+                    {addresses.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.full_name} — {a.address}
                       </option>
                     ))}
                   </select>
-                  
-                  {addresses.length === 0 && (
-                    <p className="text-sm text-red-600 mt-1">
-                      No addresses found. <a href="/profile/address" className="underline">Add an address</a>
-                    </p>
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Store Branch *</label>
+                  <select
+                    className="w-full border rounded px-3 py-2"
+                    value={selectedBranch}
+                    onChange={(e) => setSelectedBranch(e.target.value)}
+                  >
+                    <option value="">Select Store Branch</option>
+                    {branches.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">
+                    Custom Dimensions (Optional)
+                  </label>
+                  <div className="grid grid-cols-3 gap-2 mt-1">
+                    <input
+                      placeholder="Width"
+                      className="border rounded px-2 py-2"
+                      value={formData.customWidth}
+                      onChange={(e) =>
+                        setFormData({ ...formData, customWidth: e.target.value })
+                      }
+                    />
+                    <input
+                      placeholder="Height"
+                      className="border rounded px-2 py-2"
+                      value={formData.customHeight}
+                      onChange={(e) =>
+                        setFormData({ ...formData, customHeight: e.target.value })
+                      }
+                    />
+                    <input
+                      placeholder="Thick."
+                      className="border rounded px-2 py-2"
+                      value={formData.customThickness}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          customThickness: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={formData.colorCustomization}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          colorCustomization: e.target.checked,
+                        })
+                      }
+                    />
+                    <span className="text-sm">
+                      Color Customization (+₱2,500 per unit)
+                    </span>
+                  </label>
+                  {formData.colorCustomization && (
+                    <input
+                      placeholder="Enter desired color"
+                      className="mt-2 w-full border rounded px-3 py-2"
+                      value={formData.colorText}
+                      onChange={(e) =>
+                        setFormData({ ...formData, colorText: e.target.value })
+                      }
+                    />
                   )}
                 </div>
 
-                {/* Store Branch Dropdown */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Store Branch *
-                  </label>
-                  <select
-                    value={selectedBranch}
-                    onChange={(e) => setSelectedBranch(e.target.value)}
-                    className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-600 text-gray-500"
-                    required
-                  >
-                    <option value="">Select Store Branch</option>
-                    {branches.map((branch) => (
-                      <option key={branch} value={branch}>
-                        {branch}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Custom Dimensions */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Custom Dimensions (Optional)
-                  </label>
-                  <div className="grid grid-cols-3 gap-2 text-gray-500">
-                    <input
-                      type="number"
-                      placeholder={`Width (${product.width || 'N/A'})`}
-                      value={formData.customWidth}
-                      onChange={(e) => setFormData(prev => ({ ...prev, customWidth: e.target.value }))}
-                      className="border rounded px-2 py-1 text-sm"
-                    />
-                    <input
-                      type="number"
-                      placeholder={`Height (${product.height || 'N/A'})`}
-                      value={formData.customHeight}
-                      onChange={(e) => setFormData(prev => ({ ...prev, customHeight: e.target.value }))}
-                      className="border rounded px-2 py-1 text-sm"
-                    />
-                    <input
-                      type="number"
-                      placeholder={`Thick. (${product.thickness || 'N/A'})`}
-                      value={formData.customThickness}
-                      onChange={(e) => setFormData(prev => ({ ...prev, customThickness: e.target.value }))}
-                      className="border rounded px-2 py-1 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Special Instructions
-                  </label>
+                  <label className="text-sm text-gray-600">Special Instructions</label>
                   <textarea
-                    value={formData.specialInstructions}
-                    onChange={(e) => setFormData(prev => ({ ...prev, specialInstructions: e.target.value }))}
+                    className="w-full border rounded px-3 py-2"
                     rows={3}
-                    className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-600 text-gray-500" 
-                    placeholder="Any special requirements or notes..."
+                    value={formData.specialInstructions}
+                    onChange={(e) =>
+                      setFormData({ ...formData, specialInstructions: e.target.value })
+                    }
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Payment Method
-                  </label>
-                  <div className="space-y-2 text-black">
-                    <label className="flex items-center">
+                  <label className="text-sm text-gray-600">Discount Code</label>
+                  <div className="flex gap-2 mt-1">
+                    <input
+                      className="flex-1 border rounded px-3 py-2"
+                      placeholder="Enter voucher code"
+                      value={voucherCode}
+                      onChange={(e) => setVoucherCode(e.target.value)}
+                    />
+                    <button
+                      onClick={applyVoucher}
+                      disabled={applyingVoucher}
+                      className="px-4 py-2 bg-[#8B1C1C] text-white rounded disabled:opacity-60"
+                    >
+                      {applyingVoucher ? "Applying..." : "Apply"}
+                    </button>
+                  </div>
+                  {voucherInfo && (
+                    <div className="text-xs text-green-700 mt-2">
+                      Applied {voucherInfo.code} (
+                      {voucherInfo.type === "percent"
+                        ? `${voucherInfo.value}%`
+                        : `₱${voucherInfo.value.toLocaleString()}`}
+                      )
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Payment Method</label>
+                  <div className="flex gap-4 mt-1">
+                    <label className="inline-flex items-center gap-2">
                       <input
                         type="radio"
-                        name="paymentMethod"
-                        value="paymongo"
+                        name="pmethod"
                         checked={paymentMethod === "paymongo"}
-                        onChange={(e) => setPaymentMethod(e.target.value as "paymongo" | "paypal")}
-                        className="mr-2"
+                        onChange={() => setPaymentMethod("paymongo")}
                       />
-                      PayMongo - GCash & PayMaya (₱500)
+                      <span className="text-sm">PayMongo - GCash, Maya, Card</span>
                     </label>
-                    <label className="flex items-center">
+                  </div>
+                  <div className="flex gap-4 mt-1">
+                    <label className="inline-flex items-center gap-2">
                       <input
                         type="radio"
-                        name="paymentMethod"
-                        value="paypal"
+                        name="pmethod"
                         checked={paymentMethod === "paypal"}
-                        onChange={(e) => setPaymentMethod(e.target.value as "paymongo" | "paypal")}
-                        className="mr-2"
+                        onChange={() => setPaymentMethod("paypal")}
                       />
-                      PayPal ($10)
+                      <span className="text-sm">PayPal</span>
                     </label>
                   </div>
                 </div>
 
-                <div className="bg-white p-4 rounded-lg border">
-                  <h4 className="font-medium text-gray-900 mb-3">Reservation Summary</h4>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between text-black">
-                      <span>Reservation Fee:</span>
-                      <span className="font-medium text-green-600">₱500.00</span>
+                <div className="mt-4">
+                  <h3 className="font-semibold mb-2">Reservation Summary</h3>
+                  <div className="bg-gray-50 rounded p-4 space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>Product Subtotal</span>
+                      <span>₱{productSubtotal.toLocaleString()}</span>
                     </div>
-                    <div className="flex justify-between text-black">
-                      <span>Total Product Value:</span>
-                      <span>₱{(product.price * formData.quantity).toLocaleString()}</span>
+                    <div className="flex justify-between">
+                      <span>Add-ons</span>
+                      <span>₱{addonsTotal.toLocaleString()}</span>
                     </div>
-                    <div className="border-t pt-2 flex justify-between text-gray-600">
-                      <span>Remaining Balance:</span>
-                      <span className="font-medium">₱{((product.price * formData.quantity) - 500).toLocaleString()}</span>
+                    <div className="flex justify-between">
+                      <span>Discount</span>
+                      <span className="text-green-700">
+                        -₱{Number(discountValue).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Total Product Value</span>
+                      <span>₱{discountedTotal.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-medium">Reservation Fee (Pay now)</span>
+                      <span className="font-medium text-green-600">
+                        ₱{reservationFee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Remaining Balance</span>
+                      <span>₱{balanceDue.toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
 
-                <button
-                  onClick={handleReservation}
-                  disabled={submitting || !selectedAddressId || !selectedBranch}
-                  className="w-full bg-red-700 text-white py-3 px-6 rounded-lg font-medium hover:bg-red-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {submitting ? "Creating Reservation..." : "Pay Reservation Fee & Reserve"}
-                </button>
+                <div className="flex flex-col gap-2 pt-2">
+                  <button
+                    onClick={handleReservation}
+                    disabled={submitting}
+                    className="w-full bg-[#8B1C1C] text-white rounded px-4 py-2 disabled:opacity-60"
+                  >
+                    {submitting ? "Processing…" : "Pay Reservation Fee & Reserve"}
+                  </button>
+                  <button
+                    onClick={addToCartInstead}
+                    className="w-full bg-gray-200 text-black rounded px-4 py-2 hover:bg-gray-300"
+                  >
+                    Add to Cart Instead
+                  </button>
+                </div>
               </div>
             </div>
+            {/* Right end */}
           </div>
         </div>
       </div>
