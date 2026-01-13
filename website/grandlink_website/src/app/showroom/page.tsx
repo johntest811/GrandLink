@@ -1,5 +1,5 @@
 "use client";
-//import { createClient } from "@supabase/supabase-js";
+
 import { useEffect, useRef, useState } from "react";
 import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
 import Footer from "@/components/Footer";
@@ -13,104 +13,116 @@ type Showroom = {
   image?: string;
 };
 
-function Expandable({ open, children }: { open: boolean; children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (ref.current) {
-      if (open) {
-        ref.current.style.height = ref.current.scrollHeight + "px";
-      } else {
-        ref.current.style.height = "0px";
-      }
-    }
-  }, [open]);
-
-  return (
-    <div
-      ref={ref}
-      style={{ height: "0px" }}
-      className="overflow-hidden transition-[height] duration-500 ease-in-out"
-    >
-      <div className="p-2">{children}</div>
-    </div>
-  );
-}
-
 export default function ShowroomPage() {
   const [showrooms, setShowrooms] = useState<Showroom[]>([]);
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [hasOverflow, setHasOverflow] = useState<Record<number, boolean>>({});
+
+  const descRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   useEffect(() => {
     fetchShowrooms();
   }, []);
 
+  useEffect(() => {
+    // Measure overflow AFTER render
+    const newOverflow: Record<number, boolean> = {};
+
+    showrooms.forEach((s) => {
+      const el = descRefs.current[s.id];
+      if (el) {
+        newOverflow[s.id] = el.scrollHeight > el.clientHeight;
+      }
+    });
+
+    setHasOverflow(newOverflow);
+  }, [showrooms]);
+
   const fetchShowrooms = async () => {
     const { data, error } = await supabase.from("showrooms").select("*");
-    if (error) console.error("Error fetching showrooms:", error.message);
+    if (error) console.error(error.message);
     else setShowrooms(data || []);
   };
 
-  const toggle = (id: number) => setOpenIndex(openIndex === id ? null : id);
+  const toggle = (id: number) => {
+    setOpenId(openId === id ? null : id);
+  };
 
-  const chunked: Showroom[][] = [];
-  for (let i = 0; i < showrooms.length; i += 3) chunked.push(showrooms.slice(i, i + 3));
+  // chunk rows by 3
+  const rows: Showroom[][] = [];
+  for (let i = 0; i < showrooms.length; i += 3) {
+    rows.push(showrooms.slice(i, i + 3));
+  }
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-screen bg-gray-50">
       <UnifiedTopNavBar />
+
       <main className="flex-1">
         <div className="max-w-7xl mx-auto px-6 py-12">
-          <h2 className="text-center text-3xl font-extrabold leading-tight">
+          <h2 className="text-center text-4xl font-extrabold">
             Visit us
             <br />
-            <span className="inline-block mt-1">at our Showroom Locations</span>
+            <span className="text-[#B11C1C]">
+              at our Showroom Locations
+            </span>
           </h2>
-          <div className="w-16 h-1 bg-red-600 mx-auto mt-3 mb-10 rounded-full" />
 
-          {chunked.map((row, rowIdx) => (
-            <div key={rowIdx} className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch mb-10">
+          <div className="w-20 h-1 bg-[#B11C1C] mx-auto mt-4 mb-12 rounded-full" />
+
+          {rows.map((row, idx) => (
+            <div
+              key={idx}
+              className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12"
+            >
               {row.map((s) => {
-                const preview = s.description;
-                const isOpen = openIndex === s.id;
+                const isOpen = openId === s.id;
+
                 return (
                   <article
                     key={s.id}
-                    className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden flex flex-col h-[600px] max-w-[350px] mx-auto"
+                    className="bg-white rounded-2xl shadow-md overflow-hidden flex flex-col h-[620px]"
                   >
-                    <div className="w-full h-[350px] flex items-center justify-center bg-gray-100">
+                    {/* Image */}
+                    <div className="h-[360px] bg-gray-100">
                       {s.image && (
                         <img
                           src={s.image}
                           alt={s.title}
-                          className="w-full h-full object-cover object-center"
-                          style={{ aspectRatio: "4/3" }}
+                          className="w-full h-full object-cover"
                         />
                       )}
                     </div>
-                    <div className="p-4 flex-1 flex flex-col items-center justify-start">
-                      <h3 className="text-center text-lg font-bold text-[#B11C1C] mb-2">{s.title}</h3>
-                      <p className="text-center text-base text-black mb-2">{s.address}</p>
-                      {!isOpen ? (
-                        <div
-                          className="mt-1 text-lg text-gray-700 min-h-[72px] line-clamp-4"
-                          dangerouslySetInnerHTML={{ __html: s.description }}
-                        />
-                      ) : (
-                        <div
-                          className="mt-1 text-lg text-black min-h-[72px]"
-                          dangerouslySetInnerHTML={{ __html: s.description }}
-                        />
+
+                    {/* Content */}
+                    <div className="p-6 flex flex-col flex-1">
+                      <h3 className="text-xl font-bold text-[#B11C1C] text-center">
+                        {s.title}
+                      </h3>
+
+                      <p className="text-center text-gray-700 mt-1 mb-2">
+                        {s.address}
+                      </p>
+
+                      <div
+                        ref={(el) => {
+                          descRefs.current[s.id] = el;
+                        }}
+                        className={`text-lg text-gray-800 leading-relaxed transition-all ${
+                          isOpen ? "" : "line-clamp-4"
+                        }`}
+                        dangerouslySetInnerHTML={{ __html: s.description }}
+                      />
+
+                      {/* Show button ONLY if overflow exists */}
+                      {hasOverflow[s.id] && (
+                        <button
+                          onClick={() => toggle(s.id)}
+                          className="mt-3 self-center text-[#B11C1C] font-semibold hover:underline"
+                        >
+                          {isOpen ? "Show Less" : "Show More"}
+                        </button>
                       )}
-                      <Expandable open={isOpen} children={undefined}>
-                        {/* You can add more details here if needed */}
-                      </Expandable>
-                      <button
-                        onClick={() => toggle(s.id)}
-                        className="mt-2 text-red-600 font-semibold text-sm hover:underline"
-                      >
-                        {isOpen ? "Show Less" : "Show More"}
-                      </button>
                     </div>
                   </article>
                 );
@@ -119,6 +131,7 @@ export default function ShowroomPage() {
           ))}
         </div>
       </main>
+
       <Footer />
     </div>
   );
