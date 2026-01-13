@@ -312,7 +312,7 @@ function ReservationPageContent() {
       await supabase.from("payment_sessions").insert({
         user_id: userId,
         user_item_id: userItem.id,
-        stripe_session_id: sessionId,
+        // stripe_session_id: sessionId,
         amount: reservationFee,
         currency: paymentMethod === "paypal" ? "USD" : "PHP",
         status: "pending",
