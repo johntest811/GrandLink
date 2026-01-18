@@ -120,8 +120,8 @@ android {
     packagingOptions {
         jniLibs {
             useLegacyPackaging (findProperty('expo.useLegacyPackaging')?.toBoolean() ?: false)
-            pickFirsts += ["**/libexpo-gl.so"]
         }
+        pickFirsts += ['**/libexpo-gl.so']
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'

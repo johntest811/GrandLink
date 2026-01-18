@@ -2,77 +2,54 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import Svg, { Line, Circle } from 'react-native-svg';
 import BottomNavBar from "@BottomNav/../components/BottomNav";
 
 export default function ARMeasureScreen() {
   const router = useRouter();
-  const device = useCameraDevice('back');
-  const { hasPermission, requestPermission } = useCameraPermission();
   const [showCamera, setShowCamera] = useState(false);
-  const [measurements, setMeasurements] = useState<{ width: number; height: number } | null>(null);
+  const [measurements, setMeasurements] = useState<Array<number>>([]);
   const [measurementPoints, setMeasurementPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const [permission, requestPermission] = useCameraPermissions();
 
   const startARMeasurement = async () => {
-    if (!hasPermission) {
-      const granted = await requestPermission();
-      if (!granted) {
-        Alert.alert(
-          'Camera Permission Required',
-          'This app needs camera access to measure spaces using AR.',
-          [{ text: 'OK' }]
-        );
+    if (!permission?.granted) {
+      const { status } = await requestPermission();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Camera permission is needed for AR measurement');
         return;
       }
     }
     setShowCamera(true);
     setMeasurementPoints([]);
-    setMeasurements(null);
+    setMeasurements([]);
   };
 
   const handleScreenTap = (event: any) => {
     const { locationX, locationY } = event.nativeEvent;
     const newPoint = { x: locationX, y: locationY };
+    const updatedPoints = [...measurementPoints, newPoint];
+    setMeasurementPoints(updatedPoints);
 
-    if (measurementPoints.length === 0) {
-      // First point - start of measurement
-      setMeasurementPoints([newPoint]);
-    } else if (measurementPoints.length === 1) {
-      // Second point - calculate measurement
-      setMeasurementPoints([...measurementPoints, newPoint]);
-      calculateMeasurement([...measurementPoints, newPoint]);
-    } else {
-      // Reset and start new measurement
-      setMeasurementPoints([newPoint]);
-      setMeasurements(null);
+    // Calculate distances after adding point
+    if (updatedPoints.length >= 2) {
+      calculateMeasurement(updatedPoints);
     }
   };
 
   const calculateMeasurement = (points: Array<{ x: number; y: number }>) => {
-    // Calculate pixel distance
-    const dx = points[1].x - points[0].x;
-    const dy = points[1].y - points[0].y;
-    const pixelDistance = Math.sqrt(dx * dx + dy * dy);
-
-    // Simplified conversion: assume average calibration
-    // In a real AR app, you'd use ARCore/ARKit for actual depth/distance
-    // This is a placeholder calculation for demonstration
-    const estimatedDistanceCm = pixelDistance * 0.5; // Rough estimate
-    
-    // For rectangular measurement, use pythagoras
-    const width = Math.abs(dx) * 0.5;
-    const height = Math.abs(dy) * 0.5;
-
-    setMeasurements({
-      width: width,
-      height: height
-    });
-
-    Alert.alert(
-      'Measurement Complete',
-      `Width: ${width.toFixed(2)} cm\nHeight: ${height.toFixed(2)} cm\n\nNote: This is a simulated measurement. For accurate AR measurements, native ARCore/ARKit integration is required.`,
-      [{ text: 'OK' }]
-    );
+    // Calculate distances between consecutive points
+    const distances: number[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const dx = points[i + 1].x - points[i].x;
+      const dy = points[i + 1].y - points[i].y;
+      const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+      // Convert to cm (calibration factor)
+      const distanceCm = pixelDistance * 0.5;
+      distances.push(distanceCm);
+    }
+    setMeasurements(distances);
   };
 
   const closeCamera = () => {
@@ -80,35 +57,82 @@ export default function ARMeasureScreen() {
   };
 
   const saveMeasurement = () => {
-    if (measurements) {
+    if (measurementPoints.length >= 4 && measurements.length >= 3) {
+      const measurementText = measurements.map((dist, idx) => 
+        `Side ${idx + 1}: ${dist.toFixed(2)} cm`
+      ).join('\n');
+      
       Alert.alert(
         'Save Measurement',
-        `Width: ${measurements.width.toFixed(2)} cm\nHeight: ${measurements.height.toFixed(2)} cm\n\nMeasurement saved! You can use these values for your order.`,
+        `${measurementText}\n\nMeasurement saved! You can use these values for your order.`,
         [
           { text: 'OK', onPress: closeCamera }
         ]
       );
+    } else {
+      Alert.alert('Incomplete', 'Please tap at least 4 points to measure doors/windows/railings');
     }
   };
 
+  const resetMeasurement = () => {
+    setMeasurementPoints([]);
+    setMeasurements([]);
+  };
+
   if (showCamera) {
+    if (!permission?.granted) {
+      return (
+        <View style={styles.cameraContainer}>
+          <Text style={styles.permissionText}>Requesting camera permission...</Text>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.cameraContainer}>
-        {/* Camera placeholder - will work when built with native modules */}
-        <View style={styles.cameraPlaceholder}>
-          <Text style={styles.placeholderText}>📷 Camera View</Text>
-          <Text style={styles.placeholderSubtext}>
-            (Camera will work after building to device)
-          </Text>
-        </View>
-        
-        <Pressable 
-          style={styles.cameraTouchArea}
-          onPress={handleScreenTap}
-        >
-          <View style={styles.cameraOverlay}>
-            {/* Header */}
-            <View style={styles.cameraHeader}>
+        <CameraView style={styles.camera} facing="back">
+          <Pressable 
+            style={styles.cameraTouchArea}
+            onPress={handleScreenTap}
+          >
+            {/* SVG Overlay for Lines */}
+            <Svg style={StyleSheet.absoluteFill}>
+              {/* Draw lines between consecutive points */}
+              {measurementPoints.map((point, index) => {
+                if (index < measurementPoints.length - 1) {
+                  const nextPoint = measurementPoints[index + 1];
+                  return (
+                    <Line
+                      key={`line-${index}`}
+                      x1={point.x}
+                      y1={point.y}
+                      x2={nextPoint.x}
+                      y2={nextPoint.y}
+                      stroke="#00ff00"
+                      strokeWidth="3"
+                    />
+                  );
+                }
+                return null;
+              })}
+              
+              {/* Draw points as circles */}
+              {measurementPoints.map((point, index) => (
+                <Circle
+                  key={`circle-${index}`}
+                  cx={point.x}
+                  cy={point.y}
+                  r="8"
+                  fill="#00ff00"
+                  stroke="#fff"
+                  strokeWidth="2"
+                />
+              ))}
+            </Svg>
+
+            <View style={styles.cameraOverlay}>
+              {/* Header */}
+              <View style={styles.cameraHeader}>
                 <TouchableOpacity onPress={closeCamera} style={styles.closeButton}>
                   <Ionicons name="close" size={28} color="#fff" />
                 </TouchableOpacity>
@@ -119,68 +143,84 @@ export default function ARMeasureScreen() {
               {/* Instructions */}
               <View style={styles.instructionBox}>
                 <Text style={styles.instructionText}>
-                  {measurementPoints.length === 0 && "Tap to place the first point"}
-                  {measurementPoints.length === 1 && "Tap to place the second point"}
-                  {measurementPoints.length === 2 && "Tap to start a new measurement"}
+                  {measurementPoints.length === 0 && "Tap to place the first corner"}
+                  {measurementPoints.length > 0 && measurementPoints.length < 4 && `Tap to place corner ${measurementPoints.length + 1} (need 4+ points)`}
+                  {measurementPoints.length >= 4 && "Tap to add more points or save measurement"}
                 </Text>
               </View>
 
-              {/* Measurement Points */}
+              {/* Point Labels */}
               {measurementPoints.map((point, index) => (
                 <View
-                  key={index}
+                  key={`label-${index}`}
                   style={[
                     styles.measurementPoint,
-                    { left: point.x - 10, top: point.y - 10 }
+                    { left: point.x - 15, top: point.y - 15 }
                   ]}
                 >
                   <Text style={styles.pointLabel}>{index + 1}</Text>
                 </View>
               ))}
 
-              {/* Measurement Line */}
-              {measurementPoints.length === 2 && (
-                <View style={styles.measurementLineContainer}>
-                  {/* This would be a proper line in production with SVG or canvas */}
-                </View>
-              )}
+              {/* Distance Labels */}
+              {measurements.map((distance, index) => {
+                const midX = (measurementPoints[index].x + measurementPoints[index + 1].x) / 2;
+                const midY = (measurementPoints[index].y + measurementPoints[index + 1].y) / 2;
+                return (
+                  <View
+                    key={`distance-${index}`}
+                    style={[
+                      styles.distanceLabel,
+                      { left: midX - 40, top: midY - 15 }
+                    ]}
+                  >
+                    <Text style={styles.distanceText}>{distance.toFixed(1)} cm</Text>
+                  </View>
+                );
+              })}
 
               {/* Bottom Controls */}
               <View style={styles.cameraControls}>
                 <View style={styles.controlsRow}>
                   <TouchableOpacity 
                     style={styles.controlButton}
-                    onPress={() => {
-                      setMeasurementPoints([]);
-                      setMeasurements(null);
-                    }}
+                    onPress={resetMeasurement}
                   >
                     <MaterialIcons name="refresh" size={24} color="#fff" />
                     <Text style={styles.controlButtonText}>Reset</Text>
                   </TouchableOpacity>
 
-                  {measurements && (
-                    <TouchableOpacity 
-                      style={[styles.controlButton, styles.saveButton]}
-                      onPress={saveMeasurement}
-                    >
-                      <Ionicons name="checkmark" size={24} color="#fff" />
-                      <Text style={styles.controlButtonText}>Save</Text>
-                    </TouchableOpacity>
-                  )}
+                  <TouchableOpacity 
+                    style={[
+                      styles.controlButton,
+                      styles.saveButton,
+                      measurementPoints.length < 4 && styles.disabledButton
+                    ]}
+                    onPress={saveMeasurement}
+                    disabled={measurementPoints.length < 4}
+                  >
+                    <MaterialIcons name="save" size={24} color="#fff" />
+                    <Text style={styles.controlButtonText}>
+                      Save ({measurementPoints.length}/4+)
+                    </Text>
+                  </TouchableOpacity>
                 </View>
 
-                {measurements && (
-                  <View style={styles.currentMeasurement}>
-                    <Text style={styles.currentMeasurementTitle}>Current Measurement:</Text>
-                    <Text style={styles.currentMeasurementValue}>
-                      W: {measurements.width.toFixed(2)} cm × H: {measurements.height.toFixed(2)} cm
-                    </Text>
+                {/* Measurement Summary */}
+                {measurements.length > 0 && (
+                  <View style={styles.measurementSummary}>
+                    <Text style={styles.summaryTitle}>Measurements:</Text>
+                    {measurements.map((dist, idx) => (
+                      <Text key={idx} style={styles.summaryText}>
+                        Side {idx + 1}: {dist.toFixed(2)} cm
+                      </Text>
+                    ))}
                   </View>
                 )}
               </View>
             </View>
           </Pressable>
+        </CameraView>
       </View>
     );
   }
@@ -241,17 +281,15 @@ export default function ARMeasureScreen() {
           <Text style={styles.requirementText}>• Stable internet connection</Text>
         </View>
 
-        {measurements && (
+        {measurements.length > 0 && (
           <View style={styles.resultsCard}>
             <Text style={styles.resultsTitle}>Last Measurement:</Text>
-            <View style={styles.measurementRow}>
-              <Text style={styles.measurementLabel}>Width:</Text>
-              <Text style={styles.measurementValue}>{measurements.width.toFixed(2)} cm</Text>
-            </View>
-            <View style={styles.measurementRow}>
-              <Text style={styles.measurementLabel}>Height:</Text>
-              <Text style={styles.measurementValue}>{measurements.height.toFixed(2)} cm</Text>
-            </View>
+            {measurements.map((distance, index) => (
+              <View key={index} style={styles.measurementRow}>
+                <Text style={styles.measurementLabel}>Side {index + 1}:</Text>
+                <Text style={styles.measurementValue}>{distance.toFixed(2)} cm</Text>
+              </View>
+            ))}
           </View>
         )}
       </ScrollView>
@@ -294,6 +332,10 @@ const styles = StyleSheet.create({
   },
   camera: {
     flex: 1,
+  },
+  cameraSimulation: {
+    flex: 1,
+    backgroundColor: '#1a1a1a',
   },
   cameraTouchArea: {
     ...StyleSheet.absoluteFillObject,
@@ -393,11 +435,50 @@ const styles = StyleSheet.create({
   saveButton: {
     backgroundColor: 'rgba(11, 159, 52, 0.9)',
   },
+  disabledButton: {
+    backgroundColor: 'rgba(100, 100, 100, 0.6)',
+  },
   controlButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
     marginLeft: 8,
+  },
+  distanceLabel: {
+    position: 'absolute',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 6,
+    borderRadius: 8,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  distanceText: {
+    color: '#00ff00',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  measurementSummary: {
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 12,
+  },
+  summaryTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  summaryText: {
+    color: '#00ff00',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  permissionText: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+    marginTop: 100,
   },
   currentMeasurement: {
     backgroundColor: 'rgba(0,0,0,0.8)',
