@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import { Ionicons, MaterialIcons, FontAwesome5, Entypo, Feather } from '@expo/vector-icons';
+import BottomNavBar from "@BottomNav/../components/BottomNav";
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<User | null>(null);
@@ -21,6 +22,7 @@ export default function ProfileScreen() {
   const [savedAddress, setSavedAddress] = useState<any>(null);
   const [loadingAddress, setLoadingAddress] = useState(false);
   const [savingAddress, setSavingAddress] = useState(false);
+  const [deletingAddress, setDeletingAddress] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -223,6 +225,57 @@ export default function ProfileScreen() {
     router.replace('/login');
   };
 
+  const confirmDeleteAddress = () => {
+    if (!savedAddress) {
+      Alert.alert('No address', 'There is no saved address to delete.');
+      return;
+    }
+
+    Alert.alert(
+      'Delete address',
+      'Are you sure you want to delete your saved address?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: handleDeleteAddress },
+      ],
+    );
+  };
+
+  const handleDeleteAddress = async () => {
+    try {
+      if (!savedAddress) return;
+      setDeletingAddress(true);
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData?.user) {
+        Alert.alert('Error', 'Please sign in to delete an address.');
+        return;
+      }
+
+      const { error } = await supabase
+        .from('addresses')
+        .delete()
+        .eq('id', savedAddress.id)
+        .eq('user_id', authData.user.id);
+
+      if (error) throw error;
+
+      setSavedAddress(null);
+      setFirstName('');
+      setLastName('');
+      setPhoneNumber('');
+      setEmail('');
+      setAddress('');
+      Alert.alert('Removed', 'Address deleted successfully.');
+      closeAddressModal();
+    } catch (e: any) {
+      console.error('Delete address error:', e);
+      const errorMsg = e?.message || 'Failed to delete address.';
+      Alert.alert('Error', errorMsg);
+    } finally {
+      setDeletingAddress(false);
+    }
+  };
+
   const openCart = () => {
     router.push('../cart');
   };
@@ -241,7 +294,11 @@ export default function ProfileScreen() {
         </View>
         <View style={styles.profileSection}>
           <Image
-            source={require('@/assets/images/profileicon.png')}
+            source={
+              user?.user_metadata?.avatar_url || user?.user_metadata?.picture
+                ? { uri: (user.user_metadata.avatar_url || user.user_metadata.picture) as string }
+                : require('@/assets/images/profileicon.png')
+            }
             style={styles.avatar}
           />
           <View>
@@ -254,98 +311,198 @@ export default function ProfileScreen() {
         {/* Purchases Section */}
         <Text style={styles.sectionTitle}>My Purchases</Text>
         <View style={styles.purchasesRow}>
-           <TouchableOpacity style={styles.purchaseItem} onPress={openCart}>
-            <View style={styles.iconContainer}>
-              <Ionicons name="cart" size={28} color="#000" />
-              {cartCount > 0 && (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{cartCount}</Text>
+           <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
+            onPress={openCart}
+           >
+            {({ pressed }) => (
+              <>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="cart" size={28} color={pressed ? '#8B1C1C' : '#000'} />
+                  {cartCount > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{cartCount}</Text>
+                    </View>
+                  )}
                 </View>
-              )}
-            </View>
-            <Text style={styles.purchaseLabel}>Cart</Text>
-          </TouchableOpacity>
-           <TouchableOpacity style={styles.purchaseItem} onPress={() => router.push('../reservation')}>
-             <View style={styles.iconContainer}>
-               <Ionicons name="calendar" size={28} color="#000" />
-               {reservationsCount > 0 && (
-                 <View style={styles.badge}>
-                   <Text style={styles.badgeText}>{reservationsCount}</Text>
-                 </View>
-               )}
-             </View>
-             <Text style={styles.purchaseLabel}>Reservation</Text>
-           </TouchableOpacity>
-           <TouchableOpacity style={styles.purchaseItem} onPress={() => router.push('../orders')}>
-             <View style={styles.iconContainer}>
-               <Ionicons name="receipt" size={28} color="#000" />
-               {ordersCount > 0 && (
-                 <View style={styles.badge}>
-                   <Text style={styles.badgeText}>{ordersCount}</Text>
-                 </View>
-               )}
-             </View>
-             <Text style={styles.purchaseLabel}>Orders</Text>
-           </TouchableOpacity>
-           <TouchableOpacity style={styles.purchaseItem} onPress={() => router.push('../completed')}>
-             <View style={styles.iconContainer}>
-               <Feather name="check-square" size={28} color="#000" />
-               {completedCount > 0 && (
-                 <View style={styles.badge}>
-                   <Text style={styles.badgeText}>{completedCount}</Text>
-                 </View>
-               )}
-             </View>
-             <Text style={styles.purchaseLabel}>Completed</Text>
-           </TouchableOpacity>
-           <TouchableOpacity style={styles.purchaseItem} onPress={() => router.push('../cancelled')}>
-             <View style={styles.iconContainer}>
-               <Entypo name="circle-with-cross" size={28} color="#000" />
-               {cancelledCount > 0 && (
-                 <View style={styles.badge}>
-                   <Text style={styles.badgeText}>{cancelledCount}</Text>
-                 </View>
-               )}
-             </View>
-             <Text style={styles.purchaseLabel}>Cancelled</Text>
-           </TouchableOpacity>
+                <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Cart</Text>
+              </>
+            )}
+          </Pressable>
+           <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
+            onPress={() => router.push('../reservation')}
+           >
+            {({ pressed }) => (
+              <>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="calendar" size={28} color={pressed ? '#8B1C1C' : '#000'} />
+                  {reservationsCount > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{reservationsCount}</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Reservation</Text>
+              </>
+            )}
+           </Pressable>
+           <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
+            onPress={() => router.push('../orders')}
+           >
+            {({ pressed }) => (
+              <>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="receipt" size={28} color={pressed ? '#8B1C1C' : '#000'} />
+                  {ordersCount > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{ordersCount}</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Orders</Text>
+              </>
+            )}
+           </Pressable>
+           <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
+            onPress={() => router.push('../completed')}
+           >
+            {({ pressed }) => (
+              <>
+                <View style={styles.iconContainer}>
+                  <Feather name="check-square" size={28} color={pressed ? '#8B1C1C' : '#000'} />
+                  {completedCount > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{completedCount}</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Completed</Text>
+              </>
+            )}
+           </Pressable>
+           <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
+            onPress={() => router.push('../cancelled')}
+           >
+            {({ pressed }) => (
+              <>
+                <View style={styles.iconContainer}>
+                  <MaterialIcons name="cancel" size={28} color={pressed ? '#8B1C1C' : '#000'} />
+                  {cancelledCount > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{cancelledCount}</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Cancelled</Text>
+              </>
+            )}
+           </Pressable>
         </View>
         <View style={styles.divider} />
 
         {/* Settings List */}
         <View style={styles.menuList}>
-          <TouchableOpacity style={styles.menuItem} onPress={openAddressModal}>
-            <FontAwesome5 name="address-book" size={22} color="#a81d1d" />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.menuText, { color: '#a81d1d', fontWeight: 'bold' }]}>My Address</Text>
-              {savedAddress && (
-                <Text style={styles.addressPreview} numberOfLines={1}>
-                  {savedAddress.address}
-                </Text>
-              )}
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#a81d1d" />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
-            <Ionicons name="notifications" size={22} color="#2c3848" />
-            <Text style={[styles.menuText, { color: '#2c3848', fontWeight: 'bold' }]}>Notification Settings</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
-            <Ionicons name="settings" size={22} color="#222" />
-            <Text style={styles.menuText}>Settings</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
-            <MaterialIcons name="live-help" size={22} color="#a81d1d" />
-            <Text style={[styles.menuText, { color: '#a81d1d', fontWeight: 'bold' }]}>FAQs</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
-            <Feather name="help-circle" size={22} color="#222" />
-            <Text style={styles.menuText}>Help Centre</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
-            <Entypo name="help" size={22} color="#222" />
-            <Text style={styles.menuText}>Inquire</Text>
-          </TouchableOpacity>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={openAddressModal}
+          >
+            {({ pressed }) => (
+              <>
+                <FontAwesome5 name="address-book" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>My Address</Text>
+                  {savedAddress && (
+                    <Text style={styles.addressPreview} numberOfLines={1}>
+                      {savedAddress.address}
+                    </Text>
+                  )}
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={pressed ? '#8B1C1C' : '#000'} />
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={() => router.push('../setting')}
+          >
+            {({ pressed }) => (
+              <>
+                <Ionicons name="notifications" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>Notification Settings</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={() => router.push('../setting')}
+          >
+            {({ pressed }) => (
+              <>
+                <Ionicons name="settings" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>Settings</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={() => router.push('../FAQs')}
+          >
+            {({ pressed }) => (
+              <>
+                <MaterialIcons name="live-help" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000'}]}>FAQs</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={() => router.push('../about')}
+          >
+            {({ pressed }) => (
+              <>
+                <Feather name="help-circle" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>Help Centre</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={openAddressModal}
+          >
+            {({ pressed }) => (
+              <>
+                <Entypo name="help" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>Inquire</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={() => router.push('../ar-measure')}
+          >
+            {({ pressed }) => (
+              <>
+                <MaterialIcons name="straighten" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>AR Measurement</Text>
+              </>
+            )}
+          </Pressable>
         </View>
 
         {/* Logout Button */}
@@ -437,35 +594,27 @@ export default function ProfileScreen() {
               <TouchableOpacity style={styles.cancelButton} onPress={closeAddressModal}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
+
+              {savedAddress && (
+                <TouchableOpacity
+                  style={[styles.deleteButton, deletingAddress && styles.deleteButtonDisabled]}
+                  onPress={confirmDeleteAddress}
+                  disabled={deletingAddress}
+                >
+                  {deletingAddress ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.deleteButtonText}>Delete Saved Address</Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </ScrollView>
           </View>
         </View>
       </Modal>
 
       {/* Modern Bottom Navbar */}
-      <View style={styles.bottomNavBar}>
-                <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
-                  <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
-                  <Text style={styles.navLabel}>Home</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-                  <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
-                  <Text style={styles.navLabel}>Inquire</Text>
-                </TouchableOpacity>
-                <View style={styles.fabWrapper}>
-                  <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
-                    <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-                  <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
-                  <Text style={styles.navLabel}>Settings</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-                  <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
-                  <Text style={styles.navLabel}>Settings</Text>
-                </TouchableOpacity>
-              </View>
+      <BottomNavBar />
     </View>
   );
 }
@@ -483,11 +632,12 @@ const styles = StyleSheet.create({
     paddingTop: 32,
     paddingHorizontal: 24,
     paddingBottom: 8,
+    backgroundColor: '#8B1C1C',
   },
   profileTitle: {
     fontSize: 26,
     fontWeight: 'bold',
-    color: '#222',
+    color: '#fff',
   },
   profileSection: {
     flexDirection: 'row',
@@ -521,7 +671,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#222',
+    color: '#000',
     marginLeft: 24,
     marginBottom: 8,
   },
@@ -534,6 +684,11 @@ const styles = StyleSheet.create({
   purchaseItem: {
     alignItems: 'center',
     flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  purchaseItemPressed: {
+    backgroundColor: 'rgba(139,28,28,0.08)',
   },
   iconContainer: {
     position: 'relative',
@@ -563,7 +718,7 @@ const styles = StyleSheet.create({
   },
   purchaseLabel: {
     fontSize: 12,
-    color: '#222',
+    color: '#000',
     marginTop: 4,
     textAlign: 'center',
   },
@@ -575,6 +730,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+  },
+  menuItemPressed: {
+    backgroundColor: 'rgba(139,28,28,0.08)',
   },
   menuText: {
     fontSize: 16,
@@ -752,5 +913,21 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 16,
     fontWeight: '600',
+  },
+  deleteButton: {
+    backgroundColor: '#b3261e',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 12,
+    elevation: 1,
+  },
+  deleteButtonDisabled: {
+    opacity: 0.7,
+  },
+  deleteButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });

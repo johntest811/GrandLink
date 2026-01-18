@@ -1,17 +1,26 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, PanResponder, Modal, Alert } from 'react-native';
+import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, PanResponder, Modal, Alert, Platform } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
-import { GLView } from 'expo-gl';
-import { ExpoWebGLRenderingContext } from 'expo-gl';
+import { GLView , ExpoWebGLRenderingContext } from 'expo-gl';
+
 // @ts-ignore
 import * as THREE from 'three';
 // Import FBXLoader for React Native
 // @ts-ignore
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
+import BottomNavBar from "@BottomNav/../components/BottomNav";
 
-const { width } = Dimensions.get('window');
+// Skybox images for weather backgrounds
+const SKYBOX_IMAGES = {
+  sunny: require('../../assets/hdris/sunnyy.jpg'),
+  rainy: require('../../assets/hdris/rainyy.jpg'),
+  foggy: require('../../assets/hdris/foggyy.jpg'),
+  night: require('../../assets/hdris/nightt.jpg'),
+};
+
+const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function ProductViewScreen() {
   const router = useRouter();
@@ -22,6 +31,8 @@ export default function ProductViewScreen() {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [viewerVisible, setViewerVisible] = useState(false);
   const [modelError, setModelError] = useState(false);
+  const [selectedModelIndex, setSelectedModelIndex] = useState(0);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
   // Weather state
   const [weatherMode, setWeatherMode] = useState<'sunny' | 'rainy' | 'foggy' | 'night'>('sunny');
@@ -32,31 +43,61 @@ export default function ProductViewScreen() {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
 
-  // Rain particle reference
-  const rainRef = useRef<THREE.Points | null>(null);
-  // small helper to create/remove rain
+  // Rain particle reference - using LineSegments for realistic streaks
+  const rainRef = useRef<THREE.LineSegments | null>(null);
+  const rainVelocities = useRef<Float32Array | null>(null);
+  
+  // Create realistic rain streaks
   const createRain = (scene: THREE.Scene) => {
     if (rainRef.current) return;
-    const count = 600;
-    const positions = new Float32Array(count * 3);
+    const count = 400; // Number of rain streaks
+    const positions = new Float32Array(count * 6); // 2 points per line = 6 values
+    const velocities = new Float32Array(count);
+    
     for (let i = 0; i < count; i++) {
-      positions[i * 3 + 0] = (Math.random() - 0.5) * 6; // x
-      positions[i * 3 + 1] = Math.random() * 6 + 1;     // y
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 6; // z
+      const x = (Math.random() - 0.5) * 8;
+      const y = Math.random() * 8;
+      const z = (Math.random() - 0.5) * 8;
+      
+      // Each raindrop is a vertical line segment (streak)
+      const streakLength = 0.15 + Math.random() * 0.1; // Varying lengths
+      positions[i * 6 + 0] = x;
+      positions[i * 6 + 1] = y;
+      positions[i * 6 + 2] = z;
+      positions[i * 6 + 3] = x;
+      positions[i * 6 + 4] = y - streakLength;
+      positions[i * 6 + 5] = z;
+      
+      // Random falling speeds
+      velocities[i] = 0.08 + Math.random() * 0.06;
     }
+    
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({ color: 0x9fc9ff, size: 0.06, transparent: true, opacity: 0.9 });
-    const points = new THREE.Points(geom, mat);
-    points.frustumCulled = false;
-    rainRef.current = points;
-    scene.add(points);
+    
+    // Create semi-transparent white/blue rain streaks
+    const mat = new THREE.LineBasicMaterial({ 
+      color: 0xadd8e6, // Light blue
+      transparent: true, 
+      opacity: 0.6,
+      linewidth: 1
+    });
+    
+    const lines = new THREE.LineSegments(geom, mat);
+    lines.frustumCulled = false;
+    rainRef.current = lines;
+    rainVelocities.current = velocities;
+    scene.add(lines);
   };
   const removeRain = (scene: THREE.Scene) => {
     if (!rainRef.current) return;
     scene.remove(rainRef.current);
-    try { (rainRef.current.geometry as any).dispose(); (rainRef.current.material as any).dispose(); } catch {}
+    try { 
+      (rainRef.current.geometry as any).dispose(); 
+      (rainRef.current.material as any).dispose(); 
+    } catch {}
     rainRef.current = null;
+    rainVelocities.current = null;
   };
 
   // 3D controls
@@ -70,6 +111,11 @@ export default function ProductViewScreen() {
 
   const [lastDistance, setLastDistance] = useState<number | null>(null);
   const lastRotation = useRef({ x: 0, y: 0 });
+
+  const resetViewerTransform = () => {
+    setRotation({ x: 0, y: 0 });
+    setCameraDistance(4);
+  };
 
   // NOTE: 'features' useMemo has been moved earlier to preserve hook order
   // Normalize additional features into an array for display
@@ -180,7 +226,8 @@ export default function ProductViewScreen() {
             name: raw?.name ?? raw?.title ?? 'Untitled',
             sku: raw?.sku ?? raw?.code ?? raw?.id,
             price: raw?.price ?? 0,
-            stock: raw?.stock ?? 0,
+            stock: (typeof raw?.inventory === 'number' ? raw.inventory : (raw?.stock ?? 0)) ?? 0,
+            reserved_stock: typeof raw?.reserved_stock === 'number' ? raw.reserved_stock : 0,
             description: raw?.description ?? raw?.short_description ?? '',
             short_description: raw?.short_description ?? raw?.description ?? '',
             additional_features: raw?.additional_features ?? raw?.features ?? '',
@@ -208,12 +255,14 @@ export default function ProductViewScreen() {
           image1: normalized.image1,
         });
 
-        setProduct(normalized);
+  setProduct(normalized);
+  setSelectedModelIndex(0);
         setLoading(false);
 
         // Preload first FBX if present
         if (normalized.fbx_urls && normalized.fbx_urls.length > 0) {
-          preloadModel(normalized.fbx_urls[0], normalized);
+          // Preload all models for quick switching
+          normalized.fbx_urls.forEach((u: string) => preloadModel(u, normalized));
         } else {
           console.warn(`⚠️ No valid FBX URLs found for product: ${normalized.name}`);
         }
@@ -262,24 +311,8 @@ export default function ProductViewScreen() {
             console.log('Model info:', fbxModel);
             
             // Process the model for mobile display
-            fbxModel.traverse((child: any) => {
-              if (child.isMesh) {
-                // Ensure materials work on mobile
-                if (child.material) {
-                  if (Array.isArray(child.material)) {
-                    child.material.forEach((mat: any) => {
-                      mat.transparent = true;
-                      mat.opacity = 0.9;
-                      mat.needsUpdate = true;
-                    });
-                  } else {
-                    child.material.transparent = true;
-                    child.material.opacity = 0.9;
-                    child.material.needsUpdate = true;
-                  }
-                }
-              }
-            });
+            // Do not force transparency here; keep original materials
+            // Material adjustments will be handled by processModelMaterials
             
             // Auto-scale the model based on its size
             const box = new THREE.Box3().setFromObject(fbxModel);
@@ -359,29 +392,10 @@ export default function ProductViewScreen() {
         loader.load(
           finalUrl,
           (object: any) => {
-            console.log(`✅ FBX model loaded successfully for product: ${productId}`);
+            console.log(`FBX model loaded successfully for product: ${productId}`);
             console.log('Model details:', object);
             
-            // Process the loaded model
-            object.traverse((child: THREE.Object3D) => {
-              if ((child as THREE.Mesh).isMesh) {
-                const mesh = child as THREE.Mesh;
-                if (mesh.material) {
-                  // Ensure materials are compatible with mobile rendering
-                  if (Array.isArray(mesh.material)) {
-                    mesh.material.forEach((mat: THREE.Material) => {
-                      (mat as any).transparent = true;
-                      (mat as any).opacity = 0.9;
-                      (mat as any).needsUpdate = true;
-                    });
-                  } else {
-                    (mesh.material as any).transparent = true;
-                    (mesh.material as any).opacity = 0.9;
-                    (mesh.material as any).needsUpdate = true;
-                  }
-                }
-              }
-            });
+            // Keep original materials; will normalize in processModelMaterials
             
             // Scale the model appropriately - adjust these values based on your models
             const box = new THREE.Box3().setFromObject(object);
@@ -402,7 +416,7 @@ export default function ProductViewScreen() {
             if (progress.total > 0) {
               const percentage = (progress.loaded / progress.total) * 100;
               setLoadingProgress(percentage);
-              console.log(`📊 Loading progress for product ${productId}: ${percentage.toFixed(1)}%`);
+              console.log(`Loading progress for product ${productId}: ${percentage.toFixed(1)}%`);
             }
           },
           (error: any) => {
@@ -451,28 +465,139 @@ export default function ProductViewScreen() {
     }
   };
 
-  // Process model materials for performance
+  // Create a glass-like physical material (mobile-friendly approximation)
+  const createGlassMaterial = (): THREE.Material => {
+    // For Android/mobile, use simpler material that works with WebGL 1
+    // MeshPhysicalMaterial with transmission requires WebGL2
+    if (Platform.OS === 'android') {
+      // Use MeshStandardMaterial for better Android compatibility
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.15,
+        roughness: 0.02,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+        flatShading: false,
+      });
+      return mat as THREE.Material;
+    }
+    
+    // iOS/Web: Try advanced glass material
+    const mat = new (THREE as any).MeshPhysicalMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.12,
+      roughness: 0.01,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+    });
+    try {
+      // Use transmission/IOR when available (WebGL2 path)
+      (mat as any).transmission = 0.98;
+      (mat as any).ior = 1.52;
+      (mat as any).thickness = 0.1;
+      (mat as any).envMapIntensity = 1.2;
+    } catch {}
+    return mat as unknown as THREE.Material;
+  };
+
+  // Create frame material (black/metal)
+  const createFrameMaterial = (): THREE.Material => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x1a1c21,
+      metalness: 0.9,
+      roughness: 0.25,
+      envMapIntensity: 1.0,
+    });
+    return mat as THREE.Material;
+  };
+
+  // Heuristics to detect glass-like meshes by name/material
+  const isGlassLike = (mesh: THREE.Mesh, material: any): boolean => {
+    const names: string[] = [
+      (mesh.name || '').toLowerCase(),
+      (material?.name || '').toLowerCase(),
+    ];
+    const joined = names.join(' ');
+    if (/glass|pane|window|glazing|mirror/.test(joined)) return true;
+    // If source material already intended to be transparent
+    if (typeof material?.opacity === 'number' && material.opacity < 0.75) return true;
+    return false;
+  };
+
+  // Heuristics to detect frame-like meshes by name/material  
+  const isFrameLike = (mesh: THREE.Mesh, material: any): boolean => {
+    const names: string[] = [
+      (mesh.name || '').toLowerCase(),
+      (material?.name || '').toLowerCase(),
+    ];
+    const joined = names.join(' ');
+    return /frame|alumi|metal|steel|hinge|handle|rail|support|bar|edge|border/.test(joined);
+  };
+
+  // Normalize and preserve materials; only apply glass to glass-like parts
   const processModelMaterials = (object: THREE.Object3D) => {
+    const glassMat = createGlassMaterial();
+    const frameMat = createFrameMaterial();
     object.traverse((child: THREE.Object3D) => {
-      if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).material) {
-        const meshMaterial = (child as THREE.Mesh).material;
-        if (Array.isArray(meshMaterial)) {
-          meshMaterial.forEach((mat) => {
-            if (mat) {
-              (mat as THREE.Material & { transparent?: boolean; opacity?: number }).transparent = true;
-              (mat as THREE.Material & { transparent?: boolean; opacity?: number }).opacity = 0.8;
-            }
-          });
-        } else if (meshMaterial) {
-          (meshMaterial as THREE.Material & { transparent?: boolean; opacity?: number }).transparent = true;
-          (meshMaterial as THREE.Material & { transparent?: boolean; opacity?: number }).opacity = 0.8;
+      if ((child as any).isMesh) {
+        const mesh = child as unknown as THREE.Mesh;
+        if (!mesh.material) return;
+
+        const normalize = (mat: any) => {
+          if (isGlassLike(mesh, mat)) {
+            return (glassMat as any).clone ? (glassMat as any).clone() : glassMat;
+          }
+          if (isFrameLike(mesh, mat)) {
+            return (frameMat as any).clone ? (frameMat as any).clone() : frameMat;
+          }
+          // If already a PBR standard/physical material, preserve original colors from Blender
+          if (mat?.isMeshStandardMaterial || mat?.isMeshPhysicalMaterial) {
+            try { return mat.clone(); } catch { /* fallback below */ }
+          }
+          // Convert legacy/basic materials to MeshStandardMaterial while preserving maps
+          const params: any = {
+            color: (mat?.color && mat.color.isColor) ? mat.color.clone() : new THREE.Color(mat?.color ?? 0xffffff),
+            map: mat?.map ?? null,
+            normalMap: mat?.normalMap ?? null,
+            roughnessMap: mat?.roughnessMap ?? null,
+            metalnessMap: mat?.metalnessMap ?? null,
+            aoMap: mat?.aoMap ?? null,
+            emissiveMap: mat?.emissiveMap ?? null,
+            metalness: typeof mat?.metalness === 'number' ? mat.metalness : 0.1,
+            roughness: typeof mat?.roughness === 'number' ? mat.roughness : 0.7,
+            side: mat?.side ?? THREE.FrontSide,
+            transparent: !!mat?.transparent && mat?.opacity < 1,
+            opacity: typeof mat?.opacity === 'number' ? Math.max(0.05, Math.min(1, mat.opacity)) : 1,
+          };
+          const std = new THREE.MeshStandardMaterial(params);
+          if (mat?.emissive && mat.emissive.isColor) (std as any).emissive = mat.emissive.clone();
+          return std;
+        };
+
+        if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map((m: any) => normalize(m));
+        } else {
+          mesh.material = normalize(mesh.material);
         }
+
+        // Ensure texture color space is correct
+        const applyEncoding = (m: any) => {
+          if (m?.map) {
+            try { m.map.encoding = (THREE as any).SRGBColorSpace || (THREE as any).sRGBEncoding; } catch {}
+          }
+        };
+        if (Array.isArray(mesh.material)) mesh.material.forEach(applyEncoding); else applyEncoding(mesh.material);
+
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
       }
     });
   };
 
   // Weather setup function
-  const setupWeatherLighting = (scene: THREE.Scene, weather: string) => {
+  const setupWeatherLighting = async (scene: THREE.Scene, weather: string, gl?: any) => {
     // Remove existing lights
     const existingLights = scene.children.filter(child => 
       child instanceof THREE.Light || 
@@ -485,16 +610,60 @@ export default function ProductViewScreen() {
     // Remove existing fog
     scene.fog = null;
 
+    // Load texture from React Native asset and create THREE texture
+    const setBackground = async (weather: string, fallbackColor: number, gl: any) => {
+      try {
+        const imageAsset = (SKYBOX_IMAGES as any)[weather];
+        if (!imageAsset) {
+          scene.background = new THREE.Color(fallbackColor);
+          console.log(`No image for ${weather}, using color`);
+          return;
+        }
+
+        // Get image dimensions and create texture from asset
+        const asset = RNImage.resolveAssetSource(imageAsset);
+        if (!asset || !asset.uri) {
+          scene.background = new THREE.Color(fallbackColor);
+          console.log(`Could not resolve asset for ${weather}`);
+          return;
+        }
+
+        // Create texture using GLView.createTextureAsync
+        const texture = await gl.createTextureAsync({
+          source: asset.uri,
+        });
+        
+        // Convert to THREE.Texture
+        const threeTexture = new THREE.Texture();
+        threeTexture.image = texture;
+        threeTexture.needsUpdate = true;
+        threeTexture.mapping = THREE.EquirectangularReflectionMapping;
+        
+        scene.background = threeTexture;
+        scene.environment = threeTexture;
+        console.log(`Loaded texture background for ${weather}`);
+      } catch (error) {
+        console.warn(`Failed to load texture for ${weather}:`, error);
+        scene.background = new THREE.Color(fallbackColor);
+        scene.environment = null;
+      }
+    };
+
     switch (weather) {
       case 'sunny':
-        // Bright sunny lighting
-        const sunAmbient = new THREE.AmbientLight(0xffffff, 0.8);
-        const sunDirectional = new THREE.DirectionalLight(0xffffff, 1.2);
+        // Bright sunny lighting with warm yellow tones
+        const sunAmbient = new THREE.AmbientLight(0xfffef0, 0.9);
+        const sunHemisphere = new THREE.HemisphereLight(0xffffcc, 0xfff4d6, 0.7);
+        const sunDirectional = new THREE.DirectionalLight(0xffffe0, 1.2);
         sunDirectional.position.set(5, 10, 5);
         scene.add(sunAmbient);
+        scene.add(sunHemisphere);
         scene.add(sunDirectional);
-        scene.background = new THREE.Color(0x87CEEB); // Sky blue
-        // remove rain if any
+        
+        if (gl) await setBackground('sunny', 0x87CEEB, gl);
+        else scene.background = new THREE.Color(0x87CEEB);
+        // Add subtle fog for white-to-yellow gradient effect
+        scene.fog = new THREE.Fog(0xfffacd, 8, 20);
         removeRain(scene);
         break;
         
@@ -505,22 +674,27 @@ export default function ProductViewScreen() {
         rainDirectional.position.set(-3, 8, 3);
         scene.add(rainAmbient);
         scene.add(rainDirectional);
-        scene.background = new THREE.Color(0x2F4F4F); // Dark gray
+        
+        if (gl) await setBackground('rainy', 0x778899, gl);
+        else scene.background = new THREE.Color(0x778899);
         
         // Add fog for rain effect
         scene.fog = new THREE.Fog(0x2F4F4F, 1, 15);
-        // add rain particles
         createRain(scene);
         break;
         
       case 'foggy':
         // Soft diffused lighting
         const fogAmbient = new THREE.AmbientLight(0xffffff, 0.7);
+        const fogHemisphere = new THREE.HemisphereLight(0xffffff, 0x999999, 0.4);
         const fogDirectional = new THREE.DirectionalLight(0xffffff, 0.3);
         fogDirectional.position.set(0, 5, 0);
         scene.add(fogAmbient);
+        scene.add(fogHemisphere);
         scene.add(fogDirectional);
-        scene.background = new THREE.Color(0xE6E6FA); // Light gray
+        
+        if (gl) await setBackground('foggy', 0xd3d3d3, gl);
+        else scene.background = new THREE.Color(0xd3d3d3);
         
         // Heavy fog
         scene.fog = new THREE.Fog(0xE6E6FA, 2, 8);
@@ -528,30 +702,61 @@ export default function ProductViewScreen() {
         break;
         
       case 'night':
-        // Dark with cool blue lighting
-        const nightAmbient = new THREE.AmbientLight(0x1e1e3f, 0.3);
-        const moonLight = new THREE.DirectionalLight(0x6699ff, 0.5);
+        // Night scene with visible street lamp-style lighting
+        const nightAmbient = new THREE.AmbientLight(0x3a3a5a, 0.6);
+        const moonLight = new THREE.DirectionalLight(0x9999ff, 1.0);
         moonLight.position.set(-5, 10, -5);
         
-        // Add point lights for city/street effect
-        const streetLight1 = new THREE.PointLight(0xffaa00, 0.8, 10);
-        streetLight1.position.set(3, 3, 3);
-        const streetLight2 = new THREE.PointLight(0xffaa00, 0.6, 8);
-        streetLight2.position.set(-3, 2, -2);
+        // Main street lamps
+        const streetLamp1 = new THREE.PointLight(0xffcc66, 1.2, 15);
+        streetLamp1.position.set(-3, 4, 3);
+        
+        const streetLamp2 = new THREE.PointLight(0xffcc66, 1.2, 15);
+        streetLamp2.position.set(3, 4, 3);
+        
+        // Additional fill lights
+        const frontLight = new THREE.PointLight(0xffffee, 1.0, 14);
+        frontLight.position.set(0, 2, 6);
+        
+        const backLight = new THREE.PointLight(0xaabbff, 0.8, 12);
+        backLight.position.set(0, 3, -6);
+        
+        const leftLight = new THREE.PointLight(0xffaa44, 0.9, 12);
+        leftLight.position.set(-5, 2, 0);
+        
+        const rightLight = new THREE.PointLight(0xffaa44, 0.9, 12);
+        rightLight.position.set(5, 2, 0);
+        
+        const topLight = new THREE.PointLight(0xccddff, 0.7, 10);
+        topLight.position.set(0, 7, 0);
         
         scene.add(nightAmbient);
         scene.add(moonLight);
-        scene.add(streetLight1);
-        scene.add(streetLight2);
-        scene.background = new THREE.Color(0x000011); // Very dark blue
+        scene.add(streetLamp1);
+        scene.add(streetLamp2);
+        scene.add(frontLight);
+        scene.add(backLight);
+        scene.add(leftLight);
+        scene.add(rightLight);
+        scene.add(topLight);
+        
+        if (gl) await setBackground('night', 0x0a0a1a, gl);
+        else scene.background = new THREE.Color(0x0a0a1a);
         removeRain(scene);
         break;
         
       default:
         // Default sunny
         const defaultAmbient = new THREE.AmbientLight(0xffffff, 1.0);
+        const defaultHemisphere = new THREE.HemisphereLight(0xffffff, 0xaaaaaa, 0.5);
+        const defaultSun = new THREE.DirectionalLight(0xffffeb, 1.2);
+        defaultSun.position.set(5, 10, 5);
         scene.add(defaultAmbient);
-        scene.background = new THREE.Color(0xf2f2f2);
+        scene.add(defaultHemisphere);
+        scene.add(defaultSun);
+        
+        if (gl) await setBackground('sunny', 0x87CEEB, gl);
+        else scene.background = new THREE.Color(0x87CEEB);
         removeRain(scene);
     }
   };
@@ -559,7 +764,9 @@ export default function ProductViewScreen() {
   // Re-apply weather lighting whenever mode changes (keeps viewer responsive)
   useEffect(() => {
     if (sceneRef.current) {
-      try { setupWeatherLighting(sceneRef.current, weatherMode); } catch (e) { /* ignore */ }
+      setupWeatherLighting(sceneRef.current, weatherMode).catch(e => {
+        console.warn('Weather lighting update error:', e);
+      });
     }
   }, [weatherMode]);
 
@@ -604,7 +811,7 @@ export default function ProductViewScreen() {
   // Optimized 3D FBX Viewer (mobile friendly) with quick weather buttons overlay
   const renderFBXViewer = () => {
     // prefer normalized array first (the product normalization stores fbx_urls)
-    const modelKey = product?.fbx_urls?.[0] ?? product?.fbx_url ?? null;
+    const modelKey = product?.fbx_urls?.[selectedModelIndex] ?? product?.fbx_urls?.[0] ?? product?.fbx_url ?? null;
     // show placeholder if no model key
     if (!modelKey) {
       return (
@@ -614,10 +821,29 @@ export default function ProductViewScreen() {
       );
     }
 
+    const viewerWidth = Math.min(width * 0.92, 480);
+    const viewerHeight = Math.min(SCREEN_HEIGHT * 0.55, 420);
+
+    // Handle mouse wheel for zoom (desktop/web)
+    const handleWheel = (event: any) => {
+      if (event && event.nativeEvent && event.nativeEvent.deltaY) {
+        const delta = event.nativeEvent.deltaY;
+        setCameraDistance(prev => {
+          const newDistance = prev + delta * 0.01;
+          return Math.max(1.5, Math.min(10, newDistance)); // Clamp between 1.5 and 10
+        });
+        event.preventDefault();
+      }
+    };
+
     return (
-      <View style={styles.fbxModalContent} {...panResponder.panHandlers}>
+      <View 
+        style={styles.fbxModalContent} 
+        {...panResponder.panHandlers}
+      >
         <GLView
-          style={{ flex: 1, width: '100%', height: 320 }}
+          key={`viewer-${selectedModelIndex}`}
+          style={{ width: viewerWidth, height: viewerHeight, borderRadius: 16 }}
           onContextCreate={async (gl) => {
             setFbxLoading(true);
             setModelError(false);
@@ -635,23 +861,60 @@ export default function ProductViewScreen() {
                 cameraRef.current = new THREE.PerspectiveCamera(60, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 1000);
                 cameraRef.current.position.set(0, 0, cameraDistanceRef.current);
               }
+              // Polyfill a canvas to prevent THREE from touching `document`
+              const expogl: any = gl;
+              if (!expogl.canvas) {
+                expogl.canvas = {
+                  width: gl.drawingBufferWidth,
+                  height: gl.drawingBufferHeight,
+                  style: {},
+                  addEventListener: () => {},
+                  removeEventListener: () => {},
+                  clientWidth: gl.drawingBufferWidth,
+                  clientHeight: gl.drawingBufferHeight,
+                } as any;
+              } else {
+                expogl.canvas.width = gl.drawingBufferWidth;
+                expogl.canvas.height = gl.drawingBufferHeight;
+              }
+
               if (!rendererRef.current) {
-                rendererRef.current = new THREE.WebGLRenderer({ context: gl as any, antialias: false });
+                rendererRef.current = new THREE.WebGLRenderer({
+                  context: gl as any,
+                  canvas: expogl.canvas,
+                  antialias: false,
+                });
                 rendererRef.current.setPixelRatio(1);
                 rendererRef.current.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
                 rendererRef.current.shadowMap.enabled = false;
                 rendererRef.current.setClearColor(0xf2f2f2);
+                // Color management & tone mapping for more accurate look
+                try {
+                  // Newer Three.js
+                  (rendererRef.current as any).outputColorSpace = (THREE as any).SRGBColorSpace;
+                } catch {
+                  // Fallback for older versions
+                  (rendererRef.current as any).outputEncoding = (THREE as any).sRGBEncoding;
+                }
+                try {
+                  rendererRef.current.toneMapping = (THREE as any).ACESFilmicToneMapping;
+                  (rendererRef.current as any).toneMappingExposure = 1.0;
+                  (rendererRef.current as any).physicallyCorrectLights = true;
+                } catch {}
+              } else {
+                // keep sizes in sync on re-creation
+                rendererRef.current.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
               }
 
               const scene = sceneRef.current!;
               const camera = cameraRef.current!;
               const renderer = rendererRef.current!;
 
-              // Apply current weather lighting
-              setupWeatherLighting(scene, weatherMode);
-
               // Clear previous children before adding model
               scene.clear();
+
+              // Apply current weather lighting AFTER clearing with gl context
+              await setupWeatherLighting(scene, weatherMode, gl);
 
               // Use cached model when available
               const cached = modelCache.current.get(modelKey);
@@ -689,6 +952,37 @@ export default function ProductViewScreen() {
             }
           }}
         />
+
+        {/* model selector (if multiple) */}
+        {Array.isArray(product?.fbx_urls) && product.fbx_urls.length > 1 && (
+          <View style={styles.modelSelectorRow}>
+            <TouchableOpacity
+              style={styles.modelArrow}
+              onPress={() => setSelectedModelIndex((i) => (i - 1 + product.fbx_urls.length) % product.fbx_urls.length)}
+            >
+              <Ionicons name="chevron-back" size={20} color="#a81d1d" />
+            </TouchableOpacity>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center' }}>
+              {product.fbx_urls.map((_: string, idx: number) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[styles.modelChip, selectedModelIndex === idx && styles.modelChipActive]}
+                  onPress={() => setSelectedModelIndex(idx)}
+                >
+                  <Text style={[styles.modelChipText, selectedModelIndex === idx && styles.modelChipTextActive]}>
+                    Model {idx + 1}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modelArrow}
+              onPress={() => setSelectedModelIndex((i) => (i + 1) % product.fbx_urls.length)}
+            >
+              <Ionicons name="chevron-forward" size={20} color="#a81d1d" />
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* quick overlay: weather buttons (mobile-friendly) */}
         <View style={styles.weatherOverlay}>
@@ -752,16 +1046,35 @@ export default function ProductViewScreen() {
       camera.position.z = cameraDistanceRef.current;
 
       // animate rain particles if present
-      if (rainRef.current) {
+      if (rainRef.current && rainVelocities.current) {
         const geom = rainRef.current.geometry as THREE.BufferGeometry;
         const attr = geom.getAttribute('position') as THREE.BufferAttribute;
-        const arr = attr.array as Float32Array;
-        for (let i = 0; i < arr.length / 3; i++) {
-          let y = arr[i * 3 + 1];
-          y -= 0.18 + Math.random() * 0.08; // fall speed variation
-          if (y < -1.5) y = Math.random() * 6 + 2;
-          arr[i * 3 + 1] = y;
+        const positions = attr.array as Float32Array;
+        const velocities = rainVelocities.current;
+        
+        for (let i = 0; i < velocities.length; i++) {
+          // Move both points of the line segment down
+          positions[i * 6 + 1] -= velocities[i];
+          positions[i * 6 + 4] -= velocities[i];
+          
+          // Reset to top when rain falls below certain point
+          if (positions[i * 6 + 1] < -1) {
+            const x = (Math.random() - 0.5) * 8;
+            const z = (Math.random() - 0.5) * 8;
+            const streakLength = 0.15 + Math.random() * 0.1;
+            
+            positions[i * 6 + 0] = x;
+            positions[i * 6 + 1] = 8;
+            positions[i * 6 + 2] = z;
+            positions[i * 6 + 3] = x;
+            positions[i * 6 + 4] = 8 - streakLength;
+            positions[i * 6 + 5] = z;
+            
+            // Randomize speed when resetting
+            velocities[i] = 0.08 + Math.random() * 0.06;
+          }
         }
+        
         attr.needsUpdate = true;
       }
       
@@ -891,6 +1204,8 @@ export default function ProductViewScreen() {
     return 0;
   })();
 
+  const availableStock = Math.max(0, (product?.stock ?? 0) - (product?.reserved_stock ?? 0));
+
   return (
     <View style={{ flex: 1, backgroundColor: '#fff' }}>
       {/* Top Bar */}
@@ -904,43 +1219,71 @@ export default function ProductViewScreen() {
 
       <ScrollView contentContainerStyle={{ alignItems: 'center', paddingBottom: 120 }}>
         <View style={styles.productBox}>
-          <Image
-            source={
-              product?.images?.length > 0
-                ? { uri: product.images[0] }
-                : require('@/assets/images/placeholder.png')
-            }
-            style={styles.productImage}
-            resizeMode="cover"
-          />
+          {/* Image Gallery */}
+          <View style={{ width: '100%', marginBottom: 16 }}>
+            <RNImage
+              source={
+                product?.images?.length > 0
+                  ? { uri: product.images[selectedImageIndex] }
+                  : require('@/assets/images/placeholder.png')
+              }
+              style={styles.productImage}
+              resizeMode="cover"
+            />
+            
+            {/* Image thumbnails - only show if multiple images */}
+            {product?.images?.length > 1 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginTop: 12 }}
+                contentContainerStyle={{ paddingHorizontal: 4, gap: 8 }}
+              >
+                {product.images.map((img: string, idx: number) => (
+                  <TouchableOpacity
+                    key={idx}
+                    onPress={() => setSelectedImageIndex(idx)}
+                    style={[
+                      styles.thumbnailContainer,
+                      selectedImageIndex === idx && styles.thumbnailActive
+                    ]}
+                  >
+                    <RNImage
+                      source={{ uri: img }}
+                      style={styles.thumbnail}
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
 
-          {/* 3D Viewer Button + badges row */}
-          <View style={{ width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          {/* 3D Viewer Button + Stock and Models info */}
+          <View style={{ width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            {/* 3D Viewer Button - Left */}
             <TouchableOpacity
               style={styles.open3DButton}
               onPress={() => setViewerVisible(true)}
             >
               <Ionicons name="cube-outline" size={20} color="#fff" />
-              <Text
-                style={{ color: '#fff', marginLeft: 8, fontWeight: '700' }}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
+              <Text style={{ color: '#fff', marginLeft: 8, fontWeight: '700' }}>
                 3D View{modelsCount > 0 ? ` (${modelsCount})` : ''}
               </Text>
             </TouchableOpacity>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8, flexShrink: 1 }}>
+            {/* Stock and Models badges - Right, stacked */}
+            <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
               {/* Stock badge */}
               <View style={styles.stockBadgeRow}>
-                <Text style={styles.stockTextSmall}>{product?.stock ?? 0} in stock</Text>
+                <Text style={styles.stockTextSmall}>{availableStock} in stock</Text>
               </View>
 
               {/* Models available badge */}
               {modelsCount > 0 && (
                 <View style={styles.modelsBadge}>
-                  <Text style={styles.modelsBadgeText} numberOfLines={1} ellipsizeMode="tail">
-                    {modelsCount} 3D Models Available
+                  <Text style={styles.modelsBadgeText}>
+                    {modelsCount} 3D Model{modelsCount > 1 ? 's' : ''}
                   </Text>
                 </View>
               )}
@@ -948,13 +1291,10 @@ export default function ProductViewScreen() {
           </View>
 
           <Text style={styles.productName}>{product?.name || 'Product Name'}</Text>
-          <Text style={styles.productSku}>{product?.sku ?? product?.id ?? 'N/A'}</Text>
+          <Text style={[styles.productSku, { display: 'none' }]}>{product?.sku ?? product?.id ?? 'N/A'}</Text>
 
           <View style={styles.priceRow}>
             <Text style={styles.price}>₱{product?.price ?? 0}</Text>
-            <View style={styles.stockBadge}>
-              <Text style={styles.stockText}>Stock: {product?.stock ?? 0}</Text>
-            </View>
           </View>
 
           {/* Buttons row: Add to wishlist / Reserve Now */}
@@ -1038,43 +1378,40 @@ export default function ProductViewScreen() {
         onRequestClose={() => setViewerVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.fbxModalBox}>
+          <View style={[styles.fbxModalBox, { maxHeight: SCREEN_HEIGHT * 0.88 }] }>
+            <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>3D Model Viewer</Text>
+              <Text style={styles.modalTitle}>
+                3D Model Viewer{Array.isArray(product?.fbx_urls) && product.fbx_urls.length > 0 ? ` (${(selectedModelIndex + 1)}/${product.fbx_urls.length})` : ''}
+              </Text>
               <TouchableOpacity onPress={() => setViewerVisible(false)}>
-                <Ionicons name="close" size={28} color="#a81d1d" />
+                <Ionicons name="close" size={26} color="#fff" />
               </TouchableOpacity>
             </View>
 
-             {renderFBXViewer()}
+            {renderFBXViewer()}
+
+            <View style={styles.viewerActionsRow}>
+              <TouchableOpacity style={styles.viewerActionButton} onPress={resetViewerTransform}>
+                <Ionicons name="refresh" size={18} color="#fff" />
+                <Text style={styles.viewerActionText}>Reset View</Text>
+              </TouchableOpacity>
+              {modelsCount > 1 && (
+                <TouchableOpacity
+                  style={styles.viewerActionButton}
+                  onPress={() => setSelectedModelIndex((i) => (i + 1) % modelsCount)}
+                >
+                  <Ionicons name="swap-horizontal" size={18} color="#fff" />
+                  <Text style={styles.viewerActionText}>Next Model</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </View>
       </Modal>
 
       {/* Modern Bottom Navbar */}
-      <View style={styles.bottomNavBar}>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
-          <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Inquire</Text>
-        </TouchableOpacity>
-        <View style={styles.fabWrapper}>
-          <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
-            <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Service</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Settings</Text>
-        </TouchableOpacity>
-      </View>
+      <BottomNavBar />
     </View>
   );
 }
@@ -1113,10 +1450,25 @@ const styles = StyleSheet.create({
   },
   productImage: {
     width: '100%',
-    height: 280,
+    height: Math.min(280, width * 0.75),
     borderRadius: 12,
-    marginBottom: 16,
     backgroundColor: '#eee',
+  },
+  thumbnailContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    overflow: 'hidden',
+    marginHorizontal: 4,
+  },
+  thumbnailActive: {
+    borderColor: '#a81d1d',
+  },
+  thumbnail: {
+    width: '100%',
+    height: '100%',
   },
   open3DButton: {
     flexDirection: 'row',
@@ -1195,20 +1547,19 @@ const styles = StyleSheet.create({
 
   stockBadgeRow: {
     backgroundColor: '#e8f9ef',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: 12,
   },
-  stockTextSmall: { color: '#0b9f34', fontWeight: '700' },
+  stockTextSmall: { color: '#0b9f34', fontWeight: '700', fontSize: 13 },
 
   modelsBadge: {
     backgroundColor: '#eef6ff',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 12,
-    marginLeft: 8,
   },
-  modelsBadgeText: { color: '#2b6cb0', fontWeight: '700' },
+  modelsBadgeText: { color: '#2b6cb0', fontWeight: '700', fontSize: 13 },
 
   productDesc: {
     fontSize: 15,
@@ -1241,26 +1592,30 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'flex-end',
     alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingBottom: 20,
   },
   fbxModalBox: {
-    width: width * 0.95,
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 12,
+    width: width * 0.97,
+    backgroundColor: '#1a1d28',
+    borderRadius: 24,
+    padding: 16,
     alignItems: 'center',
-    elevation: 6,
-    maxHeight: 420,
+    elevation: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.45,
+    shadowRadius: 20,
   },
   fbxModalContent: {
     width: '100%',
-    height: 320,
-    backgroundColor: '#f2f2f2',
-    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 18,
     overflow: 'hidden',
   },
   modalHeader: {
@@ -1268,13 +1623,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 14,
     paddingHorizontal: 8,
   },
   modalTitle: {
     fontWeight: 'bold',
     fontSize: 18,
-    color: '#a81d1d',
+    color: '#ffffff',
+  },
+  modalHandle: {
+    width: 56,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    marginBottom: 12,
   },
   bottomNavBar: {
     flexDirection: 'row',
@@ -1455,43 +1817,104 @@ const styles = StyleSheet.create({
   },
   weatherOverlay: {
     position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
+    top: 10,
+    left: 10,
+    right: 10,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 8,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    elevation: 4,
+    justifyContent: 'space-between',
+    padding: 6,
+    borderRadius: 14,
+    backgroundColor: 'rgba(26, 29, 40, 0.85)',
+    elevation: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
     zIndex: 100,
   },
   weatherQuickButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f2f2f2',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     borderRadius: 10,
     paddingVertical: 8,
-    paddingHorizontal: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    paddingHorizontal: 10,
+    elevation: 0,
     flex: 1,
-    marginHorizontal: 4,
+    marginHorizontal: 3,
   },
   weatherQuickActive: {
     backgroundColor: '#a81d1d',
   },
   weatherQuickText: {
-    fontSize: 14,
+    fontSize: 13,
+    color: '#ffffff',
+    marginLeft: 5,
+    fontWeight: '600',
+  },
+  // Model selector controls
+  modelSelectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  modelArrow: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f7f7f7',
+    marginHorizontal: 4,
+  },
+  modelChip: {
+    backgroundColor: '#f2f2f2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    marginHorizontal: 4,
+    borderWidth: 1,
+    borderColor: '#e5e5e5',
+  },
+  modelChipActive: {
+    backgroundColor: '#a81d1d',
+    borderColor: '#a81d1d',
+  },
+  modelChipText: {
     color: '#333',
-    marginLeft: 6,
+    fontWeight: '600',
+  },
+  modelChipTextActive: {
+    color: '#fff',
+  },
+  viewerActionsRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 18,
+    gap: 12,
+  },
+  viewerActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  viewerActionText: {
+    marginLeft: 8,
+    color: '#fff',
+    fontWeight: '600',
   },
 });

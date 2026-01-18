@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Image } from 'expo-image';
 import { StyleSheet, TextInput, TouchableOpacity, View, ScrollView, ImageBackground, Alert } from 'react-native';
 import { Link, Stack, useRouter } from 'expo-router';
+import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { supabase } from './supabaseClient';
+// Ensure any pending web-based auth session completes
+WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -16,6 +19,22 @@ export default function LoginScreen() {
   const tintColor = Colors[colorScheme].tint;
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const redirectTo = AuthSession.makeRedirectUri({
+    scheme: 'grandlinkmobile',
+    path: 'auth/callback',
+  });
+
+  // Redirect to homepage when authenticated (covers both password and OAuth logins)
+  useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        router.replace('/(tabs)/homepage');
+      }
+    });
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
 
   const handleLogin = async () => {
   setLoading(true);
@@ -25,25 +44,49 @@ export default function LoginScreen() {
     console.log(error);
     Alert.alert('Login Failed', error.message);
   } else {
-    // After successful login, go back to where they came from or homepage
-    router.back();
+    // After successful login, take user to homepage tab
+    router.replace('/(tabs)/homepage');
   }
 };
 
   const handleGoogleLogin = async () => {
-  const redirectTo = 'https://auth.expo.io/@your-username/your-app-slug'; // Replace with your Expo redirect URI
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo }
-  });
+    try {
+      setLoading(true);
 
-  if (data?.url) {
-    await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-  }
-  if (error) {
-    Alert.alert('Google Login Failed', error.message);
-  }
-};
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+        },
+      });
+
+      if (error || !data?.url) {
+        Alert.alert('Google Login Failed', error?.message ?? 'Missing OAuth URL');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type !== 'success' || !result.url) {
+        return;
+      }
+
+      const returnedUrl = new URL(result.url);
+      const code = returnedUrl.searchParams.get('code');
+      if (!code) {
+        Alert.alert('Google Login Failed', 'No auth code returned');
+        return;
+      }
+
+      const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+      if (exchangeError) {
+        Alert.alert('Supabase Sign-In Failed', exchangeError.message);
+      }
+    } catch (err: any) {
+      Alert.alert('Google Login Failed', err?.message ?? 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <>
@@ -61,7 +104,7 @@ export default function LoginScreen() {
               {/* Logo at the top */}
               <View style={styles.logoContainer}>
                 <Image
-                  source={require('@/assets/images/GLLogo.png')}
+                  source={require('@/assets/images/GRANDEASTLOGO.png')}
                   style={styles.logo}
                   contentFit="contain"
                 />
@@ -99,7 +142,7 @@ export default function LoginScreen() {
                     secureTextEntry
                   />
                 </View>
-                <TouchableOpacity style={styles.forgotPasswordContainer}>
+                <TouchableOpacity style={styles.forgotPasswordContainer} onPress={() => router.push('/forgot-password')}>
                   <ThemedText style={[styles.forgotPassword]}>Forgot Password</ThemedText>
                 </TouchableOpacity>
               </View>
@@ -127,7 +170,7 @@ export default function LoginScreen() {
 
               {/* Sign Up Link */}
               <View style={styles.signupContainer}>
-                <ThemedText style={[styles.signupText]}>Don't have an account yet?</ThemedText>
+                <ThemedText style={[styles.signupText]}>Don’t have an account yet?</ThemedText>
                 <Link href="/register">
                   <ThemedText style={[styles.signupLink]}>Sign Up</ThemedText>
                 </Link>

@@ -96,8 +96,13 @@ export default function CompletedOrdersScreen() {
     loadCompletedOrders();
   };
 
-  const formatCurrency = (amount: number) => {
-    return amount.toLocaleString('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 });
+  const formatCurrency = (amount?: number | null) => {
+    const value = typeof amount === 'number' && isFinite(amount) ? amount : Number(amount ?? 0) || 0;
+    try {
+      return value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 });
+    } catch {
+      return '₱0';
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -147,7 +152,7 @@ export default function CompletedOrdersScreen() {
           <View style={styles.emptyContainer}>
             <Feather name="check-circle" size={80} color="#ccc" />
             <Text style={styles.emptyTitle}>No Completed Orders</Text>
-            <Text style={styles.emptyText}>You haven't completed any orders yet.</Text>
+            <Text style={styles.emptyText}>You haven&apos;t completed any orders yet.</Text>
             <TouchableOpacity style={styles.shopButton} onPress={() => router.push('../shop')}>
               <Text style={styles.shopButtonText}>Start Shopping</Text>
             </TouchableOpacity>
