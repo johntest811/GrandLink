@@ -1,4 +1,10 @@
 # GrandLink
+- Update to the newest version of "next": "15.5.9",
+
+
+-  npm run build 
+-  npm run dev
+
 **FOR NEXT.JS only**
 To run next.js properly
 - npm run dev
@@ -27,6 +33,7 @@ To run next.js properly
 - npm install @fullcalendar/react @fullcalendar/daygrid @fullcalendar/timegrid @fullcalendar/list @fullcalendar/interaction
 - npm install --save-dev @types/fullcalendar__react
 - npm i jspdf jspdf-autotable chart.js react-chartjs-2
+- npm install three @types/three three-stdlib
 
 **Packages needs to Install Next.js**
 - npm install framer-motion
@@ -102,3 +109,7 @@ Example: cd Music/GrandLink
  - then: git add .
  - to name the update and commit the project: git commit -m "updated"
  - now you can push: git push origin nicole
+
+
+
+ 

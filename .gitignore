@@ -1,0 +1,11 @@
+# Workspace-level ignores
+
+# Local backups / exports (avoid accidentally committing huge binaries)
+/Backup 1/
+
+# Temp marker files
+**/Temp.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
