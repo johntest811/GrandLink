@@ -1,12 +1,49 @@
 import { ThemedText } from '@/components/ThemedText';
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Image, StyleSheet, TextInput as RNTextInput, TouchableOpacity, Text, ScrollView, Button, Dimensions, Animated, Alert } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
-import { router, useRouter } from 'expo-router';
+import { View, Image, StyleSheet, TouchableOpacity, Text, ScrollView, Dimensions, ActivityIndicator } from 'react-native';
+import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient'; 
-import { blue } from 'react-native-reanimated/lib/typescript/Colors';
+import BottomNavBar from "@BottomNav/../components/BottomNav";
+import { useAppContext } from "@/context/AppContext";
+import TopBar from '@/components/TopBar';
+import Constants from 'expo-constants';
+import YoutubePlayer from 'react-native-youtube-iframe';
 
-const images = [
+type HomeContent = {
+  carousel?: {
+    image?: string;
+    image_url?: string;
+    youtube_url?: string;
+    title?: string;
+    buttonText?: string;
+    buttonLink?: string;
+    link_url?: string;
+  }[];
+  featured_projects?: {
+    image?: string;
+    image_url?: string;
+    youtube_url?: string;
+    title?: string;
+    description?: string;
+    link_url?: string;
+  }[];
+  services?: {
+    title?: string;
+    description?: string;
+    images?: string[];
+  };
+  about?: {
+    logo?: string;
+    title?: string;
+    description?: string;
+  };
+  explore?: any[];
+  [k: string]: any;
+};
+
+const SINGLETON_ID = '00000000-0000-0000-0000-000000000000';
+
+const fallbackLocalCarouselImages = [
   require('@/assets/images/homeimage1.png'),
   require('@/assets/images/homeimage2.png'),
   require('@/assets/images/homeimage3.png'),
@@ -23,6 +60,104 @@ const QUALITY_MESSAGES = [
 ];
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+
+const SUPABASE_URL =
+  (Constants.expoConfig?.extra as any)?.supabaseUrl ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  '';
+
+const BASE_URL =
+  (Constants.expoConfig?.extra as any)?.baseUrl ||
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  '';
+
+function encodeStoragePath(path: string) {
+  return path
+    .split('/')
+    .filter(Boolean)
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
+function resolveImageUrl(val?: string) {
+  if (!val) return '';
+  const v = String(val).trim();
+  if (!v) return '';
+  if (v.startsWith('http://') || v.startsWith('https://')) return v;
+
+  // If it's a website public path ("/something"), try baseUrl first.
+  if (v.startsWith('/') && BASE_URL) {
+    return `${String(BASE_URL).replace(/\/$/, '')}${v}`;
+  }
+
+  // Otherwise treat it as a Supabase Storage key under `uploads`.
+  const base = String(SUPABASE_URL || '').replace(/\/$/, '');
+  const cleaned = v.replace(/^\/+/, '');
+  if (!base) return cleaned;
+  return `${base}/storage/v1/object/public/uploads/${encodeStoragePath(cleaned)}`;
+}
+
+function getYoutubeEmbedUrl(url?: string) {
+  if (!url) return '';
+  const raw = String(url).trim();
+  if (!raw) return '';
+  try {
+    // Accept plain IDs too
+    if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) {
+      return raw;
+    }
+
+    const u = new URL(raw);
+    let id = '';
+    if (u.hostname.includes('youtu.be')) {
+      id = u.pathname.replace('/', '');
+    } else if (u.pathname.startsWith('/shorts/')) {
+      id = u.pathname.split('/shorts/')[1]?.split(/[?/]/)[0] ?? '';
+    } else {
+      id = u.searchParams.get('v') || '';
+      if (!id && u.pathname.startsWith('/embed/')) {
+        id = u.pathname.split('/embed/')[1]?.split(/[?/]/)[0] ?? '';
+      }
+    }
+    if (!id) return '';
+    return id;
+  } catch {
+    return '';
+  }
+}
+
+function YouTubePlayer({ youtubeUrl, height }: { youtubeUrl: string; height: number }) {
+  const videoId = getYoutubeEmbedUrl(youtubeUrl);
+  if (!videoId) return null;
+
+  return (
+    <View style={{ width: '100%', height, backgroundColor: 'black' }}>
+      <YoutubePlayer
+        height={height}
+        play={false}
+        videoId={videoId}
+        initialPlayerParams={{
+          controls: true,
+          modestbranding: true,
+          rel: false,
+          playsinline: true,
+        }}
+        webViewProps={{
+          // These help on Android devices where YouTube is picky.
+          originWhitelist: ['*'],
+          javaScriptEnabled: true,
+          domStorageEnabled: true,
+          mediaPlaybackRequiresUserAction: false,
+          allowsFullscreenVideo: true,
+          thirdPartyCookiesEnabled: true,
+          sharedCookiesEnabled: true,
+          userAgent:
+            'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        }}
+      />
+    </View>
+  );
+}
 
 function QualityWheel() {
   const scrollViewRef = useRef<ScrollView>(null);
@@ -68,88 +203,145 @@ function QualityWheel() {
 
 export default function Homescreen() {  
     const [index, setIndex] = useState(0);
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [homeContent, setHomeContent] = useState<HomeContent | null>(null);
+    const [homeLoading, setHomeLoading] = useState(true);
+    const [newestProducts, setNewestProducts] = useState<any[]>([]);
     const router = useRouter();
+    const { darkMode } = useAppContext();
 
-  const nextImage = () => setIndex((prev) => (prev + 1) % images.length);
-  const prevImage = () => setIndex((prev) => (prev - 1 + images.length) % images.length);
+  const carouselItems = (homeContent?.carousel && Array.isArray(homeContent.carousel) && homeContent.carousel.length)
+    ? homeContent.carousel
+    : [];
+
+  const hasRemoteCarousel = carouselItems.length > 0;
+
+  const carouselLength = hasRemoteCarousel ? carouselItems.length : fallbackLocalCarouselImages.length;
+
+  const nextImage = () => setIndex((prev) => (prev + 1) % Math.max(1, carouselLength));
+  const prevImage = () => setIndex((prev) => (prev - 1 + Math.max(1, carouselLength)) % Math.max(1, carouselLength));
+
+  const activeCarouselItem = hasRemoteCarousel ? carouselItems[index] : null;
+  const activeIsYoutube = Boolean(activeCarouselItem?.youtube_url);
+
+  const activeCarouselImageUrl = hasRemoteCarousel
+    ? resolveImageUrl(activeCarouselItem?.image_url || activeCarouselItem?.image || '')
+    : '';
 
   useEffect(() => {
-  const checkUser = async () => {
-    const { data } = await supabase.auth.getUser();
-    setIsLoggedIn(!!data?.user);
+  const getUser = async () => {
+    await supabase.auth.getUser();
   };
-  checkUser();
-  
-  // Listen for auth changes
-  const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-    setIsLoggedIn(!!session);
-  });
-  
-  return () => {
-    authListener?.subscription.unsubscribe();
-  };
+  getUser();
 }, []);
 
-  const handleProfilePress = async () => {
-    const { data } = await supabase.auth.getUser();
-    if (data?.user) {
-      router.push('../profile');
-    } else {
-      Alert.alert(
-        'Login Required',
-        'Please login to access your profile.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Login', onPress: () => router.push('/login') }
-        ]
-      );
-    }
-  };
-
   useEffect(() => {
-    const timer = setInterval(() => {
-      setIndex((prev) => (prev + 1) % images.length);
-    }, 3000);
-    return () => clearInterval(timer);
+    let isMounted = true;
+    const load = async () => {
+      try {
+        setHomeLoading(true);
+
+        // Load homepage content
+        const attemptSingleton = await supabase
+          .from('home_content')
+          .select('content, updated_at')
+          .eq('id', SINGLETON_ID)
+          .maybeSingle();
+
+        let contentRow = attemptSingleton.data;
+
+        if (!contentRow) {
+          const latest = await supabase
+            .from('home_content')
+            .select('content, updated_at')
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          contentRow = latest.data;
+        }
+
+        const contentObj = (contentRow?.content ?? null) as HomeContent | null;
+        if (isMounted) setHomeContent(contentObj);
+
+        // Load newest products
+        const newest = await supabase
+          .from('products')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(6);
+        if (isMounted) setNewestProducts(newest.data || []);
+
+      } finally {
+        if (isMounted) setHomeLoading(false);
+      }
+    };
+    load();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
+  // If carousel length changes (e.g. after fetch), keep index in range.
+  useEffect(() => {
+    setIndex((prev) => {
+      const len = Math.max(1, carouselLength);
+      return prev % len;
+    });
+  }, [carouselLength]);
+
+  useEffect(() => {
+    // Match website behavior: pause autoplay on YouTube slides.
+    if (carouselLength <= 1) return;
+    if (activeIsYoutube) return;
+
+    const timer = setInterval(() => {
+      setIndex((prev) => (prev + 1) % Math.max(1, carouselLength));
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [carouselLength, activeIsYoutube]);
+
   return (
-    <View style={styles.whitebackground}>
+  <View style={[styles.whitebackground, darkMode && { backgroundColor: '#0d1117' }]}>
+    <TopBar />
     <View style={{ flex: 1 }}>
       <ScrollView style={{ flex: 1 }}>
-        <View style={styles.upperBar}>
-          <Image
-            source={require('@/assets/images/GRANDEASTLOGO.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-          <TouchableOpacity
-            style={styles.profileButton}
-            onPress={handleProfilePress}
-          >
-            <Image
-              source={require('@/assets/images/profileicon.png')}
-              style={styles.profileIcon}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-        </View>
+
         <View style={styles.blueBox}>
           <TouchableOpacity onPress={prevImage} style={styles.arrow}>
             <Image source={require('@/assets/images/left-arrow.png')} style={styles.arrowIcon} />
           </TouchableOpacity>
-          <Image
-            source={images[index]}
-            style={styles.slideshowImage}
-            resizeMode="cover"
-          />
+
+          {hasRemoteCarousel ? (
+            activeCarouselItem?.youtube_url ? (
+              <YouTubePlayer youtubeUrl={activeCarouselItem.youtube_url} height={220} />
+            ) : (
+              activeCarouselImageUrl ? (
+                <Image
+                  source={{ uri: activeCarouselImageUrl }}
+                  style={styles.slideshowImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Image
+                  source={fallbackLocalCarouselImages[index % fallbackLocalCarouselImages.length]}
+                  style={styles.slideshowImage}
+                  resizeMode="cover"
+                />
+              )
+            )
+          ) : (
+            <Image
+              source={fallbackLocalCarouselImages[index]}
+              style={styles.slideshowImage}
+              resizeMode="cover"
+            />
+          )}
+
           <TouchableOpacity onPress={nextImage} style={styles.arrow}>
             <Image source={require('@/assets/images/right-arrow.png')} style={styles.arrowIcon} />
           </TouchableOpacity>
           {/* Dots overlay */}
           <View style={styles.dotOverlay}>
-            {images.map((_, i) => (
+            {Array.from({ length: carouselLength }).map((_, i) => (
               <View
                 key={i}
                 style={[
@@ -162,6 +354,45 @@ export default function Homescreen() {
         </View>
         <View style={styles.qualityWheelFullBlue}>
           <QualityWheel />
+        </View>
+
+        {/* Newest products (requested: directly below carousel) */}
+        <View style={[styles.newestSection, darkMode && { backgroundColor: '#161b22' }]}>
+          <View style={styles.newestHeaderRow}>
+            <Text style={[styles.newestTitle, darkMode && { color: '#e6e6e6' }]}>Newest Products</Text>
+            <TouchableOpacity onPress={() => router.push('../shop')}>
+              <Text style={styles.newestViewAll}>View All</Text>
+            </TouchableOpacity>
+          </View>
+
+          {homeLoading ? (
+            <View style={{ paddingVertical: 12 }}>
+              <ActivityIndicator />
+            </View>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.newestRow}>
+              {newestProducts.map((product) => (
+                <TouchableOpacity
+                  key={product.id}
+                  style={styles.newestCard}
+                  activeOpacity={0.85}
+                  onPress={() => router.push({ pathname: '/(tabs)/product', params: { id: product.id } })}
+                >
+                  <Image
+                    source={product.image1 ? { uri: product.image1 } : require('@/assets/images/placeholder.png')}
+                    style={styles.newestImage}
+                    resizeMode="cover"
+                  />
+                  <Text numberOfLines={2} style={[styles.newestName, darkMode && { color: '#e6e6e6' }]}>
+                    {product.name}
+                  </Text>
+                  {typeof product.price !== 'undefined' && product.price !== null ? (
+                    <Text style={styles.newestPrice}>₱{product.price}</Text>
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
         </View>
 
         <TouchableOpacity style={styles.imageButton} onPress={() => router.push({ pathname: '../shop', params: { filter: 'Doors' } })}>
@@ -220,7 +451,8 @@ export default function Homescreen() {
           </View>
         </TouchableOpacity>
         
-        <View style={styles.blueBoxB}>
+        <View style={[styles.blueBoxB, darkMode && { backgroundColor: '#161b22' }]}>
+
           <View style={{ flexDirection: "row", paddingLeft: 10, paddingTop: 20, alignItems: "center" }}>
             <Text style={styles.featuredText}>Featured Projects</Text>
             <TouchableOpacity
@@ -230,117 +462,80 @@ export default function Homescreen() {
               <Text style={styles.viewMoreProjectButtonText}>View More Projects</Text>
             </TouchableOpacity>
           </View>
-          <Video
-              source={require("@/assets/videos/testvideo.mp4")}
-              useNativeControls
-              resizeMode={ResizeMode.COVER}
-              style={{
-                width: "95%",
-                height: 200,
-                alignSelf: "center",
-                marginVertical: 15,
-                borderRadius: 12,
-                backgroundColor: "black",
-              }}
-            />
-          <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
-            Mikey Bustos ft. Grand East Products
-          </ThemedText>
-          <ThemedText style={{ color: "white", fontSize: 10, textAlign: "left", marginBottom: 3 }}>
-            Join Mikey Bustos on an exciting shopping spree vlog, where he showcases our product as his top choice for stylish
-            glass, doors, and windows. Discover his tips and insights as he transform his space with these functional and aesthetic
-            upgrades! Credit to: Mikey Bustos.
-          </ThemedText>
+          {(homeContent?.featured_projects && Array.isArray(homeContent.featured_projects) && homeContent.featured_projects.length)
+            ? homeContent.featured_projects.map((proj, projIdx) => {
+                const title = proj?.title || '';
+                const description = proj?.description || '';
+                const imageUrl = resolveImageUrl(proj?.image_url || proj?.image || '');
+                const youtubeUrl = proj?.youtube_url || '';
 
-          <Video
-              source={require("../../assets/videos/testvideo.mp4")}
-              useNativeControls
-              resizeMode={ResizeMode.COVER}
-              style={{
-                width: "95%",
-                height: 200,
-                alignSelf: "center",
-                marginVertical: 15,
-                borderRadius: 12,
-                backgroundColor: "black",
-              }}
-            />
+                return (
+                  <View key={`${projIdx}-${title}`} style={{ width: '100%' }}>
+                    {youtubeUrl ? (
+                      <View style={{ width: '95%', alignSelf: 'center', marginVertical: 15, borderRadius: 12, overflow: 'hidden' }}>
+                        <YouTubePlayer youtubeUrl={youtubeUrl} height={200} />
+                      </View>
+                    ) : imageUrl ? (
+                      <Image
+                        source={{ uri: imageUrl }}
+                        style={{ width: '95%', height: 200, alignSelf: 'center', marginVertical: 15, borderRadius: 12, backgroundColor: 'black' }}
+                        resizeMode="cover"
+                      />
+                    ) : null}
 
-          <ThemedText style={{ color: "white", fontSize: 18, fontWeight: 'bold', textAlign: "center", marginBottom: 4 }}>
-            Solenn Heusaff ft. Grand East Products
-          </ThemedText>
-          <ThemedText style={{ color: "white", fontSize: 10, textAlign: "left", marginBottom: 3 }}>
-            Solenn Heusaff invites us into her beautifully curated home, where our products seamlessly blend with her style. 
-            Each piece reflects her unique taste and attention to detail, enchancing the warmth and sophistication of her living space. 
-            Credit to: Solenn Heusaff.
-          </ThemedText>
-
-            <View style={{
-                flexDirection: 'row',
-                width: '120%',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 10, // Adds a 10px gap between items
-                paddingHorizontal: 20,
-                paddingBottom: 20,
-                paddingTop: 20
-              }}>
-                <TouchableOpacity style={styles.imageButtonB}>
-                  <Image
-                    source={require('@/assets/images/featuredprod1.png')}
-                    style={styles.imageButtonImageB}
-                    resizeMode="cover"
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.imageButtonB}>
-                  <Image
-                    source={require('@/assets/images/featuredprod2.png')}
-                    style={styles.imageButtonImageB}
-                    resizeMode="cover"
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.imageButtonB}>
-                  <Image
-                    source={require('@/assets/images/featuredprod3.png')}
-                    style={styles.imageButtonImageB}
-                    resizeMode="cover"
-                  />
-                </TouchableOpacity>
-              </View>
+                    {title ? (
+                      <ThemedText style={{ color: 'white', fontSize: 18, fontWeight: 'bold', textAlign: 'left', marginBottom: 4 }}>
+                        {title}
+                      </ThemedText>
+                    ) : null}
+                    {description ? (
+                      <ThemedText style={{ color: 'white', fontSize: 10, textAlign: 'left', marginBottom: 8 }}>
+                        {description}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                );
+              })
+            : (
+              <ThemedText style={{ color: 'white', fontSize: 12, textAlign: 'center', marginVertical: 16 }}>
+                No featured projects available.
+              </ThemedText>
+            )}
         </View>
 
          <View style={styles.serviceContainer}>
-            <ThemedText style={styles.sectionTitle}>Service We Offer</ThemedText>
+            <ThemedText style={styles.sectionTitle}>{homeContent?.services?.title || 'Service We Offer'}</ThemedText>
             <ThemedText style={styles.serviceText}>
-              Grand East brings you top-tier aluminum and glass solutions, expertly
-              crafted for both residential and commercial spaces. From sleek
-              windows and doors to stunning facades, our services are designed to enhance
-              both style and durability. Elevate your property with the perfect blend of
-              innovation and elegance.
+              {homeContent?.services?.description ||
+                'Grand East brings you top-tier aluminum and glass solutions, expertly\ncrafted for both residential and commercial spaces. From sleek\nwindows and doors to stunning facades, our services are designed to enhance\nboth style and durability. Elevate your property with the perfect blend of\ninnovation and elegance.'}
             </ThemedText>
             <View style={styles.redLineA} />
       </View>
 
-      <View style={styles.blueBoxB}>
+      <View style={[styles.blueBoxB, darkMode && { backgroundColor: '#161b22' }]}>
+
         <View style={styles.logoTitleB}>
-              <Image
-            source={require('@/assets/images/GRANDEASTLOGO.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
+              {homeContent?.about?.logo ? (
+                <Image
+                  source={{ uri: resolveImageUrl(homeContent.about.logo) }}
+                  style={styles.logo}
+                  resizeMode="contain"
+                />
+              ) : (
+                <Image
+                  source={require('@/assets/images/GRANDEASTLOGO.png')}
+                  style={styles.logo}
+                  resizeMode="contain"
+                />
+              )}
           </View>
           <ThemedText style={styles.sectionTitleB}>ABOUT</ThemedText>
-          <ThemedText style={styles.sectionTitleB}>GRAND EAST</ThemedText>
+          <ThemedText style={styles.sectionTitleB}>{homeContent?.about?.title || 'GRAND EAST'}</ThemedText>
           <View style={styles.redLine} />
           <ThemedText style={styles.aboutGrandEast}>
-            At Grand East, we specialize in creating modern, durable, 
-            and stylish solutions that redefine residential and 
-            commercial spaces. With a passion for precision and a 
-            commitment to quality, our expert team delivers exceptional 
-            aluminum and glass installations that stand the test of time. 
-            Whether you're upgrading your home or transforming your business, 
-            we provide innovative designs that combine functionality with 
-            aesthetic appeal, ensuring your vision becomes a reality. </ThemedText>
+            {homeContent?.about?.description ||
+              'At Grand East, we specialize in creating modern, durable,\nand stylish solutions that redefine residential and\ncommercial spaces. With a passion for precision and a\ncommitment to quality, our expert team delivers exceptional\naluminum and glass installations that stand the test of time.\nWhether you\'re upgrading your home or transforming your business,\nwe provide innovative designs that combine functionality with\naesthetic appeal, ensuring your vision becomes a reality.'}
+          </ThemedText>
 
             <View style={{ position: 'relative', width: 500, height: 200, marginTop: 20, marginBottom: 120, }}>
               <Image
@@ -387,29 +582,7 @@ export default function Homescreen() {
           </View>
 
       </ScrollView>
-      <View style={styles.bottomNavBar}>
-          <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
-            <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
-            <Text style={styles.navLabel}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-            <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
-            <Text style={styles.navLabel}>Inquire</Text>
-          </TouchableOpacity>
-          <View style={styles.fabWrapper}>
-            <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
-              <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-            <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
-            <Text style={styles.navLabel}>Service</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-            <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
-            <Text style={styles.navLabel}>Settings</Text>
-          </TouchableOpacity>
-        </View>
+   <BottomNavBar />
     </View>
 
     
@@ -425,15 +598,6 @@ whitebackground: {
     flex: 1,
     backgroundColor: '#ffffff',
 },
-    upperBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 15,
-    paddingTop: 15,
-    paddingBottom: 10,
-    backgroundColor: '#fdfdfdff',
-  },
   logo: {
     height: 60,
     width: 170,
@@ -452,25 +616,6 @@ whitebackground: {
         justifyContent: 'space-between',
         alignItems: 'center',
         paddingHorizontal: 20,
-  },
-  profileButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  profileIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#eee',
   },
   serviceContainer: {
     padding: 20,
@@ -859,5 +1004,64 @@ viewMoreProjectButtonText: {
     marginBottom: 8,
     alignSelf: 'stretch',
     borderRadius: 0,
+  },
+  newestSection: {
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 12,
+    padding: 14,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  newestHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  newestTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111',
+  },
+  newestViewAll: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#a81d1d',
+  },
+  newestRow: {
+    paddingRight: 6,
+  },
+  newestCard: {
+    width: 150,
+    marginRight: 12,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#f7f7f7',
+  },
+  newestImage: {
+    width: '100%',
+    height: 105,
+    backgroundColor: '#e9e9e9',
+  },
+  newestName: {
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 2,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#111',
+  },
+  newestPrice: {
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#a81d1d',
   },
 });

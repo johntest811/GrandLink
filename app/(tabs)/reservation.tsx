@@ -116,8 +116,13 @@ export default function ReservationScreen() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatCurrency = (amount?: number | null) => {
+    const value = typeof amount === 'number' && isFinite(amount) ? amount : Number(amount ?? 0) || 0;
+    try {
+      return `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    } catch {
+      return '₱0.00';
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -201,7 +206,7 @@ export default function ReservationScreen() {
               <Text style={styles.productDetail}>Material: {item.product.material}</Text>
             )}
             <Text style={styles.quantityText}>Qty: {item.quantity}</Text>
-            <Text style={styles.priceText}>{formatCurrency(item.total_amount)}</Text>
+            <Text style={styles.priceText}>{formatCurrency(item.total_amount ?? item.price)}</Text>
           </View>
         </View>
 
@@ -310,7 +315,7 @@ export default function ReservationScreen() {
         <View style={styles.infoBanner}>
           <Ionicons name="information-circle" size={20} color="#3b82f6" />
           <Text style={styles.infoBannerText}>
-            Reservations are pending admin approval. You'll be notified once approved.
+            Reservations are pending admin approval. You&apos;ll be notified once approved.
           </Text>
         </View>
       )}

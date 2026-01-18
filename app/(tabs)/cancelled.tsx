@@ -98,8 +98,13 @@ export default function CancelledOrdersScreen() {
     loadCancelledOrders();
   };
 
-  const formatCurrency = (amount: number) => {
-    return amount.toLocaleString('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 });
+  const formatCurrency = (amount?: number | null) => {
+    const value = typeof amount === 'number' && isFinite(amount) ? amount : Number(amount ?? 0) || 0;
+    try {
+      return value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 });
+    } catch {
+      return '₱0';
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -149,7 +154,7 @@ export default function CancelledOrdersScreen() {
           <View style={styles.emptyContainer}>
             <Entypo name="circle-with-cross" size={80} color="#ccc" />
             <Text style={styles.emptyTitle}>No Cancelled Orders</Text>
-            <Text style={styles.emptyText}>You don't have any cancelled orders.</Text>
+            <Text style={styles.emptyText}>You don&apos;t have any cancelled orders.</Text>
             <TouchableOpacity style={styles.shopButton} onPress={() => router.push('../shop')}>
               <Text style={styles.shopButtonText}>Continue Shopping</Text>
             </TouchableOpacity>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   SafeAreaView,
   KeyboardAvoidingView,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -37,6 +38,8 @@ type CartItem = {
 export default function PaymentScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const appState = useRef(AppState.currentState);
+  const [awaitingReturn, setAwaitingReturn] = useState(false);
   
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,6 +61,24 @@ export default function PaymentScreen() {
     loadCartItems();
     loadUserAddress();
   }, []); // Run only once on mount
+
+  // When the user returns to the app after opening the PayMongo checkout in the browser,
+  // automatically take them back to the Products page (Shop tab).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      appState.current = next;
+      if (next === 'active' && awaitingReturn) {
+        setAwaitingReturn(false);
+        try {
+          router.replace('/(tabs)/shop');
+        } catch {
+          // Fallback route if needed
+          router.replace('/shop' as any);
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [awaitingReturn]);
 
   const loadUserAddress = async () => {
     try {
@@ -399,7 +420,8 @@ export default function PaymentScreen() {
                 description: description,
               }
             ],
-            payment_method_types: ['gcash', 'paymaya', 'card', 'grab_pay'],
+            // Only allow GCash and PayMaya as requested
+            payment_method_types: ['gcash', 'paymaya'],
             description: `Order for ${authData.user.email || 'customer'}`,
             reference_number: `GE-${Date.now()}`,
             metadata: {
@@ -438,21 +460,9 @@ export default function PaymentScreen() {
         const canOpen = await Linking.canOpenURL(checkoutUrl);
         
         if (canOpen) {
+          setAwaitingReturn(true);
           await Linking.openURL(checkoutUrl);
-          
-          Alert.alert(
-            'Payment Page Opened',
-            'Complete your payment in the browser. You can return to the app after payment is complete.',
-            [
-              {
-                text: 'OK',
-                onPress: () => {
-                  // Navigate back or to orders page
-                  router.back();
-                }
-              }
-            ]
-          );
+          // No immediate navigation; we move the user when they return to the app
         } else {
           Alert.alert('Error', 'Unable to open payment page. Please try again.');
         }

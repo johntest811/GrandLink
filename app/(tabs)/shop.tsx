@@ -3,6 +3,8 @@ import { View, Text, Image, TextInput, TouchableOpacity, ScrollView, StyleSheet,
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
+import TopBar from '@/components/TopBar';
+import BottomNavBar from "@/components/BottomNav";
 
 const filterOptions = [
   'Doors',
@@ -21,7 +23,8 @@ export default function ShopScreen() {
   const [data, setData] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filterVisible, setFilterVisible] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedTab, setSelectedTab] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   useEffect(() => {
@@ -35,10 +38,19 @@ export default function ShopScreen() {
     fetchData();
   }, []);
 
-  // Filter products by selectedCategory and search query
+  // Filter products by selectedTab (horizontal tabs) or selectedCategories (modal) and search query
   const filteredData = data.filter(product => {
-    // Category filter
-    const categoryMatch = selectedCategory === 'All' || product.category === selectedCategory;
+    // Category filter - check both tab and modal selections
+    let categoryMatch = true;
+    
+    // If using horizontal tabs
+    if (selectedTab !== 'All') {
+      categoryMatch = product.category === selectedTab;
+    }
+    // If using modal filter (overrides tab if any selected)
+    else if (selectedCategories.length > 0) {
+      categoryMatch = selectedCategories.includes(product.category);
+    }
     
     // Search filter - search in product name (case insensitive)
     const searchMatch = searchQuery.trim() === '' || 
@@ -60,32 +72,29 @@ export default function ShopScreen() {
     fetchProducts();
   }, [filter]);
 
+  const toggleCategory = (category: string) => {
+    setSelectedCategories(prev => {
+      if (prev.includes(category)) {
+        // Remove category if already selected
+        return prev.filter(c => c !== category);
+      } else {
+        // Add category if not selected
+        return [...prev, category];
+      }
+    });
+  };
+
+  const clearAllFilters = () => {
+    setSelectedCategories([]);
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <ScrollView style={styles.container}>
         {/* Logo and Title */}
-        <View style={styles.logoRow}>
-          <Image
-            source={require('@/assets/images/GLLogo.png')}
-            style={styles.logoImage}
-            resizeMode="contain"
-          />
-          <View>
-            <Text style={styles.logoTitle}>GRAND EAST</Text>
-            <Text style={styles.logoSubtitle}>GLASS AND ALUMINUM</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.profileButton}
-            onPress={() => router.push('../profile')}
-          >
-            <Image
-              source={require('@/assets/images/profileicon.png')} 
-              style={styles.profileIcon}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.blueBar} />
+        
+    <TopBar />
+
         <View style={styles.searchRow}>
           <View style={styles.searchBox}>
             <Ionicons name="search" size={20} color="#888" />
@@ -111,12 +120,12 @@ export default function ShopScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.tabsRow}
         >
-          <TouchableOpacity onPress={() => setSelectedCategory('All')}>
-            <Text style={[styles.tabText, selectedCategory === 'All' && styles.tabActive]}>All</Text>
+          <TouchableOpacity onPress={() => setSelectedTab('All')}>
+            <Text style={[styles.tabText, selectedTab === 'All' && styles.tabActive]}>All</Text>
           </TouchableOpacity>
           {filterOptions.map(option => (
-            <TouchableOpacity key={option} onPress={() => setSelectedCategory(option)}>
-              <Text style={[styles.tabText, selectedCategory === option && styles.tabActive]}>{option}</Text>
+            <TouchableOpacity key={option} onPress={() => setSelectedTab(option)}>
+              <Text style={[styles.tabText, selectedTab === option && styles.tabActive]}>{option}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -161,20 +170,27 @@ export default function ShopScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.filterModal}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-              <Ionicons name="filter" size={24} color="#2563eb" />
-              <Text style={{ fontWeight: 'bold', fontSize: 18, marginLeft: 8, color: '#2563eb' }}>Filter</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="filter" size={24} color="#2563eb" />
+                <Text style={{ fontWeight: 'bold', fontSize: 18, marginLeft: 8, color: '#2563eb' }}>Filter</Text>
+              </View>
+              <TouchableOpacity onPress={clearAllFilters}>
+                <Text style={{ color: '#a81d1d', fontSize: 14, fontWeight: '600' }}>Clear All</Text>
+              </TouchableOpacity>
             </View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 }}>
               {filterOptions.map(option => (
                 <TouchableOpacity
                   key={option}
                   style={styles.radioRow}
-                  onPress={() => setSelectedCategory(option)}
+                  onPress={() => toggleCategory(option)}
                   activeOpacity={0.7}
                 >
-                  <View style={styles.radioOuter}>
-                    {selectedCategory === option && <View style={styles.radioInner} />}
+                  <View style={styles.checkboxOuter}>
+                    {selectedCategories.includes(option) && (
+                      <Ionicons name="checkmark" size={16} color="#2563eb" />
+                    )}
                   </View>
                   <Text style={styles.radioLabel}>{option}</Text>
                 </TouchableOpacity>
@@ -193,29 +209,7 @@ export default function ShopScreen() {
       </Modal>
 
       {/* Bottom Bar */}
-      <View style={styles.bottomNavBar}>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('../homepage')}>
-          <Image source={require('@/assets/images/home.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/inquire.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Inquire</Text>
-        </TouchableOpacity>
-        <View style={styles.fabWrapper}>
-          <TouchableOpacity style={styles.fabButton} onPress={() => router.push('../shop')}>
-            <Image source={require('@/assets/images/catalogbutton.png')} style={styles.fabIcon} resizeMode="contain" />
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/service.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Service</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => {/* Add your action */}}>
-          <Image source={require('@/assets/images/settings.png')} style={styles.navIcon} resizeMode="contain" />
-          <Text style={styles.navLabel}>Settings</Text>
-        </TouchableOpacity>
-      </View>
+      <BottomNavBar />
     </View>
   );
 }
@@ -391,6 +385,17 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     backgroundColor: '#2563eb',
+  },
+  checkboxOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#222',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    backgroundColor: '#fff',
   },
   radioLabel: {
     fontSize: 15,
