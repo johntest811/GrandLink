@@ -45,6 +45,9 @@ export default {
         }
       ]
     ],
+    autolinking: {
+      exclude: ["expo-camera"]
+    },
     experiments: {
       typedRoutes: true
     },

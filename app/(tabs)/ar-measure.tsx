@@ -2,18 +2,47 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import Svg, { Line, Circle } from 'react-native-svg';
 import BottomNavBar from "@BottomNav/../components/BottomNav";
+
+// Camera components temporarily disabled to prevent native module conflicts
+// let CameraView: any = null;
+// let useCameraPermissions: any = null;
+
+// try {
+//   const camera = require('expo-camera/build/CameraView');
+//   const { useCameraPermissions: usePerms } = require('expo-camera');
+//   CameraView = camera.default || camera;
+//   useCameraPermissions = usePerms;
+// } catch (error) {
+//   console.warn('Camera module not available:', error);
+// }
+
+// Disabled camera for now
+const CameraView: any = null;
+const useCameraPermissions: any = null;
 
 export default function ARMeasureScreen() {
   const router = useRouter();
   const [showCamera, setShowCamera] = useState(false);
   const [measurements, setMeasurements] = useState<Array<number>>([]);
   const [measurementPoints, setMeasurementPoints] = useState<Array<{ x: number; y: number }>>([]);
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission] = useCameraPermissions ? useCameraPermissions() : [null, () => Promise.resolve({ status: 'denied' })];
 
   const startARMeasurement = async () => {
+    // AR Camera temporarily disabled
+    Alert.alert(
+      'Feature Temporarily Unavailable', 
+      'AR Measurement camera is currently disabled. Please use manual measurements or contact support.',
+      [{ text: 'OK' }]
+    );
+    return;
+    
+    /* Commented out camera code
+    if (!CameraView) {
+      Alert.alert('Camera Unavailable', 'Camera feature is not available. Please check app permissions.');
+      return;
+    }
     if (!permission?.granted) {
       const { status } = await requestPermission();
       if (status !== 'granted') {
@@ -24,6 +53,7 @@ export default function ARMeasureScreen() {
     setShowCamera(true);
     setMeasurementPoints([]);
     setMeasurements([]);
+    */
   };
 
   const handleScreenTap = (event: any) => {

@@ -3,7 +3,17 @@ import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityInd
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
-import { GLView , ExpoWebGLRenderingContext } from 'expo-gl';
+
+// Lazy load expo-gl to prevent startup errors
+let GLView: any = null;
+let ExpoWebGLRenderingContext: any = null;
+try {
+  const expoGL = require('expo-gl');
+  GLView = expoGL.GLView;
+  ExpoWebGLRenderingContext = expoGL.ExpoWebGLRenderingContext;
+} catch (error) {
+  console.warn('expo-gl not available:', error);
+}
 
 // @ts-ignore
 import * as THREE from 'three';
@@ -11,14 +21,6 @@ import * as THREE from 'three';
 // @ts-ignore
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import BottomNavBar from "@BottomNav/../components/BottomNav";
-
-// Skybox images for weather backgrounds
-const SKYBOX_IMAGES = {
-  sunny: require('../../assets/hdris/sunnyy.jpg'),
-  rainy: require('../../assets/hdris/rainyy.jpg'),
-  foggy: require('../../assets/hdris/foggyy.jpg'),
-  night: require('../../assets/hdris/nightt.jpg'),
-};
 
 const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -47,10 +49,15 @@ export default function ProductViewScreen() {
   const rainRef = useRef<THREE.LineSegments | null>(null);
   const rainVelocities = useRef<Float32Array | null>(null);
   
+  // Persistent lights for instant weather switching (reused, not recreated)
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
+  const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
+  const pointLight1Ref = useRef<THREE.PointLight | null>(null);
+  
   // Create realistic rain streaks
   const createRain = (scene: THREE.Scene) => {
     if (rainRef.current) return;
-    const count = 400; // Number of rain streaks
+    const count = 200; // Number of rain streaks (reduced for mobile performance)
     const positions = new Float32Array(count * 6); // 2 points per line = 6 values
     const velocities = new Float32Array(count);
     
@@ -264,10 +271,10 @@ export default function ProductViewScreen() {
           // Preload all models for quick switching
           normalized.fbx_urls.forEach((u: string) => preloadModel(u, normalized));
         } else {
-          console.warn(`⚠️ No valid FBX URLs found for product: ${normalized.name}`);
+          console.warn(`No valid FBX URLs found for product: ${normalized.name}`);
         }
       } catch (error) {
-        console.error('❌ Error fetching product:', error);
+        console.error('Error fetching product:', error);
         setLoading(false);
       }
     };
@@ -307,7 +314,7 @@ export default function ProductViewScreen() {
         loader.load(
           fullUrl,
           (fbxModel: any) => {
-            console.log(`✅ FBX model loaded successfully for product ${productId}`);
+            console.log(`FBX model loaded successfully for product ${productId}`);
             console.log('Model info:', fbxModel);
             
             // Process the model for mobile display
@@ -332,7 +339,7 @@ export default function ProductViewScreen() {
             if (progress.total > 0) {
               const percentage = (progress.loaded / progress.total) * 100;
               setLoadingProgress(Math.round(percentage));
-              console.log(`📊 Loading progress: ${percentage.toFixed(1)}%`);
+              console.log(`Loading progress: ${percentage.toFixed(1)}%`);
             }
           },
           (error: any) => {
@@ -450,7 +457,7 @@ export default function ProductViewScreen() {
     if (modelCache.current.has(modelUrl)) return;
     
     try {
-      console.log(`🚀 Attempting to load actual FBX from admin upload`);
+      console.log(`Attempting to load actual FBX from admin upload`);
       // Try to load the actual FBX model from Supabase storage
       const model3D = await loadSupabaseFBXModel(modelUrl, productData?.id || 'unknown');
       processModelMaterials(model3D);
@@ -596,72 +603,49 @@ export default function ProductViewScreen() {
     });
   };
 
-  // Weather setup function
-  const setupWeatherLighting = async (scene: THREE.Scene, weather: string, gl?: any) => {
-    // Remove existing lights
-    const existingLights = scene.children.filter(child => 
-      child instanceof THREE.Light || 
-      child.type === 'AmbientLight' || 
-      child.type === 'DirectionalLight' ||
-      child.type === 'PointLight'
-    );
-    existingLights.forEach(light => scene.remove(light));
+  // Initialize persistent lights once
+  const initializeLights = (scene: THREE.Scene) => {
+    if (!ambientLightRef.current) {
+      ambientLightRef.current = new THREE.AmbientLight(0xffffff, 1.0);
+      scene.add(ambientLightRef.current);
+    }
+    if (!directionalLightRef.current) {
+      directionalLightRef.current = new THREE.DirectionalLight(0xffffff, 1.0);
+      scene.add(directionalLightRef.current);
+    }
+    if (!pointLight1Ref.current) {
+      pointLight1Ref.current = new THREE.PointLight(0xffffff, 0, 0);
+      scene.add(pointLight1Ref.current);
+    }
+  };
+  
+  // Weather setup function - REUSES lights for instant switching
+  const setupWeatherLighting = (scene: THREE.Scene, weather: string, gl?: any) => {
+    console.log(`⚡ Setting up weather: ${weather}`);
+    
+    // Initialize lights if first time
+    initializeLights(scene);
 
     // Remove existing fog
     scene.fog = null;
 
-    // Load texture from React Native asset and create THREE texture
-    const setBackground = async (weather: string, fallbackColor: number, gl: any) => {
-      try {
-        const imageAsset = (SKYBOX_IMAGES as any)[weather];
-        if (!imageAsset) {
-          scene.background = new THREE.Color(fallbackColor);
-          console.log(`No image for ${weather}, using color`);
-          return;
-        }
-
-        // Get image dimensions and create texture from asset
-        const asset = RNImage.resolveAssetSource(imageAsset);
-        if (!asset || !asset.uri) {
-          scene.background = new THREE.Color(fallbackColor);
-          console.log(`Could not resolve asset for ${weather}`);
-          return;
-        }
-
-        // Create texture using GLView.createTextureAsync
-        const texture = await gl.createTextureAsync({
-          source: asset.uri,
-        });
-        
-        // Convert to THREE.Texture
-        const threeTexture = new THREE.Texture();
-        threeTexture.image = texture;
-        threeTexture.needsUpdate = true;
-        threeTexture.mapping = THREE.EquirectangularReflectionMapping;
-        
-        scene.background = threeTexture;
-        scene.environment = threeTexture;
-        console.log(`Loaded texture background for ${weather}`);
-      } catch (error) {
-        console.warn(`Failed to load texture for ${weather}:`, error);
-        scene.background = new THREE.Color(fallbackColor);
-        scene.environment = null;
-      }
+    // Simplified background setter - just use colors instead of textures
+    const setBackground = (fallbackColor: number) => {
+      scene.background = new THREE.Color(fallbackColor);
+      scene.environment = null;
     };
 
     switch (weather) {
       case 'sunny':
         // Bright sunny lighting with warm yellow tones
-        const sunAmbient = new THREE.AmbientLight(0xfffef0, 0.9);
-        const sunHemisphere = new THREE.HemisphereLight(0xffffcc, 0xfff4d6, 0.7);
-        const sunDirectional = new THREE.DirectionalLight(0xffffe0, 1.2);
-        sunDirectional.position.set(5, 10, 5);
-        scene.add(sunAmbient);
-        scene.add(sunHemisphere);
-        scene.add(sunDirectional);
+        ambientLightRef.current!.color.setHex(0xfffef0);
+        ambientLightRef.current!.intensity = 0.9;
+        directionalLightRef.current!.color.setHex(0xffffe0);
+        directionalLightRef.current!.intensity = 1.2;
+        directionalLightRef.current!.position.set(5, 10, 5);
+        pointLight1Ref.current!.intensity = 0; // Hide point light
         
-        if (gl) await setBackground('sunny', 0x87CEEB, gl);
-        else scene.background = new THREE.Color(0x87CEEB);
+        setBackground(0x87CEEB);
         // Add subtle fog for white-to-yellow gradient effect
         scene.fog = new THREE.Fog(0xfffacd, 8, 20);
         removeRain(scene);
@@ -669,14 +653,14 @@ export default function ProductViewScreen() {
         
       case 'rainy':
         // Dark cloudy lighting with blue tint
-        const rainAmbient = new THREE.AmbientLight(0x404040, 0.6);
-        const rainDirectional = new THREE.DirectionalLight(0x6699ff, 0.8);
-        rainDirectional.position.set(-3, 8, 3);
-        scene.add(rainAmbient);
-        scene.add(rainDirectional);
+        ambientLightRef.current!.color.setHex(0x404040);
+        ambientLightRef.current!.intensity = 0.6;
+        directionalLightRef.current!.color.setHex(0x6699ff);
+        directionalLightRef.current!.intensity = 0.8;
+        directionalLightRef.current!.position.set(-3, 8, 3);
+        pointLight1Ref.current!.intensity = 0; // Hide point light
         
-        if (gl) await setBackground('rainy', 0x778899, gl);
-        else scene.background = new THREE.Color(0x778899);
+        setBackground(0x778899);
         
         // Add fog for rain effect
         scene.fog = new THREE.Fog(0x2F4F4F, 1, 15);
@@ -685,16 +669,14 @@ export default function ProductViewScreen() {
         
       case 'foggy':
         // Soft diffused lighting
-        const fogAmbient = new THREE.AmbientLight(0xffffff, 0.7);
-        const fogHemisphere = new THREE.HemisphereLight(0xffffff, 0x999999, 0.4);
-        const fogDirectional = new THREE.DirectionalLight(0xffffff, 0.3);
-        fogDirectional.position.set(0, 5, 0);
-        scene.add(fogAmbient);
-        scene.add(fogHemisphere);
-        scene.add(fogDirectional);
+        ambientLightRef.current!.color.setHex(0xffffff);
+        ambientLightRef.current!.intensity = 0.8;
+        directionalLightRef.current!.color.setHex(0xffffff);
+        directionalLightRef.current!.intensity = 0.4;
+        directionalLightRef.current!.position.set(0, 5, 0);
+        pointLight1Ref.current!.intensity = 0; // Hide point light
         
-        if (gl) await setBackground('foggy', 0xd3d3d3, gl);
-        else scene.background = new THREE.Color(0xd3d3d3);
+        setBackground(0xd3d3d3);
         
         // Heavy fog
         scene.fog = new THREE.Fog(0xE6E6FA, 2, 8);
@@ -702,71 +684,50 @@ export default function ProductViewScreen() {
         break;
         
       case 'night':
-        // Night scene with visible street lamp-style lighting
-        const nightAmbient = new THREE.AmbientLight(0x3a3a5a, 0.6);
-        const moonLight = new THREE.DirectionalLight(0x9999ff, 1.0);
-        moonLight.position.set(-5, 10, -5);
+        // Night scene optimized for mobile
+        ambientLightRef.current!.color.setHex(0x3a3a5a);
+        ambientLightRef.current!.intensity = 0.7;
+        directionalLightRef.current!.color.setHex(0x9999ff);
+        directionalLightRef.current!.intensity = 1.2;
+        directionalLightRef.current!.position.set(-5, 10, -5);
+        // Enable point light for street lamp effect
+        pointLight1Ref.current!.color.setHex(0xffcc66);
+        pointLight1Ref.current!.intensity = 1.5;
+        pointLight1Ref.current!.distance = 20;
+        pointLight1Ref.current!.position.set(0, 5, 5);
         
-        // Main street lamps
-        const streetLamp1 = new THREE.PointLight(0xffcc66, 1.2, 15);
-        streetLamp1.position.set(-3, 4, 3);
-        
-        const streetLamp2 = new THREE.PointLight(0xffcc66, 1.2, 15);
-        streetLamp2.position.set(3, 4, 3);
-        
-        // Additional fill lights
-        const frontLight = new THREE.PointLight(0xffffee, 1.0, 14);
-        frontLight.position.set(0, 2, 6);
-        
-        const backLight = new THREE.PointLight(0xaabbff, 0.8, 12);
-        backLight.position.set(0, 3, -6);
-        
-        const leftLight = new THREE.PointLight(0xffaa44, 0.9, 12);
-        leftLight.position.set(-5, 2, 0);
-        
-        const rightLight = new THREE.PointLight(0xffaa44, 0.9, 12);
-        rightLight.position.set(5, 2, 0);
-        
-        const topLight = new THREE.PointLight(0xccddff, 0.7, 10);
-        topLight.position.set(0, 7, 0);
-        
-        scene.add(nightAmbient);
-        scene.add(moonLight);
-        scene.add(streetLamp1);
-        scene.add(streetLamp2);
-        scene.add(frontLight);
-        scene.add(backLight);
-        scene.add(leftLight);
-        scene.add(rightLight);
-        scene.add(topLight);
-        
-        if (gl) await setBackground('night', 0x0a0a1a, gl);
-        else scene.background = new THREE.Color(0x0a0a1a);
+        setBackground(0x0a0a1a);
         removeRain(scene);
         break;
         
       default:
         // Default sunny
-        const defaultAmbient = new THREE.AmbientLight(0xffffff, 1.0);
-        const defaultHemisphere = new THREE.HemisphereLight(0xffffff, 0xaaaaaa, 0.5);
-        const defaultSun = new THREE.DirectionalLight(0xffffeb, 1.2);
-        defaultSun.position.set(5, 10, 5);
-        scene.add(defaultAmbient);
-        scene.add(defaultHemisphere);
-        scene.add(defaultSun);
+        ambientLightRef.current!.color.setHex(0xffffff);
+        ambientLightRef.current!.intensity = 1.0;
+        directionalLightRef.current!.color.setHex(0xffffeb);
+        directionalLightRef.current!.intensity = 1.2;
+        directionalLightRef.current!.position.set(5, 10, 5);
+        pointLight1Ref.current!.intensity = 0; // Hide point light
         
-        if (gl) await setBackground('sunny', 0x87CEEB, gl);
-        else scene.background = new THREE.Color(0x87CEEB);
+        setBackground(0x87CEEB);
         removeRain(scene);
     }
   };
 
   // Re-apply weather lighting whenever mode changes (keeps viewer responsive)
   useEffect(() => {
-    if (sceneRef.current) {
-      setupWeatherLighting(sceneRef.current, weatherMode).catch(e => {
-        console.warn('Weather lighting update error:', e);
-      });
+    if (sceneRef.current && rendererRef.current && cameraRef.current) {
+      console.log(`🌤️ Applying weather mode: ${weatherMode}`);
+      setupWeatherLighting(sceneRef.current, weatherMode);
+      // Force immediate scene and render update
+      sceneRef.current.updateMatrixWorld(true);
+      if (rendererRef.current && cameraRef.current) {
+        try {
+          rendererRef.current.render(sceneRef.current, cameraRef.current);
+        } catch (e) {
+          console.warn('Manual render failed:', e);
+        }
+      }
     }
   }, [weatherMode]);
 
@@ -844,7 +805,7 @@ export default function ProductViewScreen() {
         <GLView
           key={`viewer-${selectedModelIndex}`}
           style={{ width: viewerWidth, height: viewerHeight, borderRadius: 16 }}
-          onContextCreate={async (gl) => {
+          onContextCreate={async (gl: any) => {
             setFbxLoading(true);
             setModelError(false);
             setLoadingProgress(0);
@@ -1028,7 +989,7 @@ export default function ProductViewScreen() {
     camera: THREE.PerspectiveCamera, 
     renderer: THREE.WebGLRenderer, 
     object: THREE.Object3D, 
-    gl: ExpoWebGLRenderingContext
+    gl: any
   ) => {
     let animationId: number;
     
