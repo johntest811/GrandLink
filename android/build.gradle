@@ -1,23 +1,38 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
+  ext {
+    agp_version = '8.7.2'
+  }
   repositories {
     google()
     mavenCentral()
   }
   dependencies {
-    classpath('com.android.tools.build:gradle')
+    classpath("com.android.tools.build:gradle:$agp_version")
     classpath('com.facebook.react:react-native-gradle-plugin')
     classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
   }
 }
 
+// Force AGP version
+configurations.all {
+  resolutionStrategy {
+    force 'com.android.tools.build:gradle:8.7.2'
+    eachDependency { details ->
+      if (details.requested.group == 'com.android.tools.build' && details.requested.name == 'gradle') {
+        details.useVersion '8.7.2'
+      }
+    }
+  }
+}
+
 def reactNativeAndroidDir = new File(
-  providers.exec {
-    workingDir(rootDir)
-    commandLine("node", "--print", "require.resolve('react-native/package.json')")
-  }.standardOutput.asText.get().trim(),
-  "../android"
+        providers.exec {
+          workingDir(rootDir)
+          commandLine("node", "--print", "require.resolve('react-native/package.json')")
+        }.standardOutput.asText.get().trim(),
+        "../android"
 )
 
 allprojects {
