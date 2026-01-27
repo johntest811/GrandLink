@@ -44,11 +44,15 @@ export default {
           cameraPermissionText: "$(PRODUCT_NAME) needs access to your Camera for AR measurements.",
           enableMicrophonePermission: false
         }
+      ],
+      [
+        "expo-camera",
+        {
+          cameraPermission: "Allow $(PRODUCT_NAME) to access your camera for AR measurements."
+        }
       ]
     ],
-    autolinking: {
-      exclude: ["expo-camera"]
-    },
+    // Remove autolinking exclude for expo-camera if present
     experiments: {
       typedRoutes: true
     },
