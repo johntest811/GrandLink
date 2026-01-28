@@ -3,15 +3,69 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../../../Clients/Supabase/SupabaseClients";
 import { logActivity, autoLogActivity } from "@/app/lib/activity";
+import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
+
 
 type HomeContent = {
   carousel?: Array<{ image?: string; youtube_url?: string; title?: string; buttonText?: string; buttonLink?: string }>;
   explore?: Array<{ image?: string; title?: string; buttonText?: string; buttonLink?: string }>;
+<<<<<<< HEAD
   featured_projects?: Array<{ image?: string; title?: string; description?: string; youtube_url?: string }>;
   services?: { images?: string[]; title?: string; description?: string; buttonText?: string; buttonLink?: string };
   about?: { logo?: string; title?: string; description?: string; buttonText?: string; buttonLink?: string };
+=======
+  featured_projects?: Array<{ image?: string; title?: string; description?: string }>;
+  services?: {
+    images?: string[];
+    title?: string;
+    description?: string;
+    buttonText?: string;
+    buttonLink?: string;
+  };
+  about?: {
+    logo?: string;
+    title?: string;
+    description?: string;
+    buttonText?: string;
+    buttonLink?: string;
+  };
+>>>>>>> 25a1fd3 (newest fernandez)
   [k: string]: any;
 };
+
+
+const SectionCard = ({
+  title,
+  children,
+  actions,
+  defaultOpen = true,
+}: {
+  title: string;
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+  defaultOpen?: boolean;
+}) => {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-8">
+      <div className="flex justify-between items-center px-6 py-4 border-b">
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        <div className="flex items-center gap-3">
+          {actions}
+          <button
+            onClick={() => setOpen(!open)}
+            className="text-sm text-gray-500 hover:text-black"
+          >
+            {open ? "Collapse" : "Expand"}
+          </button>
+        </div>
+      </div>
+      {open && <div className="p-6">{children}</div>}
+    </div>
+  );
+};
+
 
 // bucket name - change to your bucket
 const BUCKET_NAME = "uploads";
@@ -23,12 +77,10 @@ export default function HomeEditor() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // image picker state & loaded images
   const [images, setImages] = useState<Array<{ name: string; url: string }>>([]);
   const [picker, setPicker] = useState<{ open: boolean; key: string; index?: number | null } | null>(null);
-
-  // upload state
   const [uploading, setUploading] = useState(false);
+
 
   useEffect(() => {
     // Load current admin and log page access
@@ -657,14 +709,15 @@ export default function HomeEditor() {
   const formControlSmall = "border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-red-200";
 
   return (
-    <div className="p-6 max-w-5xl mx-auto text-black">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold mb-4 text-black">Home Page Editor</h1>
-        <div className="text-sm text-gray-600">
-          Editing as: {currentAdmin?.username || 'Unknown Admin'}
-        </div>
-      </div>
+    <div className="p-6 max-w-6xl mx-auto text-black">
+    <div className="flex justify-between items-center mb-8">
+      <h1 className="text-3xl font-bold">Home Page Editor</h1>
+      <span className="text-sm text-gray-600">
+        Editing as: {currentAdmin?.username || "Admin"}
+      </span>
+    </div>
 
+<<<<<<< HEAD
       {/* Carousel */}
       <section className="mb-6 border p-4 rounded">
         <div className="flex justify-between items-center">
@@ -708,69 +761,166 @@ export default function HomeEditor() {
               placeholder="Title" 
               value={s.title || ""} 
               onChange={(e) => handleCarouselChange(i, 'title', e.target.value)} 
+=======
+    <SectionCard
+  title="Carousel"
+  actions={
+    <button
+      onClick={() => addArrayItem("carousel", {})}
+      className="px-4 py-2 bg-black text-white rounded-lg text-sm hover:bg-gray-800"
+    >
+      + Add Slide
+    </button>
+  }
+>
+  <div className="space-y-6">
+    {(content.carousel || []).map((s, i) => (
+      <div
+        key={i}
+        className="bg-gray-50 border rounded-xl p-4 shadow-sm space-y-4"
+      >
+        {/* Image Preview */}
+        {s.image && (
+          <div className="w-full h-40 rounded-lg overflow-hidden bg-gray-200">
+            <img
+              src={s.image}
+              alt="Preview"
+              className="w-full h-full object-cover"
+>>>>>>> 25a1fd3 (newest fernandez)
             />
-            <div className="flex gap-2">
-              <input 
-                className={`flex-1 ${formControlSmall}`} 
-                placeholder="Button Text" 
-                value={s.buttonText || ""} 
-                onChange={(e) => handleCarouselChange(i, 'buttonText', e.target.value)} 
-              />
-              <input 
-                className={`flex-1 ${formControlSmall}`} 
-                placeholder="Button Link" 
-                value={s.buttonLink || ""} 
-                onChange={(e) => handleCarouselChange(i, 'buttonLink', e.target.value)} 
-              />
-              <button className="text-black" onClick={() => removeArrayItem("carousel", i)}>Remove</button>
-            </div>
           </div>
-        ))}
-      </section>
+        )}
+
+        {/* Image Picker */}
+        <div className="flex gap-2">
+          <input
+            className={`flex-1 ${formControlSmall}`}
+            placeholder="Image URL"
+            value={s.image || ""}
+            onChange={(e) => handleCarouselChange(i, "image", e.target.value)}
+          />
+          <button
+            onClick={() => openImagePicker("carousel", i)}
+            className="px-3 py-2 bg-gray-200 rounded-lg text-sm"
+          >
+            Choose
+          </button>
+        </div>
+
+        <input
+          className={formControl}
+          placeholder="Slide Title"
+          value={s.title || ""}
+          onChange={(e) => handleCarouselChange(i, "title", e.target.value)}
+        />
+
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            className={formControlSmall}
+            placeholder="Button Text"
+            value={s.buttonText || ""}
+            onChange={(e) =>
+              handleCarouselChange(i, "buttonText", e.target.value)
+            }
+          />
+          <input
+            className={formControlSmall}
+            placeholder="Button Link"
+            value={s.buttonLink || ""}
+            onChange={(e) =>
+              handleCarouselChange(i, "buttonLink", e.target.value)
+            }
+          />
+        </div>
+
+        <button
+          onClick={() => removeArrayItem("carousel", i)}
+          className="text-sm text-red-600 hover:underline"
+        >
+          Remove Slide
+        </button>
+      </div>
+    ))}
+  </div>
+</SectionCard>
+
 
       {/* Explore */}
-      <section className="mb-6 border p-4 rounded">
-        <div className="flex justify-between items-center">
-          <h2 className="font-semibold text-black">Explore Our Products</h2>
-          <button onClick={() => addArrayItem("explore", {})} className="text-sm px-2 py-1 bg-gray-100 rounded text-black">Add Item</button>
-        </div>
-        {(content.explore || []).map((s, i) => (
-          <div key={i} className="mt-3 border-t pt-3">
-            <div className="flex gap-2 mb-2">
-              <input 
-                className={`flex-1 ${formControlSmall}`} 
-                placeholder="Image URL" 
-                value={s.image || ""} 
-                onChange={(e) => handleExploreChange(i, 'image', e.target.value)} 
-              />
-              <button className="px-2 bg-gray-100 text-black" onClick={() => openImagePicker("explore", i)}>Choose</button>
-            </div>
-            <input 
-              className={`${formControl} mb-2`} 
-              placeholder="Title" 
-              value={s.title || ""} 
-              onChange={(e) => handleExploreChange(i, 'title', e.target.value)} 
-            />
-            <div className="flex gap-2">
-              <input 
-                className={`flex-1 ${formControlSmall}`} 
-                placeholder="Button Text" 
-                value={s.buttonText || ""} 
-                onChange={(e) => handleExploreChange(i, 'buttonText', e.target.value)} 
-              />
-              <input 
-                className={`flex-1 ${formControlSmall}`} 
-                placeholder="Button Link" 
-                value={s.buttonLink || ""} 
-                onChange={(e) => handleExploreChange(i, 'buttonLink', e.target.value)} 
-              />
-              <button className="text-black" onClick={() => removeArrayItem("explore", i)}>Remove</button>
-            </div>
+      <SectionCard
+  title="Explore Our Products"
+  actions={
+    <button
+      onClick={() => addArrayItem("explore", {})}
+      className="px-4 py-2 bg-black text-white rounded-lg text-sm"
+    >
+      + Add Item
+    </button>
+  }
+>
+  <div className="space-y-6">
+    {(content.explore || []).map((s, i) => (
+      <div key={i} className="bg-gray-50 p-4 rounded-xl border space-y-4">
+        {s.image && (
+          <div className="h-32 rounded-lg overflow-hidden bg-gray-200">
+            <img src={s.image} className="w-full h-full object-cover" />
           </div>
-        ))}
-      </section>
+        )}
+
+        <div className="flex gap-2">
+          <input
+            className={`flex-1 ${formControlSmall}`}
+            placeholder="Image URL"
+            value={s.image || ""}
+            onChange={(e) => handleExploreChange(i, "image", e.target.value)}
+          />
+          <button
+            onClick={() => openImagePicker("explore", i)}
+            className="px-3 bg-gray-200 rounded"
+          >
+            Choose
+          </button>
+        </div>
+
+        <input
+          className={formControl}
+          placeholder="Title"
+          value={s.title || ""}
+          onChange={(e) => handleExploreChange(i, "title", e.target.value)}
+        />
+
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            className={formControlSmall}
+            placeholder="Button Text"
+            value={s.buttonText || ""}
+            onChange={(e) =>
+              handleExploreChange(i, "buttonText", e.target.value)
+            }
+          />
+          <input
+            className={formControlSmall}
+            placeholder="Button Link"
+            value={s.buttonLink || ""}
+            onChange={(e) =>
+              handleExploreChange(i, "buttonLink", e.target.value)
+            }
+          />
+        </div>
+
+        <button
+          onClick={() => removeArrayItem("explore", i)}
+          className="text-sm text-red-600 hover:underline"
+        >
+          Remove Item
+        </button>
+      </div>
+    ))}
+  </div>
+</SectionCard>
+
 
       {/* Featured Projects */}
+<<<<<<< HEAD
       <section className="mb-6 border p-4 rounded">
         <div className="flex justify-between items-center">
           <h2 className="font-semibold text-black">Featured Projects</h2>
@@ -806,110 +956,262 @@ export default function HomeEditor() {
               onChange={(e) => handleFeaturedProjectsChange(i, 'youtube_url', e.target.value)}
             />
             <button className="text-black" onClick={() => removeArrayItem("featured_projects", i)}>Remove</button>
+=======
+      <SectionCard
+  title="Featured Projects"
+  actions={
+    <button
+      onClick={() => addArrayItem("featured_projects", {})}
+      className="px-4 py-2 bg-black text-white rounded-lg text-sm"
+    >
+      + Add Project
+    </button>
+  }
+>
+  <div className="space-y-6">
+    {(content.featured_projects || []).map((p, i) => (
+      <div key={i} className="bg-gray-50 border rounded-xl p-4 space-y-4">
+        {p.image && (
+          <div className="h-40 rounded-lg overflow-hidden bg-gray-200">
+            <img src={p.image} className="w-full h-full object-cover" />
+>>>>>>> 25a1fd3 (newest fernandez)
           </div>
-        ))}
-      </section>
+        )}
+
+        <div className="flex gap-2">
+          <input
+            className={`flex-1 ${formControlSmall}`}
+            placeholder="Image URL"
+            value={p.image || ""}
+            onChange={(e) =>
+              handleFeaturedProjectsChange(i, "image", e.target.value)
+            }
+          />
+          <button
+            onClick={() => openImagePicker("featured_projects", i)}
+            className="px-3 bg-gray-200 rounded"
+          >
+            Choose
+          </button>
+        </div>
+
+        <input
+          className={formControl}
+          placeholder="Project Title"
+          value={p.title || ""}
+          onChange={(e) =>
+            handleFeaturedProjectsChange(i, "title", e.target.value)
+          }
+        />
+
+        <textarea
+          className={formControl}
+          placeholder="Description"
+          value={p.description || ""}
+          onChange={(e) =>
+            handleFeaturedProjectsChange(i, "description", e.target.value)
+          }
+        />
+
+        <button
+          onClick={() => removeArrayItem("featured_projects", i)}
+          className="text-sm text-red-600 hover:underline"
+        >
+          Remove Project
+        </button>
+      </div>
+    ))}
+  </div>
+</SectionCard>
+
 
       {/* Services */}
-      <section className="mb-6 border p-4 rounded">
-        <h2 className="font-semibold text-black">Service We Offer</h2>
-        <div className="mt-3">
-          <label className="block text-sm">Title</label>
-          <input 
-            className={`${formControl} mb-2`} 
-            value={content.services?.title || ""} 
-            onChange={(e) => handleServicesChange('title', e.target.value)} 
-          />
-          <label className="block text-sm">Description</label>
-          <textarea 
-            className={`${formControl} mb-2`} 
-            value={content.services?.description || ""} 
-            onChange={(e) => handleServicesChange('description', e.target.value)} 
-          />
-          <label className="block text-sm">Button Text / Link</label>
-          <div className="flex gap-2 mb-2">
-            <input 
-              className={`flex-1 ${formControlSmall}`} 
-              placeholder="Button Text" 
-              value={content.services?.buttonText || ""} 
-              onChange={(e) => handleServicesChange('buttonText', e.target.value)} 
-            />
-            <input 
-              className={`flex-1 ${formControlSmall}`} 
-              placeholder="Button Link" 
-              value={content.services?.buttonLink || ""} 
-              onChange={(e) => handleServicesChange('buttonLink', e.target.value)} 
-            />
-          </div>
+      <SectionCard title="Services We Offer">
+  <div className="space-y-6">
 
-          <div>
-            <label className="block text-sm mb-1">Carousel Images (4)</label>
-            {(content.services?.images || []).map((img, i) => (
-              <div key={i} className="flex gap-2 mb-1">
-                <input 
-                  className={`flex-1 ${formControlSmall}`} 
-                  value={img || ""} 
-                  onChange={(e) => handleServicesImageChange(i, e.target.value)} 
+    {/* Text Content */}
+    <div className="bg-gray-50 p-4 rounded-xl border space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Section Title
+        </label>
+        <input
+          className={formControl}
+          value={content.services?.title || ""}
+          onChange={(e) => handleServicesChange("title", e.target.value)}
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Description
+        </label>
+        <textarea
+          className={formControl}
+          rows={4}
+          value={content.services?.description || ""}
+          onChange={(e) => handleServicesChange("description", e.target.value)}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <input
+          className={formControlSmall}
+          placeholder="Button Text"
+          value={content.services?.buttonText || ""}
+          onChange={(e) => handleServicesChange("buttonText", e.target.value)}
+        />
+        <input
+          className={formControlSmall}
+          placeholder="Button Link"
+          value={content.services?.buttonLink || ""}
+          onChange={(e) => handleServicesChange("buttonLink", e.target.value)}
+        />
+      </div>
+    </div>
+
+    {/* Carousel Images */}
+    <div className="bg-gray-50 p-4 rounded-xl border">
+      <div className="flex justify-between items-center mb-3">
+        <h4 className="font-medium text-sm text-gray-800">
+          Carousel Images
+        </h4>
+        <span className="text-xs text-gray-500">Recommended: 4 images</span>
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-4">
+        {(content.services?.images || []).map((img, i) => (
+          <div key={i} className="border rounded-lg p-3 bg-white space-y-2">
+            {img && (
+              <div className="h-28 rounded-md overflow-hidden bg-gray-200">
+                <img
+                  src={img}
+                  alt="Service preview"
+                  className="w-full h-full object-cover"
                 />
-                <button className="px-2 bg-gray-100 text-black" onClick={() => openImagePicker("services.images", i)}>Choose</button>
-                <button className="text-black" onClick={() => { 
-                  const imgs = (content.services?.images || []).slice(); 
-                  imgs.splice(i, 1); 
-                  setContent({ ...content, services: { ...(content.services || {}), images: imgs } }); 
-                }}>Remove</button>
               </div>
-            ))}
-            <div>
-              <button onClick={() => { 
-                const imgs = [...(content.services?.images || []), ""]; 
-                setContent({ ...content, services: { ...(content.services || {}), images: imgs } }); 
-              }} className="text-sm px-2 py-1 bg-gray-100 rounded text-black">Add Image</button>
+            )}
+
+            <input
+              className={formControlSmall}
+              value={img || ""}
+              onChange={(e) => handleServicesImageChange(i, e.target.value)}
+              placeholder="Image URL"
+            />
+
+            <div className="flex justify-between text-sm">
+              <button
+                onClick={() => openImagePicker("services.images", i)}
+                className="text-blue-600 hover:underline"
+              >
+                Choose Image
+              </button>
+              <button
+                onClick={() => {
+                  const imgs = (content.services?.images || []).slice();
+                  imgs.splice(i, 1);
+                  setContent({
+                    ...content,
+                    services: { ...(content.services || {}), images: imgs },
+                  });
+                }}
+                className="text-red-600 hover:underline"
+              >
+                Remove
+              </button>
             </div>
           </div>
-        </div>
-      </section>
+        ))}
+      </div>
+
+      <button
+        onClick={() => {
+          const imgs = [...(content.services?.images || []), ""];
+          setContent({
+            ...content,
+            services: { ...(content.services || {}), images: imgs },
+          });
+        }}
+        className="mt-4 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800"
+      >
+        + Add Image
+      </button>
+    </div>
+  </div>
+</SectionCard>
+
 
       {/* About */}
-      <section className="mb-6 border p-4 rounded">
-        <h2 className="font-semibold text-black">ABOUT GRAND EAST</h2>
-        <div className="mt-3">
-          <label className="block text-sm">Logo Image URL</label>
-          <div className="flex gap-2 mb-2">
-            <input 
-              className="flex-1" 
-              value={content.about?.logo || ""} 
-              onChange={(e) => handleAboutChange('logo', e.target.value)} 
-            />
-            <button className="px-2 bg-gray-100 text-black" onClick={() => openImagePicker("about.logo")}>Choose</button>
-          </div>
-          <label className="block text-sm">Title</label>
-          <input 
-            className="w-full mb-2" 
-            value={content.about?.title || ""} 
-            onChange={(e) => handleAboutChange('title', e.target.value)} 
+     <SectionCard title="About Grand East">
+  <div className="space-y-6">
+
+    {/* Logo */}
+    <div className="bg-gray-50 p-4 rounded-xl border space-y-3">
+      <label className="block text-sm font-medium text-gray-700">
+        Logo Image
+      </label>
+
+      {content.about?.logo && (
+        <div className="h-24 w-48 bg-white border rounded-lg flex items-center justify-center overflow-hidden">
+          <img
+            src={content.about.logo}
+            alt="Logo Preview"
+            className="max-h-full object-contain"
           />
-          <label className="block text-sm">Description</label>
-          <textarea 
-            className="w-full mb-2" 
-            value={content.about?.description || ""} 
-            onChange={(e) => handleAboutChange('description', e.target.value)} 
-          />
-          <div className="flex gap-2">
-            <input 
-              className="flex-1" 
-              placeholder="Button Text" 
-              value={content.about?.buttonText || ""} 
-              onChange={(e) => handleAboutChange('buttonText', e.target.value)} 
-            />
-            <input 
-              className="flex-1" 
-              placeholder="Button Link" 
-              value={content.about?.buttonLink || ""} 
-              onChange={(e) => handleAboutChange('buttonLink', e.target.value)} 
-            />
-          </div>
         </div>
-      </section>
+      )}
+
+      <div className="flex gap-2">
+        <input
+          className={formControlSmall}
+          value={content.about?.logo || ""}
+          onChange={(e) => handleAboutChange("logo", e.target.value)}
+          placeholder="Logo URL"
+        />
+        <button
+          onClick={() => openImagePicker("about.logo")}
+          className="px-3 py-2 bg-gray-200 rounded-lg text-sm"
+        >
+          Choose
+        </button>
+      </div>
+    </div>
+
+    {/* Text Content */}
+    <div className="bg-gray-50 p-4 rounded-xl border space-y-4">
+      <input
+        className={formControl}
+        placeholder="Title"
+        value={content.about?.title || ""}
+        onChange={(e) => handleAboutChange("title", e.target.value)}
+      />
+
+      <textarea
+        className={formControl}
+        rows={4}
+        placeholder="Description"
+        value={content.about?.description || ""}
+        onChange={(e) => handleAboutChange("description", e.target.value)}
+      />
+
+      <div className="grid grid-cols-2 gap-3">
+        <input
+          className={formControlSmall}
+          placeholder="Button Text"
+          value={content.about?.buttonText || ""}
+          onChange={(e) => handleAboutChange("buttonText", e.target.value)}
+        />
+        <input
+          className={formControlSmall}
+          placeholder="Button Link"
+          value={content.about?.buttonLink || ""}
+          onChange={(e) => handleAboutChange("buttonLink", e.target.value)}
+        />
+      </div>
+    </div>
+  </div>
+</SectionCard>
+
 
       {/* Image picker modal / inline panel */}
       {picker?.open && (

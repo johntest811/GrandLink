@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../../Clients/Supabase/SupabaseClients"; // <-- Use shared client
+import { supabase } from "../../../Clients/Supabase/SupabaseClients";
 
 type ContentRow = {
   id: string;
@@ -26,6 +26,7 @@ export default function InquireContentEditor() {
 
   useEffect(() => {
     let mounted = true;
+
     const load = async () => {
       setLoading(true);
       try {
@@ -48,18 +49,20 @@ export default function InquireContentEditor() {
         } else {
           setContent(null);
           setTitle("Inquire Now");
-          setDescription("We’re happy to help you bring your vision to life. Kindly provide us with your requirements and contact information below. Our team will get back to you as soon as possible.");
-          setPhone("0927‑574‑9475");
-          setEmail("grand‑east@gmail.com");
+          setDescription(
+            "We’re happy to help you bring your vision to life. Kindly provide us with your requirements and contact information below. Our team will get back to you as soon as possible."
+          );
+          setPhone("0927-574-9475");
+          setEmail("grand-east@gmail.com");
           setFacebook("facebook.com/grandeast");
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.error("load inquire content", err);
       } finally {
         if (mounted) setLoading(false);
       }
     };
+
     load();
     return () => {
       mounted = false;
@@ -71,6 +74,7 @@ export default function InquireContentEditor() {
       alert("Title and description are required.");
       return;
     }
+
     setSaving(true);
     try {
       const payload = {
@@ -100,7 +104,6 @@ export default function InquireContentEditor() {
         alert("Content created.");
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("save inquire content", err);
       alert("Could not save content.");
     } finally {
@@ -109,61 +112,101 @@ export default function InquireContentEditor() {
   };
 
   return (
-    <div className="space-y-6 text-black">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-black">Inquire Page Editor</h1>
+    <div className="max-w-5xl mx-auto space-y-8 text-black">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b pb-4">
         <div>
-          <Link href="/dashboard/inquiries" className="px-3 py-1 rounded bg-gray-100 text-black">Back to Inquiries</Link>
+          <h1 className="text-3xl font-bold">Inquire Page Editor</h1>
+          <p className="text-gray-500 text-sm">
+            Manage content displayed on the Inquire page
+          </p>
         </div>
+
+        <Link
+          href="/dashboard/inquiries"
+          className="px-4 py-2 rounded-lg border bg-white hover:bg-gray-50 text-sm font-medium"
+        >
+          ← Back to Inquiries
+        </Link>
       </header>
 
-      <div className="bg-white p-6 rounded shadow">
+      {/* Card */}
+      <div className="bg-white rounded-2xl shadow-md border p-8">
         {loading ? (
-          <div className="text-black">Loading…</div>
+          <div className="text-center py-10 text-gray-500">Loading…</div>
         ) : (
-          <>
-            <label className="block mb-2 text-black font-medium">Title</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full border rounded px-3 py-2 mb-4 text-black"
-              placeholder="Inquire page title"
-            />
+          <div className="space-y-6">
+            {/* Title */}
+            <div>
+              <label className="block text-sm font-semibold mb-1">Title</label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="w-full rounded-lg border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="Inquire page title"
+              />
+            </div>
 
-            <label className="block mb-2 text-black font-medium">Side description (left column)</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={6}
-              className="w-full border rounded px-3 py-2 mb-4 text-black"
-              placeholder="Description shown on the left side of the Inquire page"
-            />
+            {/* Description */}
+            <div>
+              <label className="block text-sm font-semibold mb-1">
+                Side Description
+              </label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={6}
+                className="w-full rounded-lg border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="Text shown on the left side of the inquire page"
+              />
+            </div>
 
-            <label className="block mb-2 text-black font-medium">Phone</label>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border rounded px-3 py-2 mb-3 text-black" placeholder="Phone" />
+            {/* Contact Info */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-semibold mb-1">Phone</label>
+                <input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="w-full rounded-lg border px-4 py-2"
+                  placeholder="Phone number"
+                />
+              </div>
 
-            <label className="block mb-2 text-black font-medium">Email</label>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border rounded px-3 py-2 mb-3 text-black" placeholder="Email" />
+              <div>
+                <label className="block text-sm font-semibold mb-1">Email</label>
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-lg border px-4 py-2"
+                  placeholder="Email address"
+                />
+              </div>
 
-            <label className="block mb-2 text-black font-medium">Facebook</label>
-            <input value={facebook} onChange={(e) => setFacebook(e.target.value)} className="w-full border rounded px-3 py-2 mb-4 text-black" placeholder="Facebook URL or handle" />
+              <div>
+                <label className="block text-sm font-semibold mb-1">
+                  Facebook
+                </label>
+                <input
+                  value={facebook}
+                  onChange={(e) => setFacebook(e.target.value)}
+                  className="w-full rounded-lg border px-4 py-2"
+                  placeholder="Facebook URL"
+                />
+              </div>
+            </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-
+            {/* Actions */}
+            <div className="flex justify-end gap-3 pt-4 border-t">
               <button
                 onClick={() => {
                   if (!content) {
                     setTitle("Inquire Now");
-                    setDescription("We’re happy to help you bring your vision to life. Kindly provide us with your requirements and contact information below. Our team will get back to you as soon as possible.");
-                    setPhone("0927‑574‑9475");
-                    setEmail("grand‑east@gmail.com");
+                    setDescription(
+                      "We’re happy to help you bring your vision to life. Kindly provide us with your requirements and contact information below. Our team will get back to you as soon as possible."
+                    );
+                    setPhone("0927-574-9475");
+                    setEmail("grand-east@gmail.com");
                     setFacebook("facebook.com/grandeast");
                   } else {
                     setTitle(content.title);
@@ -173,12 +216,20 @@ export default function InquireContentEditor() {
                     setFacebook(content.facebook ?? "");
                   }
                 }}
-                className="px-4 py-2 bg-gray-200 text-black rounded"
+                className="px-4 py-2 rounded-lg border bg-gray-100 hover:bg-gray-200 text-sm"
               >
                 Reset
               </button>
+
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-6 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-60"
+              >
+                {saving ? "Saving…" : "Save Changes"}
+              </button>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

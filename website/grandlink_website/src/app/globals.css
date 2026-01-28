@@ -24,3 +24,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@layer components {
+  .footer-link {
+    @apply text-gray-400 font-semibold hover:text-[#232d3b] transition-colors cursor-pointer;
+  }
+}
+
+
+

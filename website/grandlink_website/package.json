@@ -11,6 +11,8 @@
   "dependencies": {
     "@sendgrid/mail": "^8.1.5",
     "@supabase/supabase-js": "^2.57.2",
+    "@tiptap/react": "^3.14.0",
+    "@tiptap/starter-kit": "^3.14.0",
     "@types/twilio": "^3.19.2",
     "embla-carousel": "^8.6.0",
     "embla-carousel-react": "^8.6.0",
@@ -20,6 +22,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-icons": "^5.5.0",
+    "react-quill": "^2.0.0",
     "react-responsive-carousel": "^3.2.23",
     "stripe": "^19.0.0",
     "three": "^0.180.0",
