@@ -28,6 +28,23 @@ function ProductDetailsPageContent() {
   const [userId, setUserId] = useState<string | null>(null);
   const router = useRouter();
 
+  // Prevent background page scroll while the 3D modal is open
+  useEffect(() => {
+    if (!show3D) return;
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
+    try {
+      // Avoid layout shift when scrollbar disappears
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.overflow = "hidden";
+      if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    } catch {}
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
+    };
+  }, [show3D]);
+
   useEffect(() => {
     const fetchProduct = async () => {
       if (!productId) return;
@@ -57,7 +74,7 @@ function ProductDetailsPageContent() {
     ? product.images
     : [product.image1, product.image2, product.image3, product.image4, product.image5].filter(Boolean);
 
-  // Get FBX URLs - prioritize fbx_urls array, fallback to single fbx_url
+  // Get 3D model URLs (stored in fbx_url(s) for backward compatibility)
   const fbxUrls: string[] = product.fbx_urls && Array.isArray(product.fbx_urls) && product.fbx_urls.length > 0
     ? product.fbx_urls.filter((url: string) => url && url.trim() !== '')
     : product.fbx_url ? [product.fbx_url] : [];
@@ -209,27 +226,29 @@ function ProductDetailsPageContent() {
                 <path d="M16 14L22 20L16 26" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
-            {/* Thumbnails - fixed square */}
-            <div className="flex gap-3 mt-4 justify-center">
-              {images.map((img, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setCarouselIdx(idx)}
-                  className={`relative w-24 h-24 aspect-square rounded-lg overflow-hidden border transition-shadow ${
-                    carouselIdx === idx ? "border-red-600 shadow-md" : "border-gray-300 hover:shadow"
-                  }`}
-                  aria-label={`Show image ${idx + 1}`}
-                >
-                  <Image
-                    src={img || "https://placehold.co/200x200/png?text=No+Image"}
-                    alt={`Thumbnail ${idx + 1}`}
-                    fill
-                    quality={90}
-                    sizes="96px"
-                    className="object-cover"
-                  />
-                </button>
-              ))}
+            {/* Thumbnails - horizontal scroll with snap and no shrink so they stay inside viewport */}
+            <div className="w-full mt-4 overflow-x-auto py-2">
+              <div className="flex gap-3 px-2 snap-x snap-mandatory">
+                {images.map((img, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setCarouselIdx(idx)}
+                    className={`relative w-24 h-24 flex-shrink-0 snap-center rounded-lg overflow-hidden border transition-shadow ${
+                      carouselIdx === idx ? "border-red-600 shadow-md" : "border-gray-300 hover:shadow"
+                    }`}
+                    aria-label={`Show image ${idx + 1}`}
+                  >
+                    <Image
+                      src={img || "https://placehold.co/200x200/png?text=No+Image"}
+                      alt={`Thumbnail ${idx + 1}`}
+                      fill
+                      quality={90}
+                      sizes="96px"
+                      className="object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -458,8 +477,19 @@ function ProductDetailsPageContent() {
               ))}
             </div>
 
-            <div className="flex-1 w-full flex items-center justify-center overflow-hidden">
-              <ThreeDFBXViewer fbxUrls={fbxUrls} weather={weather} />
+            <div className="flex-1 w-full min-h-0 relative overflow-hidden">
+              <ThreeDFBXViewer
+                fbxUrls={fbxUrls}
+                weather={weather}
+                skyboxes={product?.skyboxes || null}
+                productDimensions={{
+                  width: product.width,
+                  height: product.height,
+                  thickness: product.thickness,
+                  // If your DB values are in cm or m, change this default.
+                  units: "mm",
+                }}
+              />
             </div>
           </div>
         </div>
