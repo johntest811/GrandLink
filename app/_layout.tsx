@@ -3,6 +3,7 @@ import { LogBox } from 'react-native';
 import { Slot } from 'expo-router';
 import { AppContextProvider } from '../context/AppContext';
 import * as WebBrowser from 'expo-web-browser';
+import '../utils/polyfills';
 
 // Ignore specific warnings that cause rendering issues in LogBox
 LogBox.ignoreLogs([

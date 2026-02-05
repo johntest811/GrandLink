@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Pressable } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Pressable, TextInput, Modal, TouchableWithoutFeedback, Keyboard, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import Svg, { Line, Circle } from 'react-native-svg';
 import BottomNavBar from "@BottomNav/../components/BottomNav";
-import { CameraView as ImportedCameraView, useCameraPermissions as importedUseCameraPermissions } from 'expo-camera';
-
-// Camera components temporarily disabled to prevent native module conflicts
+import { CameraView as ImportedCameraView, useCameraPermissions as importedUseCameraPermissions, CameraType } from 'expo-camera';
+import { supabase } from '../supabaseClient';
+import { ARMeasurementService } from '../../services/ARMeasurementService';
+import { ARMeasurement, SaveMeasurementData } from '../../types/ARMeasurement';
+import * as Sensors from 'expo-sensors';
+import { GLView } from 'expo-gl';
+import { Accelerometer, Gyroscope, Magnetometer } from 'expo-sensors';
 
 let CameraView = ImportedCameraView;
 let useCameraPermissions = importedUseCameraPermissions;
@@ -20,15 +24,161 @@ try {
   console.warn('Camera module not available:', error);
 }
 
-// Disabled camera for now
-
-
 export default function ARMeasureScreen() {
   const router = useRouter();
   const [showCamera, setShowCamera] = useState(false);
   const [measurements, setMeasurements] = useState<Array<number>>([]);
-  const [measurementPoints, setMeasurementPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const [measurementPoints, setMeasurementPoints] = useState<Array<{ x: number; y: number; worldX: number; worldY: number; worldZ: number }>>([]);
   const [permission, requestPermission] = useCameraPermissions ? useCameraPermissions() : [null, () => Promise.resolve({ status: 'denied' })];
+  
+  // New state for database integration
+  const [user, setUser] = useState<any>(null);
+  const [savedMeasurements, setSavedMeasurements] = useState<ARMeasurement[]>([]);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [measurementName, setMeasurementName] = useState('');
+  const [measurementType, setMeasurementType] = useState<SaveMeasurementData['measurement_type']>('general');
+  const [measurementNotes, setMeasurementNotes] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [showAllMeasurements, setShowAllMeasurements] = useState(false);
+
+  // Advanced AR state for proper 3D tracking
+  const [deviceOrientation, setDeviceOrientation] = useState({ pitch: 0, roll: 0, yaw: 0 });
+  const [devicePosition, setDevicePosition] = useState({ x: 0, y: 0, z: 0 });
+  const [isCalibrated, setIsCalibrated] = useState(false);
+  const [calibrationFactor, setCalibrationFactor] = useState(0.5);
+  const [measurementDepth, setMeasurementDepth] = useState(100); // cm from camera
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false);
+  const [calibrationDistance, setCalibrationDistance] = useState('');
+  const [planeNormal, setPlaneNormal] = useState({ x: 0, y: 0, z: 1 }); // Surface normal vector
+  const [referencePoints, setReferencePoints] = useState<Array<{ screen: { x: number, y: number }, world: { x: number, y: number, z: number } }>>([]);
+  const [depthEstimationMode, setDepthEstimationMode] = useState<'manual' | 'auto' | 'reference'>('reference');
+  const [focusDistance, setFocusDistance] = useState(50); // cm - default focus distance
+  const [cameraIntrinsics, setCameraIntrinsics] = useState({
+    focalLength: 1000, // pixels
+    principalPointX: 0,
+    principalPointY: 0,
+    imageWidth: 0,
+    imageHeight: 0
+  });
+
+  // Fetch user and load measurements on component mount
+  useEffect(() => {
+    const fetchUserAndMeasurements = async () => {
+      try {
+        // Check both session and user to ensure authentication
+        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        console.log('Auth Debug - Session:', !!session);
+        console.log('Auth Debug - User:', !!user);
+        
+        // Use session.user if available, fallback to user
+        const currentUser = session?.user || user;
+        setUser(currentUser);
+        
+        if (currentUser) {
+          console.log('User authenticated, loading measurements...');
+          const result = await ARMeasurementService.getUserMeasurements();
+          if (result.success && result.data) {
+            setSavedMeasurements(result.data);
+          } else {
+            console.log('Failed to load measurements:', result.error);
+          }
+        } else {
+          console.log('No user found in session or auth');
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+      }
+    };
+    
+    fetchUserAndMeasurements();
+    
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, !!session?.user);
+      setUser(session?.user || null);
+      
+      if (session?.user) {
+        const result = await ARMeasurementService.getUserMeasurements();
+        if (result.success && result.data) {
+          setSavedMeasurements(result.data);
+        }
+      } else {
+        setSavedMeasurements([]);
+      }
+    });
+    
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Advanced AR tracking system with sensor fusion
+  useEffect(() => {
+    let accelerometerSub: any = null;
+    let gyroscopeSub: any = null;
+    let magnetometerSub: any = null;
+    
+    const startARTracking = async () => {
+      try {
+        // Start accelerometer for gravity and device orientation
+        const accelAvailable = await Accelerometer.isAvailableAsync();
+        if (accelAvailable) {
+          Accelerometer.setUpdateInterval(50);
+          accelerometerSub = Accelerometer.addListener((accelData) => {
+            // Calculate pitch and roll from gravity
+            const { x, y, z } = accelData;
+            const pitch = Math.atan2(-x, Math.sqrt(y * y + z * z)) * (180 / Math.PI);
+            const roll = Math.atan2(y, z) * (180 / Math.PI);
+            
+            setDeviceOrientation(prev => ({ ...prev, pitch, roll }));
+            
+            // Update plane normal based on device orientation
+            const normalX = Math.sin(pitch * Math.PI / 180);
+            const normalY = -Math.sin(roll * Math.PI / 180) * Math.cos(pitch * Math.PI / 180);
+            const normalZ = Math.cos(roll * Math.PI / 180) * Math.cos(pitch * Math.PI / 180);
+            setPlaneNormal({ x: normalX, y: normalY, z: normalZ });
+          });
+        }
+        
+        // Start gyroscope for rotation tracking
+        const gyroAvailable = await Gyroscope.isAvailableAsync();
+        if (gyroAvailable) {
+          Gyroscope.setUpdateInterval(50);
+          gyroscopeSub = Gyroscope.addListener((gyroData) => {
+            // Integrate gyroscope data for yaw (heading)
+            const { z } = gyroData;
+            setDeviceOrientation(prev => ({ 
+              ...prev, 
+              yaw: prev.yaw + (z * 180 / Math.PI) * 0.05 // dt = 0.05s
+            }));
+          });
+        }
+        
+        // Set camera intrinsics based on screen dimensions
+        const { width, height } = Dimensions.get('window');
+        setCameraIntrinsics({
+          focalLength: width * 0.8, // Estimate focal length as 80% of screen width
+          principalPointX: width / 2,
+          principalPointY: height / 2,
+          imageWidth: width,
+          imageHeight: height
+        });
+        
+      } catch (error) {
+        console.log('AR tracking not available:', error);
+      }
+    };
+
+    if (showCamera) {
+      startARTracking();
+    }
+
+    return () => {
+      if (accelerometerSub) accelerometerSub.remove();
+      if (gyroscopeSub) gyroscopeSub.remove();
+      if (magnetometerSub) magnetometerSub.remove();
+    };
+  }, [showCamera]);
 
   const startARMeasurement = async () => {
     // Re-enabled AR Camera feature
@@ -50,7 +200,18 @@ export default function ARMeasureScreen() {
 
   const handleScreenTap = (event: any) => {
     const { locationX, locationY } = event.nativeEvent;
-    const newPoint = { x: locationX, y: locationY };
+    
+    // Convert screen coordinates to 3D world coordinates using advanced AR projection
+    const worldPoint = screenToWorldCoordinateAR(locationX, locationY);
+    
+    const newPoint = { 
+      x: locationX, // Keep screen coords for display
+      y: locationY, 
+      worldX: worldPoint.x, // Add world coords for accurate measurement
+      worldY: worldPoint.y,
+      worldZ: worldPoint.z
+    };
+    
     const updatedPoints = [...measurementPoints, newPoint];
     setMeasurementPoints(updatedPoints);
 
@@ -60,16 +221,143 @@ export default function ARMeasureScreen() {
     }
   };
 
-  const calculateMeasurement = (points: Array<{ x: number; y: number }>) => {
-    // Calculate distances between consecutive points
+  // Advanced 3D coordinate conversion with proper AR projection
+  const screenToWorldCoordinateAR = (screenX: number, screenY: number) => {
+    const { imageWidth, imageHeight, focalLength, principalPointX, principalPointY } = cameraIntrinsics;
+    
+    if (imageWidth === 0 || imageHeight === 0) {
+      // Fallback to simple projection if intrinsics not set
+      return screenToWorldCoordinateFallback(screenX, screenY);
+    }
+    
+    // Convert screen coordinates to normalized camera coordinates
+    const x_cam = (screenX - principalPointX) / focalLength;
+    const y_cam = (screenY - principalPointY) / focalLength;
+    
+    // Ray direction in camera space
+    const rayDir = {
+      x: x_cam,
+      y: y_cam,
+      z: 1.0
+    };
+    
+    // Apply device orientation to ray direction
+    const rotatedRay = applyDeviceRotation(rayDir, deviceOrientation);
+    
+    // Determine intersection depth using plane normal
+    let intersectionDepth = focusDistance;
+    
+    if (depthEstimationMode === 'reference' && referencePoints.length > 0) {
+      // Use reference points for better depth estimation
+      intersectionDepth = estimateDepthFromReferences(screenX, screenY);
+    } else if (depthEstimationMode === 'auto') {
+      // Use plane normal to estimate intersection depth
+      const denominator = rotatedRay.x * planeNormal.x + rotatedRay.y * planeNormal.y + rotatedRay.z * planeNormal.z;
+      if (Math.abs(denominator) > 0.001) {
+        intersectionDepth = Math.abs(focusDistance / denominator);
+      }
+    }
+    
+    // Calculate world coordinates
+    const worldX = rotatedRay.x * intersectionDepth;
+    const worldY = rotatedRay.y * intersectionDepth;
+    const worldZ = rotatedRay.z * intersectionDepth;
+    
+    return {
+      x: worldX * (isCalibrated ? calibrationFactor : 1.0),
+      y: worldY * (isCalibrated ? calibrationFactor : 1.0),
+      z: worldZ * (isCalibrated ? calibrationFactor : 1.0)
+    };
+  };
+  
+  const screenToWorldCoordinateFallback = (screenX: number, screenY: number) => {
+    const screenDimensions = Dimensions.get('screen');
+    // Normalize screen coordinates to -1 to 1 range
+    const normalizedX = (screenX / screenDimensions.width) * 2 - 1;
+    const normalizedY = -((screenY / screenDimensions.height) * 2 - 1);
+    
+    // Apply perspective projection
+    const fov = 60; // Field of view in degrees
+    const aspect = screenDimensions.width / screenDimensions.height;
+    const fovRad = (fov * Math.PI) / 180;
+    
+    const depth = isCalibrated ? focusDistance : 100;
+    const worldX = normalizedX * depth * Math.tan(fovRad / 2) * aspect;
+    const worldY = normalizedY * depth * Math.tan(fovRad / 2);
+    
+    return { x: worldX, y: worldY, z: depth };
+  };
+  
+  const applyDeviceRotation = (rayDir: any, orientation: any) => {
+    const pitch = orientation.pitch * (Math.PI / 180);
+    const roll = orientation.roll * (Math.PI / 180);
+    const yaw = orientation.yaw * (Math.PI / 180);
+    
+    // Apply rotation matrices (simplified)
+    const cosPitch = Math.cos(pitch);
+    const sinPitch = Math.sin(pitch);
+    const cosRoll = Math.cos(roll);
+    const sinRoll = Math.sin(roll);
+    const cosYaw = Math.cos(yaw);
+    const sinYaw = Math.sin(yaw);
+    
+    // Rotation around Y-axis (pitch)
+    const x1 = rayDir.x * cosPitch + rayDir.z * sinPitch;
+    const y1 = rayDir.y;
+    const z1 = -rayDir.x * sinPitch + rayDir.z * cosPitch;
+    
+    // Rotation around X-axis (roll)
+    const x2 = x1;
+    const y2 = y1 * cosRoll - z1 * sinRoll;
+    const z2 = y1 * sinRoll + z1 * cosRoll;
+    
+    // Rotation around Z-axis (yaw)
+    const x3 = x2 * cosYaw - y2 * sinYaw;
+    const y3 = x2 * sinYaw + y2 * cosYaw;
+    const z3 = z2;
+    
+    return { x: x3, y: y3, z: z3 };
+  };
+  
+  const estimateDepthFromReferences = (screenX: number, screenY: number) => {
+    if (referencePoints.length === 0) return focusDistance;
+    
+    // Find closest reference point
+    let minDistance = Infinity;
+    let closestDepth = focusDistance;
+    
+    referencePoints.forEach(ref => {
+      const dx = screenX - ref.screen.x;
+      const dy = screenY - ref.screen.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestDepth = Math.sqrt(
+          ref.world.x * ref.world.x + 
+          ref.world.y * ref.world.y + 
+          ref.world.z * ref.world.z
+        );
+      }
+    });
+    
+    return closestDepth;
+  };
+
+  const calculateMeasurement = (points: Array<any>) => {
+    // Calculate 3D distances between consecutive points using world coordinates
     const distances: number[] = [];
     for (let i = 0; i < points.length - 1; i++) {
-      const dx = points[i + 1].x - points[i].x;
-      const dy = points[i + 1].y - points[i].y;
-      const pixelDistance = Math.sqrt(dx * dx + dy * dy);
-      // Convert to cm (calibration factor)
-      const distanceCm = pixelDistance * 0.5;
-      distances.push(distanceCm);
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      
+      // 3D distance calculation
+      const dx = p2.worldX - p1.worldX;
+      const dy = p2.worldY - p1.worldY;
+      const dz = p2.worldZ - p1.worldZ;
+      const distance3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      
+      distances.push(distance3D);
     }
     setMeasurements(distances);
   };
@@ -78,21 +366,112 @@ export default function ARMeasureScreen() {
     setShowCamera(false);
   };
 
-  const saveMeasurement = () => {
+  const saveMeasurement = async () => {
     if (measurementPoints.length >= 4 && measurements.length >= 3) {
-      const measurementText = measurements.map((dist, idx) => 
-        `Side ${idx + 1}: ${dist.toFixed(2)} cm`
-      ).join('\n');
-      
-      Alert.alert(
-        'Save Measurement',
-        `${measurementText}\n\nMeasurement saved! You can use these values for your order.`,
-        [
-          { text: 'OK', onPress: closeCamera }
-        ]
-      );
+      // Re-check authentication before showing modal
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        
+        const authUser = session?.user || currentUser;
+        console.log('Save - Auth check:', !!authUser);
+        
+        if (!authUser) {
+          Alert.alert(
+            'Authentication Required', 
+            'Please log in to save measurements. If you are already logged in, try restarting the app.',
+            [
+              { text: 'OK' },
+              { text: 'Retry', onPress: () => {
+                // Retry fetching user
+                fetchUserAndMeasurements();
+              }}
+            ]
+          );
+          return;
+        }
+        
+        // Update user state if it wasn't set
+        if (!user) {
+          setUser(authUser);
+        }
+        
+        // Show save modal to get measurement details
+        setShowSaveModal(true);
+      } catch (error) {
+        console.error('Auth check error:', error);
+        Alert.alert('Error', 'Unable to verify authentication. Please try again.');
+      }
     } else {
       Alert.alert('Incomplete', 'Please tap at least 4 points to measure doors/windows/railings');
+    }
+  };
+  
+  const fetchUserAndMeasurements = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const currentUser = session?.user || user;
+      setUser(currentUser);
+      
+      if (currentUser) {
+        const result = await ARMeasurementService.getUserMeasurements();
+        if (result.success && result.data) {
+          setSavedMeasurements(result.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+    }
+  };
+
+  const handleSaveMeasurement = async () => {
+    if (!measurementName.trim()) {
+      Alert.alert('Name Required', 'Please enter a name for this measurement.');
+      return;
+    }
+
+    setIsSaving(true);
+    
+    try {
+      const saveData: SaveMeasurementData = {
+        measurement_name: measurementName.trim(),
+        measurement_type: measurementType,
+        points: measurementPoints,
+        distances: measurements,
+        unit: 'cm',
+        notes: measurementNotes.trim()
+      };
+
+      const result = await ARMeasurementService.saveMeasurement(saveData);
+      
+      if (result.success) {
+        Alert.alert(
+          'Measurement Saved!', 
+          `"${measurementName}" has been saved to your profile.`,
+          [{
+            text: 'OK', 
+            onPress: handleSaveSuccess
+          }]
+        );
+      } else {
+        Alert.alert('Save Failed', result.error || 'Unable to save measurement.');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'An unexpected error occurred while saving.');
+      console.error('Save error:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const loadSavedMeasurements = async () => {
+    if (user) {
+      const result = await ARMeasurementService.getUserMeasurements();
+      if (result.success && result.data) {
+        setSavedMeasurements(result.data);
+      }
     }
   };
 
@@ -101,10 +480,508 @@ export default function ARMeasureScreen() {
     setMeasurements([]);
   };
 
+  const undoLastPoint = () => {
+    if (measurementPoints.length > 0) {
+      const newPoints = measurementPoints.slice(0, -1);
+      setMeasurementPoints(newPoints);
+      // Recalculate measurements
+      if (newPoints.length >= 2) {
+        calculateMeasurement(newPoints);
+      } else {
+        setMeasurements([]);
+      }
+    }
+  };
+
+  // Handle modal close and reset form
+  const handleCloseModal = () => {
+    Keyboard.dismiss();
+    setShowSaveModal(false);
+    // Reset form fields
+    setMeasurementName('');
+    setMeasurementType('general');
+    setMeasurementNotes('');
+  };
+
+  // Handle successful save
+  const handleSaveSuccess = () => {
+    Keyboard.dismiss();
+    setShowSaveModal(false);
+    setMeasurementName('');
+    setMeasurementType('general');
+    setMeasurementNotes('');
+    loadSavedMeasurements();
+  };
+
+  // Handle favorite toggle
+  const toggleFavorite = async (measurementId: string, currentFavoriteState: boolean) => {
+    try {
+      const result = await ARMeasurementService.toggleFavorite(measurementId, !currentFavoriteState);
+      if (result.success) {
+        // Update local state
+        setSavedMeasurements(prev => 
+          prev.map(m => 
+            m.id === measurementId 
+              ? { ...m, is_favorite: !currentFavoriteState }
+              : m
+          )
+        );
+      } else {
+        Alert.alert('Error', 'Failed to update favorite status');
+      }
+    } catch (error) {
+      console.error('Toggle favorite error:', error);
+      Alert.alert('Error', 'An error occurred while updating favorite status');
+    }
+  };
+
+  // Handle delete measurement
+  const deleteMeasurement = async (measurementId: string, measurementName: string) => {
+    Alert.alert(
+      'Delete Measurement',
+      `Are you sure you want to delete "${measurementName}"? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const result = await ARMeasurementService.deleteMeasurement(measurementId);
+              if (result.success) {
+                setSavedMeasurements(prev => prev.filter(m => m.id !== measurementId));
+                Alert.alert('Success', 'Measurement deleted successfully');
+              } else {
+                Alert.alert('Error', 'Failed to delete measurement');
+              }
+            } catch (error) {
+              console.error('Delete measurement error:', error);
+              Alert.alert('Error', 'An error occurred while deleting the measurement');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Handle view all measurements
+  const handleViewAllMeasurements = () => {
+    setShowAllMeasurements(true);
+  };
+
+  // Handle close all measurements modal
+  const handleCloseAllMeasurements = () => {
+    setShowAllMeasurements(false);
+  };
+
+  // Calibration functions
+  const startCalibration = () => {
+    setShowCalibrationModal(true);
+  };
+
+  const handleCalibration = () => {
+    const knownDistance = parseFloat(calibrationDistance);
+    if (isNaN(knownDistance) || knownDistance <= 0) {
+      Alert.alert('Invalid Distance', 'Please enter a valid distance in centimeters.');
+      return;
+    }
+
+    if (measurements.length === 0) {
+      Alert.alert('No Measurement', 'Please measure something first before calibrating.');
+      return;
+    }
+
+    // Use the first measurement for calibration
+    const measuredDistance = measurements[0];
+    const newCalibrationFactor = knownDistance / measuredDistance;
+    
+    setCalibrationFactor(newCalibrationFactor);
+    setFocusDistance(knownDistance);
+    setIsCalibrated(true);
+    setShowCalibrationModal(false);
+    setCalibrationDistance('');
+    
+    // Add reference points for future depth estimation
+    if (measurementPoints.length >= 2) {
+      const newRef = {
+        screen: { x: measurementPoints[0].x, y: measurementPoints[0].y },
+        world: { 
+          x: measurementPoints[0].worldX * newCalibrationFactor, 
+          y: measurementPoints[0].worldY * newCalibrationFactor, 
+          z: measurementPoints[0].worldZ * newCalibrationFactor 
+        }
+      };
+      setReferencePoints(prev => [...prev, newRef]);
+    }
+    
+    Alert.alert(
+      'Calibration Complete', 
+      `AR system calibrated with depth ${knownDistance}cm. Accuracy improved for future measurements.`
+    );
+  };
+  
+  const addReferencePoint = (screenX: number, screenY: number, realDepth: number) => {
+    const worldPoint = screenToWorldCoordinateAR(screenX, screenY);
+    const newRef = {
+      screen: { x: screenX, y: screenY },
+      world: { x: worldPoint.x, y: worldPoint.y, z: realDepth }
+    };
+    setReferencePoints(prev => [...prev, newRef]);
+    setDepthEstimationMode('reference');
+  };
+  
+  const clearReferencePoints = () => {
+    setReferencePoints([]);
+    setDepthEstimationMode('manual');
+    setIsCalibrated(false);
+  };
+
+  const handleCloseCalibrationModal = () => {
+    setShowCalibrationModal(false);
+    setCalibrationDistance('');
+  };
+
+  // Adjust measurement depth based on device tilt
+  const adjustDepthFromTilt = () => {
+    const tiltAngle = Math.abs(deviceOrientation.pitch);
+    const baseDepth = 100; // Base depth in cm
+    const maxDepthAdjustment = 50; // Max adjustment based on tilt
+    
+    // More vertical = closer depth, more horizontal = further depth
+    const depthAdjustment = (tiltAngle / 90) * maxDepthAdjustment;
+    const newDepth = baseDepth + depthAdjustment;
+    
+    setMeasurementDepth(newDepth);
+  };
+
+  // Auto-adjust depth when device orientation changes
+  useEffect(() => {
+    adjustDepthFromTilt();
+  }, [deviceOrientation]);
+
+  // Modal JSX - defined inline to prevent re-mounting on state changes
+  const saveModalJSX = (
+    <Modal
+      visible={showSaveModal}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={handleCloseModal}
+      statusBarTranslucent={true}
+      presentationStyle="overFullScreen"
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Save Measurement</Text>
+            <TouchableOpacity 
+              style={styles.modalCloseButton}
+              onPress={handleCloseModal}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView 
+            style={styles.modalScrollView}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
+          >
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Name *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={measurementName}
+                onChangeText={setMeasurementName}
+                placeholder="e.g., Living Room Window"
+                placeholderTextColor="#999"
+                returnKeyType="next"
+                blurOnSubmit={false}
+              />
+            </View>
+            
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Type</Text>
+              <View style={styles.typeContainer}>
+                {(['general', 'door', 'window', 'railing', 'wall'] as const).map((type) => (
+                  <TouchableOpacity
+                    key={type}
+                    style={[
+                      styles.typeButton,
+                      measurementType === type && styles.typeButtonActive
+                    ]}
+                    onPress={() => setMeasurementType(type)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[
+                      styles.typeButtonText,
+                      measurementType === type && styles.typeButtonTextActive
+                    ]}>
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+            
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Notes (Optional)</Text>
+              <TextInput
+                style={[styles.modalTextInput, styles.modalTextArea]}
+                value={measurementNotes}
+                onChangeText={setMeasurementNotes}
+                placeholder="Add any notes about this measurement..."
+                placeholderTextColor="#999"
+                multiline
+                numberOfLines={3}
+                returnKeyType="done"
+                textAlignVertical="top"
+              />
+            </View>
+            
+            {/* Show measurement summary */}
+            <View style={styles.modalSummary}>
+              <Text style={styles.modalSummaryTitle}>Measurement Summary:</Text>
+              {measurements.map((dist, idx) => (
+                <Text key={idx} style={styles.modalSummaryText}>
+                  Side {idx + 1}: {dist.toFixed(2)} cm
+                </Text>
+              ))}
+            </View>
+          </ScrollView>
+          
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={styles.modalButtonCancel}
+              onPress={handleCloseModal}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalButtonCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.modalButtonSave, isSaving && styles.modalButtonDisabled]}
+              onPress={handleSaveMeasurement}
+              disabled={isSaving}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalButtonSaveText}>
+                {isSaving ? 'Saving...' : 'Save Measurement'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // All Measurements Modal
+  const allMeasurementsModalJSX = (
+    <Modal
+      visible={showAllMeasurements}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={handleCloseAllMeasurements}
+      statusBarTranslucent={true}
+      presentationStyle="overFullScreen"
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalContent, { maxHeight: '90%' }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>All Saved Measurements</Text>
+            <TouchableOpacity 
+              style={styles.modalCloseButton}
+              onPress={handleCloseAllMeasurements}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView 
+            style={[styles.modalScrollView, { maxHeight: 500 }]}
+            showsVerticalScrollIndicator={true}
+          >
+            {savedMeasurements.length === 0 ? (
+              <View style={styles.emptyStateContainer}>
+                <MaterialIcons name="straighten" size={48} color="#ccc" />
+                <Text style={styles.emptyStateText}>No saved measurements yet</Text>
+                <Text style={styles.emptyStateSubtext}>Your saved measurements will appear here</Text>
+              </View>
+            ) : (
+              savedMeasurements.map((measurement) => (
+                <View key={measurement.id} style={styles.allMeasurementItem}>
+                  <TouchableOpacity 
+                    style={styles.allMeasurementInfo}
+                    onPress={() => {
+                      Alert.alert(
+                        measurement.measurement_name,
+                        `Type: ${measurement.measurement_type}\nCreated: ${new Date(measurement.created_at!).toLocaleString()}\nMeasurements: ${measurement.distances.map((d, i) => `\n  Side ${i + 1}: ${d.toFixed(2)} cm`).join('')}\nNotes: ${measurement.notes || 'None'}`,
+                        [
+                          { text: 'Close' },
+                          { 
+                            text: 'Delete', 
+                            style: 'destructive',
+                            onPress: () => {
+                              deleteMeasurement(measurement.id!, measurement.measurement_name);
+                            }
+                          }
+                        ]
+                      );
+                    }}
+                  >
+                    <Text style={styles.allMeasurementName}>{measurement.measurement_name}</Text>
+                    <Text style={styles.allMeasurementType}>
+                      {measurement.measurement_type.charAt(0).toUpperCase() + measurement.measurement_type.slice(1)}
+                      {' • '}
+                      {measurement.distances.length} measurements
+                    </Text>
+                    <Text style={styles.allMeasurementDate}>
+                      Created: {new Date(measurement.created_at!).toLocaleString()}
+                    </Text>
+                    {measurement.notes && (
+                      <Text style={styles.allMeasurementNotes} numberOfLines={2}>
+                        Notes: {measurement.notes}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                  <View style={styles.allMeasurementActions}>
+                    <TouchableOpacity
+                      onPress={() => toggleFavorite(measurement.id!, measurement.is_favorite!)}
+                      style={styles.actionButton}
+                    >
+                      <MaterialIcons 
+                        name={measurement.is_favorite ? "favorite" : "favorite-border"} 
+                        size={20} 
+                        color={measurement.is_favorite ? "#ff6b6b" : "#ccc"} 
+                      />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => deleteMeasurement(measurement.id!, measurement.measurement_name)}
+                      style={styles.actionButton}
+                    >
+                      <MaterialIcons name="delete" size={20} color="#ff6b6b" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))
+            )}
+          </ScrollView>
+          
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={[styles.modalButtonCancel, { flex: 0, paddingHorizontal: 24 }]}
+              onPress={handleCloseAllMeasurements}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalButtonCancelText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Calibration Modal
+  const calibrationModalJSX = (
+    <Modal
+      visible={showCalibrationModal}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={handleCloseCalibrationModal}
+      statusBarTranslucent={true}
+      presentationStyle="overFullScreen"
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Calibrate AR Measurements</Text>
+            <TouchableOpacity 
+              style={styles.modalCloseButton}
+              onPress={handleCloseCalibrationModal}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView 
+            style={styles.modalScrollView}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.calibrationInstructions}>
+              <MaterialIcons name="straighten" size={48} color="#a81d1d" />
+              <Text style={styles.calibrationInstructionTitle}>3D AR Calibration:</Text>
+              <Text style={styles.calibrationInstructionText}>
+                1. Measure a known object with precise dimensions{'\n'}
+                2. Enter the actual distance to improve 3D accuracy{'\n'}
+                3. This creates a reference point for depth estimation{'\n'}
+                4. Place object at consistent distance from camera
+              </Text>
+              
+              {measurements.length > 0 && (
+                <View style={styles.currentMeasurementInfo}>
+                  <Text style={styles.currentMeasurementLabel}>Current measurement:</Text>
+                  <Text style={styles.calibrationMeasurementValue}>{measurements[0]?.toFixed(2)} cm</Text>
+                  <Text style={styles.currentMeasurementLabel}>
+                    Estimated depth: {focusDistance} cm
+                  </Text>
+                </View>
+              )}
+            </View>
+            
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Actual Distance (cm) *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={calibrationDistance}
+                onChangeText={setCalibrationDistance}
+                placeholder="e.g., 8.5 (for credit card width)"
+                placeholderTextColor="#999"
+                keyboardType="decimal-pad"
+                returnKeyType="done"
+              />
+            </View>
+            
+            <View style={styles.calibrationTips}>
+              <Text style={styles.calibrationTipsTitle}>3D Measurement Tips:</Text>
+              <Text style={styles.calibrationTipText}>• Use "Manual" mode and adjust focus distance</Text>
+              <Text style={styles.calibrationTipText}>• "Auto" mode uses device tilt for depth</Text>
+              <Text style={styles.calibrationTipText}>• "Reference" mode uses calibrated points</Text>
+              <Text style={styles.calibrationTipText}>• Hold device perpendicular to surface</Text>
+              <Text style={styles.calibrationTipText}>• Ensure stable hand position</Text>
+            </View>
+          </ScrollView>
+          
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={styles.modalButtonCancel}
+              onPress={handleCloseCalibrationModal}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalButtonCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.modalButtonSave, (!calibrationDistance.trim() || measurements.length === 0) && styles.modalButtonDisabled]}
+              onPress={handleCalibration}
+              disabled={!calibrationDistance.trim() || measurements.length === 0}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalButtonSaveText}>Calibrate</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   if (showCamera) {
     if (!permission?.granted) {
       return (
         <View style={styles.cameraContainer}>
+          {saveModalJSX}
+          {allMeasurementsModalJSX}
+          {calibrationModalJSX}
           <Text style={styles.permissionText}>Requesting camera permission...</Text>
         </View>
       );
@@ -112,13 +989,17 @@ export default function ARMeasureScreen() {
 
     return (
       <View style={styles.cameraContainer}>
+        {saveModalJSX}
+        {allMeasurementsModalJSX}
+        {calibrationModalJSX}
         <CameraView style={styles.camera} facing="back">
+          {/* Main tap area for placing points */}
           <Pressable 
             style={styles.cameraTouchArea}
             onPress={handleScreenTap}
           >
             {/* SVG Overlay for Lines */}
-            <Svg style={StyleSheet.absoluteFill}>
+            <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
               {/* Draw lines between consecutive points */}
               {measurementPoints.map((point, index) => {
                 if (index < measurementPoints.length - 1) {
@@ -144,7 +1025,7 @@ export default function ARMeasureScreen() {
                   key={`circle-${index}`}
                   cx={point.x}
                   cy={point.y}
-                  r="8"
+                  r="10"
                   fill="#00ff00"
                   stroke="#fff"
                   strokeWidth="2"
@@ -152,96 +1033,106 @@ export default function ARMeasureScreen() {
               ))}
             </Svg>
 
-            <View style={styles.cameraOverlay}>
-              {/* Header */}
-              <View style={styles.cameraHeader}>
-                <TouchableOpacity onPress={closeCamera} style={styles.closeButton}>
-                  <Ionicons name="close" size={28} color="#fff" />
-                </TouchableOpacity>
-                <Text style={styles.cameraTitle}>AR Measurement</Text>
-                <View style={{ width: 40 }} />
+            {/* Point number labels - pointer events disabled */}
+            {measurementPoints.map((point, index) => (
+              <View
+                key={`label-${index}`}
+                pointerEvents="none"
+                style={[
+                  styles.measurementPoint,
+                  { left: point.x - 12, top: point.y - 12 }
+                ]}
+              >
+                <Text style={styles.pointLabel}>{index + 1}</Text>
               </View>
+            ))}
 
-              {/* Instructions */}
-              <View style={styles.instructionBox}>
-                <Text style={styles.instructionText}>
-                  {measurementPoints.length === 0 && "Tap to place the first corner"}
-                  {measurementPoints.length > 0 && measurementPoints.length < 4 && `Tap to place corner ${measurementPoints.length + 1} (need 4+ points)`}
-                  {measurementPoints.length >= 4 && "Tap to add more points or save measurement"}
-                </Text>
-              </View>
-
-              {/* Point Labels */}
-              {measurementPoints.map((point, index) => (
+            {/* Distance Labels - pointer events disabled */}
+            {measurements.map((distance, index) => {
+              const midX = (measurementPoints[index].x + measurementPoints[index + 1].x) / 2;
+              const midY = (measurementPoints[index].y + measurementPoints[index + 1].y) / 2;
+              return (
                 <View
-                  key={`label-${index}`}
+                  key={`distance-${index}`}
+                  pointerEvents="none"
                   style={[
-                    styles.measurementPoint,
-                    { left: point.x - 15, top: point.y - 15 }
+                    styles.distanceLabel,
+                    { left: midX - 35, top: midY - 12 }
                   ]}
                 >
-                  <Text style={styles.pointLabel}>{index + 1}</Text>
+                  <Text style={styles.distanceText}>{distance.toFixed(1)} cm</Text>
                 </View>
-              ))}
-
-              {/* Distance Labels */}
-              {measurements.map((distance, index) => {
-                const midX = (measurementPoints[index].x + measurementPoints[index + 1].x) / 2;
-                const midY = (measurementPoints[index].y + measurementPoints[index + 1].y) / 2;
-                return (
-                  <View
-                    key={`distance-${index}`}
-                    style={[
-                      styles.distanceLabel,
-                      { left: midX - 40, top: midY - 15 }
-                    ]}
-                  >
-                    <Text style={styles.distanceText}>{distance.toFixed(1)} cm</Text>
-                  </View>
-                );
-              })}
-
-              {/* Bottom Controls */}
-              <View style={styles.cameraControls}>
-                <View style={styles.controlsRow}>
-                  <TouchableOpacity 
-                    style={styles.controlButton}
-                    onPress={resetMeasurement}
-                  >
-                    <MaterialIcons name="refresh" size={24} color="#fff" />
-                    <Text style={styles.controlButtonText}>Reset</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity 
-                    style={[
-                      styles.controlButton,
-                      styles.saveButton,
-                      measurementPoints.length < 4 && styles.disabledButton
-                    ]}
-                    onPress={saveMeasurement}
-                    disabled={measurementPoints.length < 4}
-                  >
-                    <MaterialIcons name="save" size={24} color="#fff" />
-                    <Text style={styles.controlButtonText}>
-                      Save ({measurementPoints.length}/4+)
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Measurement Summary */}
-                {measurements.length > 0 && (
-                  <View style={styles.measurementSummary}>
-                    <Text style={styles.summaryTitle}>Measurements:</Text>
-                    {measurements.map((dist, idx) => (
-                      <Text key={idx} style={styles.summaryText}>
-                        Side {idx + 1}: {dist.toFixed(2)} cm
-                      </Text>
-                    ))}
-                  </View>
-                )}
-              </View>
-            </View>
+              );
+            })}
           </Pressable>
+
+          {/* Header - with stopPropagation */}
+          <View style={styles.cameraHeader} pointerEvents="box-none">
+            <TouchableOpacity 
+              onPress={(e) => { e.stopPropagation(); closeCamera(); }} 
+              style={styles.closeButton}
+            >
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.cameraTitle}>AR Measurement</Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          {/* Compact instruction at top */}
+          <View style={styles.compactInstruction} pointerEvents="none">
+            <Text style={styles.compactInstructionText}>
+              {measurementPoints.length === 0 && "Hold still • Tap corners to measure"}
+              {measurementPoints.length > 0 && measurementPoints.length < 4 && `Point ${measurementPoints.length}/4 • Keep phone steady`}
+              {measurementPoints.length >= 4 && `✓ ${measurementPoints.length} points • Ready to save`}
+            </Text>
+          </View>
+
+          {/* Bottom Controls - Simplified */}
+          <View style={styles.bottomControls} pointerEvents="box-none">
+            {/* Measurement summary - compact */}
+            {measurements.length > 0 && (
+              <View style={styles.compactSummary} pointerEvents="none">
+                {measurements.slice(-2).map((dist, idx) => (
+                  <Text key={idx} style={styles.compactSummaryText}>
+                    {measurements.length > 2 && idx === 0 ? '...' : ''} Side {measurements.length - 1 + idx}: {dist.toFixed(1)}cm
+                  </Text>
+                ))}
+              </View>
+            )}
+            
+            {/* Control buttons */}
+            <View style={styles.controlButtonsRow}>
+              <TouchableOpacity 
+                style={[styles.smallButton, styles.undoButton]}
+                onPress={(e) => { e.stopPropagation(); undoLastPoint(); }}
+                disabled={measurementPoints.length === 0}
+              >
+                <Ionicons name="arrow-undo" size={20} color="#fff" />
+                <Text style={styles.smallButtonText}>Undo</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.smallButton, styles.calibrateButton]}
+                onPress={(e) => { e.stopPropagation(); startCalibration(); }}
+              >
+                <MaterialIcons name="tune" size={20} color="#fff" />
+                <Text style={styles.smallButtonText}>Cal</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[
+                  styles.smallButton,
+                  styles.saveButtonNew,
+                  measurementPoints.length < 4 && styles.disabledButton
+                ]}
+                onPress={(e) => { e.stopPropagation(); saveMeasurement(); }}
+                disabled={measurementPoints.length < 4}
+              >
+                <MaterialIcons name="save" size={20} color="#fff" />
+                <Text style={styles.smallButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </CameraView>
       </View>
     );
@@ -249,6 +1140,9 @@ export default function ARMeasureScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#fff' }}>
+      {saveModalJSX}
+      {allMeasurementsModalJSX}
+      {calibrationModalJSX}
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -271,16 +1165,16 @@ export default function ARMeasureScreen() {
         {/* Feature List */}
         <View style={styles.featuresList}>
           <View style={styles.featureItem}>
-            <Ionicons name="camera" size={24} color="#a81d1d" />
-            <Text style={styles.featureText}>Point your camera at the surface</Text>
+            <Ionicons name="phone-portrait" size={24} color="#a81d1d" />
+            <Text style={styles.featureText}>Hold phone steady while measuring</Text>
           </View>
           <View style={styles.featureItem}>
             <Ionicons name="scan" size={24} color="#a81d1d" />
-            <Text style={styles.featureText}>Tap to place measurement points</Text>
+            <Text style={styles.featureText}>Tap 4 corners of the area</Text>
           </View>
           <View style={styles.featureItem}>
             <Ionicons name="resize" size={24} color="#a81d1d" />
-            <Text style={styles.featureText}>Get accurate width & height</Text>
+            <Text style={styles.featureText}>Calibrate for accurate results</Text>
           </View>
           <View style={styles.featureItem}>
             <Ionicons name="save" size={24} color="#a81d1d" />
@@ -290,17 +1184,17 @@ export default function ARMeasureScreen() {
 
         {/* Start Button */}
         <TouchableOpacity style={styles.startButton} onPress={startARMeasurement}>
-          <MaterialIcons name="3d-rotation" size={24} color="#fff" />
-          <Text style={styles.startButtonText}>Start AR Measurement</Text>
+          <MaterialIcons name="straighten" size={24} color="#fff" />
+          <Text style={styles.startButtonText}>Start Measurement</Text>
         </TouchableOpacity>
 
         {/* Requirements */}
         <View style={styles.requirementsCard}>
-          <Text style={styles.requirementsTitle}>Requirements:</Text>
-          <Text style={styles.requirementText}>• ARKit-enabled iOS device (iPhone 6s or later)</Text>
-          <Text style={styles.requirementText}>• ARCore-enabled Android device</Text>
-          <Text style={styles.requirementText}>• Good lighting conditions</Text>
-          <Text style={styles.requirementText}>• Stable internet connection</Text>
+          <Text style={styles.requirementsTitle}>📋 How to Measure:</Text>
+          <Text style={styles.requirementText}>1. Hold your phone parallel to the surface</Text>
+          <Text style={styles.requirementText}>2. Keep phone steady - don't move while tapping</Text>
+          <Text style={styles.requirementText}>3. Tap 4 corners of the window/door</Text>
+          <Text style={styles.requirementText}>4. Calibrate with a known measurement for accuracy</Text>
         </View>
 
         {measurements.length > 0 && (
@@ -312,6 +1206,66 @@ export default function ARMeasureScreen() {
                 <Text style={styles.measurementValue}>{distance.toFixed(2)} cm</Text>
               </View>
             ))}
+          </View>
+        )}
+        
+        {/* Saved Measurements Section */}
+        {user && savedMeasurements.length > 0 && (
+          <View style={styles.savedMeasurementsCard}>
+            <View style={styles.savedMeasurementsHeader}>
+              <Text style={styles.savedMeasurementsTitle}>Your Saved Measurements ({savedMeasurements.length})</Text>
+              <TouchableOpacity onPress={loadSavedMeasurements}>
+                <Ionicons name="refresh" size={20} color="#a81d1d" />
+              </TouchableOpacity>
+            </View>
+            {savedMeasurements.slice(0, 3).map((measurement) => (
+              <View key={measurement.id} style={styles.savedMeasurementItem}>
+                <TouchableOpacity 
+                  style={styles.savedMeasurementInfo}
+                  onPress={() => {
+                    Alert.alert(
+                      measurement.measurement_name,
+                      `Type: ${measurement.measurement_type}\nCreated: ${new Date(measurement.created_at!).toLocaleString()}\nMeasurements: ${measurement.distances.length}\nNotes: ${measurement.notes || 'None'}`,
+                      [
+                        { text: 'Close' },
+                        { 
+                          text: 'Delete', 
+                          style: 'destructive',
+                          onPress: () => deleteMeasurement(measurement.id!, measurement.measurement_name)
+                        }
+                      ]
+                    );
+                  }}
+                >
+                  <Text style={styles.savedMeasurementName}>{measurement.measurement_name}</Text>
+                  <Text style={styles.savedMeasurementType}>
+                    {measurement.measurement_type.charAt(0).toUpperCase() + measurement.measurement_type.slice(1)}
+                    {' • '}
+                    {measurement.distances.length} measurements
+                    {' • '}
+                    {new Date(measurement.created_at!).toLocaleDateString()}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => toggleFavorite(measurement.id!, measurement.is_favorite!)}
+                  style={styles.favoriteButton}
+                >
+                  <MaterialIcons 
+                    name={measurement.is_favorite ? "favorite" : "favorite-border"} 
+                    size={20} 
+                    color={measurement.is_favorite ? "#ff6b6b" : "#ccc"} 
+                  />
+                </TouchableOpacity>
+              </View>
+            ))}
+            {savedMeasurements.length > 3 && (
+              <TouchableOpacity 
+                style={styles.viewAllButton}
+                onPress={handleViewAllMeasurements}
+              >
+                <Text style={styles.viewAllButtonText}>View All Measurements →</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </ScrollView>
@@ -392,13 +1346,14 @@ const styles = StyleSheet.create({
   },
   instructionBox: {
     position: 'absolute',
-    top: 120,
+    top: 190,
     left: 20,
     right: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: 16,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    padding: 12,
     borderRadius: 12,
     alignItems: 'center',
+    zIndex: 5,
   },
   instructionText: {
     color: '#fff',
@@ -408,22 +1363,18 @@ const styles = StyleSheet.create({
   },
   measurementPoint: {
     position: 'absolute',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#00ff00',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 255, 0, 0.9)',
     borderWidth: 2,
     borderColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.8,
-    shadowRadius: 3,
   },
   pointLabel: {
     color: '#000',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: 'bold',
   },
   measurementLineContainer: {
@@ -435,9 +1386,10 @@ const styles = StyleSheet.create({
   },
   cameraControls: {
     position: 'absolute',
-    bottom: 40,
-    left: 20,
-    right: 20,
+    bottom: 30,
+    left: 10,
+    right: 10,
+    zIndex: 10,
   },
   controlsRow: {
     flexDirection: 'row',
@@ -457,6 +1409,9 @@ const styles = StyleSheet.create({
   saveButton: {
     backgroundColor: 'rgba(11, 159, 52, 0.9)',
   },
+  warningButton: {
+    backgroundColor: 'rgba(255, 170, 0, 0.9)',
+  },
   disabledButton: {
     backgroundColor: 'rgba(100, 100, 100, 0.6)',
   },
@@ -468,15 +1423,15 @@ const styles = StyleSheet.create({
   },
   distanceLabel: {
     position: 'absolute',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: 6,
-    borderRadius: 8,
-    minWidth: 80,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
     alignItems: 'center',
   },
   distanceText: {
     color: '#00ff00',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: 'bold',
   },
   measurementSummary: {
@@ -660,5 +1615,498 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#0b9f34',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    width: '90%',
+    maxWidth: 400,
+    maxHeight: '80%',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+  },
+  modalScrollView: {
+    maxHeight: 400,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#222',
+    flex: 1,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  modalField: {
+    marginBottom: 16,
+  },
+  modalLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  modalTextInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    color: '#333',
+  },
+  modalTextArea: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  typeSelector: {
+    flexDirection: 'row',
+  },
+  typeContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  typeButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginRight: 8,
+    marginBottom: 8,
+    backgroundColor: '#f8f8f8',
+  },
+  typeButtonActive: {
+    backgroundColor: '#a81d1d',
+    borderColor: '#a81d1d',
+  },
+  typeButtonText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  typeButtonTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  modalSummary: {
+    backgroundColor: '#f8f9fa',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 20,
+  },
+  modalSummaryTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
+  },
+  modalSummaryText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 4,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modalButtonCancel: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    alignItems: 'center',
+  },
+  modalButtonCancelText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  modalButtonSave: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#a81d1d',
+    alignItems: 'center',
+  },
+  modalButtonSaveText: {
+    fontSize: 16,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  modalButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
+  // Saved measurements styles
+  savedMeasurementsCard: {
+    backgroundColor: '#f0f4ff',
+    borderRadius: 12,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#a81d1d',
+  },
+  savedMeasurementsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  savedMeasurementsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#222',
+    flex: 1,
+  },
+  savedMeasurementItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+  },
+  savedMeasurementInfo: {
+    flex: 1,
+  },
+  savedMeasurementName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  savedMeasurementType: {
+    fontSize: 12,
+    color: '#666',
+  },
+  favoriteButton: {
+    padding: 8,
+  },
+  viewAllButton: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  viewAllButtonText: {
+    fontSize: 14,
+    color: '#a81d1d',
+    fontWeight: '600',
+  },
+  // All measurements modal styles
+  emptyStateContainer: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#666',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+  },
+  allMeasurementItem: {
+    flexDirection: 'row',
+    backgroundColor: '#f8f9fa',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  allMeasurementInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  allMeasurementName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  allMeasurementType: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 2,
+  },
+  allMeasurementDate: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 4,
+  },
+  allMeasurementNotes: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  allMeasurementActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  // AR Status and Calibration styles
+  arStatusBar: {
+    position: 'absolute',
+    top: 100,
+    left: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    borderRadius: 8,
+    padding: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  arStatusItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  arStatusLabel: {
+    fontSize: 10,
+    color: '#ccc',
+    marginBottom: 2,
+  },
+  arStatusValue: {
+    fontSize: 12,
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  // Calibration modal styles
+  calibrationInstructions: {
+    alignItems: 'center',
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  calibrationInstructionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  calibrationInstructionText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  currentMeasurementInfo: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#e8f9ef',
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  currentMeasurementLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 4,
+  },
+  calibrationMeasurementValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#0b9f34',
+  },
+  calibrationTips: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#fff3cd',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#ffeaa7',
+  },
+  calibrationTipsTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#856404',
+    marginBottom: 8,
+  },
+  calibrationTipText: {
+    fontSize: 12,
+    color: '#856404',
+    marginBottom: 4,
+    paddingLeft: 8,
+  },
+  
+  // Depth Control Styles
+  depthControls: {
+    position: 'absolute',
+    bottom: 220,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 25,
+    zIndex: 10,
+  },
+  depthControlButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    marginHorizontal: 4,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  depthControlText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  activeDepthControl: {
+    color: '#00ff00',
+    fontWeight: 'bold',
+  },
+  clearRefButton: {
+    backgroundColor: 'rgba(255,0,0,0.3)',
+  },
+  clearRefText: {
+    color: '#ff6b6b',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  
+  // Depth Slider Styles
+  depthSliderContainer: {
+    position: 'absolute',
+    bottom: 270,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 25,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  depthSliderLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  depthSliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+  },
+  depthAdjustButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  depthAdjustText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  depthSlider: {
+    flex: 1,
+    marginHorizontal: 12,
+    alignItems: 'center',
+  },
+  depthRangeText: {
+    color: '#ccc',
+    fontSize: 12,
+  },
+  
+  // New compact UI styles
+  compactInstruction: {
+    position: 'absolute',
+    top: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    alignItems: 'center',
+  },
+  compactInstructionText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  bottomControls: {
+    position: 'absolute',
+    bottom: 30,
+    left: 10,
+    right: 10,
+  },
+  compactSummary: {
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  compactSummaryText: {
+    color: '#00ff00',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  controlButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  smallButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    gap: 6,
+  },
+  smallButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  undoButton: {
+    backgroundColor: 'rgba(100, 100, 100, 0.9)',
+  },
+  calibrateButton: {
+    backgroundColor: 'rgba(255, 170, 0, 0.9)',
+  },
+  saveButtonNew: {
+    backgroundColor: 'rgba(11, 159, 52, 0.9)',
   },
 });
