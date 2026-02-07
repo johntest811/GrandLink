@@ -13,8 +13,7 @@ if (typeof window === 'undefined') {
 // Polyfill window.location (CRITICAL for Three.js loaders)
 // @ts-ignore
 if (typeof window !== 'undefined' && !window.location) {
-    // @ts-ignore
-    window.location = {
+    const locationMock = {
         href: 'http://localhost',
         protocol: 'http:',
         host: 'localhost',
@@ -23,11 +22,15 @@ if (typeof window !== 'undefined' && !window.location) {
         pathname: '/',
         search: '',
         hash: '',
-        replace: () => { },
+        origin: 'http://localhost',
+        ancestorOrigins: [] as any,
         assign: () => { },
         reload: () => { },
-        toString: () => 'http://localhost'
+        replace: () => { },
+        toString: () => 'http://localhost',
     };
+    // @ts-ignore
+    window.location = locationMock as any;
 }
 
 if (typeof document === 'undefined') {
@@ -43,6 +46,7 @@ if (typeof document === 'undefined') {
                     style: {},
                     addEventListener: () => { },
                     removeEventListener: () => { },
+                    setAttribute: () => { },
                 } as any;
             }
             if (tag === 'canvas') {
@@ -55,6 +59,13 @@ if (typeof document === 'undefined') {
                         drawImage: () => { },
                         getImageData: () => ({ data: new Uint8ClampedArray(0) }),
                         measureText: () => ({ width: 0 }),
+                        beginPath: () => { },
+                        moveTo: () => { },
+                        lineTo: () => { },
+                        closePath: () => { },
+                        stroke: () => { },
+                        fill: () => { },
+                        arc: () => { },
                     }),
                     toDataURL: () => '',
                     addEventListener: () => { },
@@ -70,6 +81,12 @@ if (typeof document === 'undefined') {
                 addEventListener: () => { },
                 removeEventListener: () => { },
                 textContent: '',
+                classList: {
+                    add: () => { },
+                    remove: () => { },
+                    toggle: () => { },
+                    contains: () => false,
+                },
             } as any;
         },
         createElementNS: (_ns: string, tag: string) => {
@@ -78,18 +95,25 @@ if (typeof document === 'undefined') {
         body: {
             appendChild: (_: any) => _,
             removeChild: (_: any) => _,
+            style: {},
         },
         head: {
             appendChild: (_: any) => _,
+            removeChild: (_: any) => _,
         },
-    };
+        documentElement: {
+            style: {},
+        },
+    } as any;
 }
 
 if (typeof navigator === 'undefined') {
     // @ts-ignore
     global.navigator = {
         userAgent: 'ReactNative',
-    };
+        platform: 'ReactNative',
+        language: 'en-US',
+    } as any;
 }
 
 console.log('✅ DOM Polyfills applied');
