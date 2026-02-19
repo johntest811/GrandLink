@@ -1,4 +1,5 @@
 import '../../utils/polyfills';
+// Force reload
 import React, { useEffect, useState, useRef } from 'react';
 import { Asset } from 'expo-asset';
 import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, PanResponder, Modal, Alert, Platform, Switch } from 'react-native';
@@ -145,7 +146,8 @@ export default function ProductViewScreen() {
     // Check cache first
     if (envMapCache.current.has(weatherType)) {
       console.log(`Using cached background texture for ${weatherType}`);
-      return envMapCache.current.get(weatherType)!;
+      const tex = envMapCache.current.get(weatherType)!;
+      return tex;
     }
 
     try {
@@ -157,24 +159,28 @@ export default function ProductViewScreen() {
 
       // Test that the asset loaded
       const assetTest = testImageLoad(weatherType);
-      console.log(`Loading background texture for ${weatherType}:`, assetTest);
 
-      // Use TextureLoader which works with React Native require() assets
+      // Use efficient asset loading for Expo
+      const asset = Asset.fromModule(backgroundAsset);
+      await asset.downloadAsync(); // Ensure local file is ready
+
+      console.log(`Loading background texture for ${weatherType} from ${asset.localUri || asset.uri}`);
+
       const loader = new THREE.TextureLoader();
       const texture = await new Promise<THREE.Texture>((resolve, reject) => {
         loader.load(
-          backgroundAsset,
+          asset.localUri || asset.uri || '',
           (loadedTexture) => {
             console.log(`✅ Background texture loaded successfully for ${weatherType}`);
-            // Configure as simple background texture (not environment map)
             loadedTexture.colorSpace = THREE.SRGBColorSpace;
             loadedTexture.minFilter = THREE.LinearFilter;
             loadedTexture.magFilter = THREE.LinearFilter;
             loadedTexture.needsUpdate = true;
             resolve(loadedTexture);
           },
-          (progress) => {
-            console.log(`Loading ${weatherType} background:`, Math.round((progress.loaded / (progress.total || 1)) * 100) + '%');
+          // @ts-ignore
+          (xhr) => {
+            // console.log((xhr.loaded / xhr.total * 100) + '% loaded');
           },
           (error) => {
             console.error(`❌ Failed to load background for ${weatherType}:`, error);
@@ -242,21 +248,24 @@ export default function ProductViewScreen() {
     }
   };
 
-  // 3D controls - Start with a nice angle (slightly tilted and rotated)
-  const [rotation, setRotation] = useState({ x: 0, y: 1.57 });
+  // 3D controls - Orbit (Start Front View ~90 deg)
+  const [rotation, setRotation] = useState({ x: Math.PI / 2, y: 0 });
   const rotationRef = useRef(rotation);
   useEffect(() => { rotationRef.current = rotation; }, [rotation]);
 
-  const [cameraDistance, setCameraDistance] = useState(5.0); // Moved a bit closer (was 6.0)
+  const [cameraDistance, setCameraDistance] = useState(5.0);
   const cameraDistanceRef = useRef(cameraDistance);
   useEffect(() => { cameraDistanceRef.current = cameraDistance; }, [cameraDistance]);
+
+  // Store the calculated "optimal" distance for reset
+  const defaultDistanceRef = useRef(5.0);
 
   const [lastDistance, setLastDistance] = useState<number | null>(null);
   const lastRotation = useRef({ x: 0, y: 0 });
 
   const resetViewerTransform = () => {
-    setRotation({ x: 0, y: 1.57 });
-    setCameraDistance(5.0); // Match new default
+    setRotation({ x: Math.PI / 2, y: 0 });
+    setCameraDistance(defaultDistanceRef.current);
   };
 
   // NOTE: 'features' useMemo has been moved earlier to preserve hook order
@@ -466,20 +475,10 @@ export default function ProductViewScreen() {
             // GLB models are usually properly scaled, but ensure visibility
             const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z);
-
-            if (maxDim > 0) {
-              const targetSize = 3.5; // Optimized scale for mobile screen
-              const scale = targetSize / maxDim;
-              model.scale.multiplyScalar(scale);
-              console.log(`GLB model scaled by ${scale.toFixed(3)} to fit mobile screen`);
-            }
-
-            // Center the model
             const center = box.getCenter(new THREE.Vector3());
-            model.position.sub(center);
-            // Fine tune vertical position (move down slightly if needed)
-            model.position.y -= 0.2;
+
+            console.log('📦 Raw Model Center:', center);
+            console.log('📏 Raw Model Size:', size);
 
             // Enable shadows and tag as GLB content
             model.traverse((child: any) => {
@@ -515,62 +514,7 @@ export default function ProductViewScreen() {
     });
   };
 
-  // FBX model loader
-  const loadSupabaseFBXModel = async (fbxUrl: string, productId: string): Promise<THREE.Object3D> => {
-    return new Promise((resolve, reject) => {
-      try {
-        console.log(`🚀 Loading FBX model: ${fbxUrl}`);
-        const loader = new FBXLoader();
-        loader.load(
-          fbxUrl,
-          (object: any) => {
-            console.log(`FBX model loaded successfully for product ${productId}`);
 
-            // FBX models often need scaling adjustment (often too big or too small)
-            // We use the same auto-scaling logic as GLB to ensure consistency
-            const box = new THREE.Box3().setFromObject(object);
-            const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z);
-
-            if (maxDim > 0) {
-              const targetSize = 3.5; // Match our tuned GLB size
-              const scale = targetSize / maxDim;
-              object.scale.multiplyScalar(scale);
-              console.log(`FBX model scaled by ${scale.toFixed(3)} to fit`);
-            }
-
-            // Center the model
-            const center = box.getCenter(new THREE.Vector3());
-            object.position.sub(center);
-            // Fine tune vertical position
-            object.position.y -= 0.2;
-
-            // Enable shadows
-            object.traverse((child: any) => {
-              if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
-              }
-            });
-
-            resolve(object);
-          },
-          (progress: any) => {
-            const percent = Math.round((progress.loaded / progress.total) * 100);
-            setLoadingProgress(percent);
-            console.log(`FBX loading progress: ${percent}%`);
-          },
-          (error: any) => {
-            console.error(`FBX loading failed for product ${productId}:`, error);
-            reject(error);
-          }
-        );
-      } catch (error) {
-        console.error(`FBX loader setup failed:`, error);
-        reject(error);
-      }
-    });
-  };
 
   // GLB model loader - only format we support
   const loadGLBModel = async (modelUrl: string, productId: string): Promise<THREE.Object3D> => {
@@ -807,22 +751,22 @@ export default function ProductViewScreen() {
     skyboxRef.current = null;
   };
 
+  // Create Skybox using BoxGeometry (User requested "three.box3" / Box approach)
   const createSkybox = (scene: THREE.Scene, texture: THREE.Texture) => {
     removeSkybox(scene);
 
-    // Create a large sphere for the skybox
-    const geometry = new THREE.SphereGeometry(50, 60, 40);
-    // Invert the geometry on the x-axis so that all of the faces point inward
-    geometry.scale(-1, 1, 1);
+    // Create a large box for the skybox
+    const geometry = new THREE.BoxGeometry(100, 100, 100);
 
-    // Ensure texture wrapping is correct for sphere
+    // Ensure texture wrapping
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
 
     const material = new THREE.MeshBasicMaterial({
       map: texture,
-      side: THREE.BackSide,
-      fog: false // Skybox shouldn't be affected by fog
+      side: THREE.BackSide, // Render inside of box
+      fog: false
     });
 
     const skybox = new THREE.Mesh(geometry, material);
@@ -831,7 +775,7 @@ export default function ProductViewScreen() {
 
     skyboxRef.current = skybox;
     scene.add(skybox);
-    console.log('🌌 Skybox added to scene');
+    console.log('🌌 Skybox (Box) added to scene');
   };
 
 
@@ -865,8 +809,8 @@ export default function ProductViewScreen() {
     sun.add(glow);
 
     sunMeshRef.current = sun;
-    scene.add(sun);
-    console.log('☀️ Sun added to scene');
+    // scene.add(sun); // REMOVED VISIBLE SUN MESH PER USER REQUEST
+    console.log('☀️ Sun created (invisible)');
   };
 
   const removeSun = (scene: THREE.Scene) => {
@@ -889,15 +833,7 @@ export default function ProductViewScreen() {
     // remove sun by default, add only if sunny
     removeSun(scene);
 
-    // Load and apply simple background texture
-    // let backgroundTexture: THREE.Texture | null = null;
-    // try {
-    //   // Helper to load local asset to texture
-    //   const loadLocalTexture = async (resourceId: any) => {
-    //     try {
-    //       console.log('⏳ Starting background load...');
-    //       const asset = Asset.fromModule(resourceId);
-    //       await asset.downloadAsync();
+
 
     //       console.log(`📂 Asset URI: ${asset.uri} | Local: ${asset.localUri}`);
 
@@ -933,8 +869,11 @@ export default function ProductViewScreen() {
     //   scene.background = new THREE.Color(0x87CEEB);
     // }
 
-    // TEMP: Force simple skyblue background for now per request
-    scene.background = new THREE.Color(0x87CEEB);
+    // Skybox loading commented out per request
+
+    // Fallback simple background for now
+    scene.background = new THREE.Color(0x87CEEB); // Light Blue (Sky Blue)
+
 
     // Setup fog effects
     setupFogEffects(scene, weather as any);
@@ -954,6 +893,7 @@ export default function ProductViewScreen() {
         break;
 
       case 'rainy':
+        // Rainy mood adjustments
         ambientLightRef.current!.color.setHex(0x404060);
         ambientLightRef.current!.intensity = 0.6;
         directionalLightRef.current!.color.setHex(0x6699ff);
@@ -1050,6 +990,12 @@ export default function ProductViewScreen() {
     unitRef.current = measurementUnit;
   }, [measurementUnit]);
 
+  // Use ref to keep product fresh in animation loop
+  const productRef = useRef(product);
+  useEffect(() => {
+    productRef.current = product;
+  }, [product]);
+
   // Update measurement lines when toggle changes or model loads
   const updateMeasurementLines = () => {
     const scene = sceneRef.current;
@@ -1072,108 +1018,127 @@ export default function ProductViewScreen() {
     }
 
     try {
-      // 1. Temporarily reset transformations to get LOCAL bounding box
-      const originalPos = model.position.clone();
-      const originalRot = model.rotation.clone();
-      const originalScale = model.scale.clone();
-
-      model.position.set(0, 0, 0);
-      model.rotation.set(0, 0, 0);
-      model.scale.set(1, 1, 1);
+      // Use WORLD SPACE coordinates from the scaled modelGroup
+      // This gives us complete control over line size
       model.updateMatrixWorld(true);
-
-      const box = new THREE.Box3().setFromObject(model);
-      const size = new THREE.Vector3();
-      box.getSize(size);
-      const min = box.min;
-      const max = box.max;
+      const scaledBox = new THREE.Box3().setFromObject(model);
+      const scaledSize = new THREE.Vector3();
+      scaledBox.getSize(scaledSize);
+      const min = scaledBox.min;
+      const max = scaledBox.max;
       const center = new THREE.Vector3();
-      box.getCenter(center);
+      scaledBox.getCenter(center);
 
-      // Restore transformations
-      model.position.copy(originalPos);
-      model.rotation.copy(originalRot);
-      model.scale.copy(originalScale);
-      model.updateMatrixWorld(true);
-
-      // Pre-calculate label 3D positions (Local Coordinates)
-      const zOffset = max.z + (size.z * 0.1);
+      // Pre-calculate label 3D positions (World Coordinates)
+      const pushFactor = 0.05;
+      const zOffset = max.z + (scaledSize.z * pushFactor);
       const widthY = min.y;
       const widthMid = new THREE.Vector3(center.x, widthY, zOffset);
 
-      const xOffset = min.x - (size.x * 0.1);
+      const xOffset = min.x - (scaledSize.x * pushFactor);
       const heightMid = new THREE.Vector3(xOffset, center.y, max.z);
 
       const depthMid = new THREE.Vector3(max.x, min.y, center.z);
 
-      // Update dimensions state & ref (Use Scaled Size?)
-      // Wait, if model is scaled 2x, the lines will be scaled 2x. 
-      // The VISUAL size matches. But the NUMBERS?
-      // box.getSize(size) returned unscaled size.
-      // We should display the SCALED size to the user?
-      // Usually "width" implied Real World Width.
-      // If the model is unit-scale (1 unit = 1 meter), scaling it 2x makes it 2 meters.
-      // So we should multiply size by scale.
-      const worldSize = size.clone().multiply(originalScale);
-
+      // Dimensions for UI display
       const dims = {
-        width: worldSize.x, height: worldSize.y, depth: worldSize.z,
+        width: scaledSize.x, height: scaledSize.y, depth: scaledSize.z,
         labelPoints: [
-          { name: 'Width', vec: widthMid, val: worldSize.x },
-          { name: 'Height', vec: heightMid, val: worldSize.y },
-          { name: 'Thickness', vec: depthMid, val: worldSize.z }
+          { name: 'Width', vec: widthMid, val: scaledSize.x },
+          { name: 'Height', vec: heightMid, val: scaledSize.y },
+          { name: 'Thickness', vec: depthMid, val: scaledSize.z }
         ]
       };
+      console.log('📏 Calculated dimensions (scaled):', dims);
+      console.log('📏 Scaled size:', scaledSize);
       setModelDimensions(dims);
       dimsRef.current = dims;
 
       const group = new THREE.Group();
-      const material = new THREE.LineBasicMaterial({
-        color: 0x3b82f6, // blue-500
-        depthTest: false,
-        transparent: true,
-        opacity: 0.7
-      });
 
-      // 1. Width Line (Bottom Front)
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+      // Helper function to create a thick line (Cylinder)
+      const createThickLine = (start: THREE.Vector3, end: THREE.Vector3, color: number) => {
+        const path = new THREE.Vector3().subVectors(end, start);
+        const length = path.length();
+        const thickness = 0.015 * (scaledSize.length() / 3); // Make relative to SCALED model size
+
+        const geometry = new THREE.CylinderGeometry(thickness, thickness, length, 8, 1);
+        geometry.translate(0, length / 2, 0);
+        geometry.rotateX(Math.PI / 2);
+
+        const material = new THREE.MeshBasicMaterial({ color: color });
+        const mesh = new THREE.Mesh(geometry, material);
+
+        mesh.position.copy(start);
+        mesh.lookAt(end);
+        return mesh;
+      };
+
+      const lineColor = 0x3b82f6; // Blue
+
+      // 1. Width Line (Bottom Front) - WORLD COORDINATES
+      group.add(createThickLine(
         new THREE.Vector3(min.x, widthY, zOffset),
-        new THREE.Vector3(max.x, widthY, zOffset)
-      ]), material));
+        new THREE.Vector3(max.x, widthY, zOffset),
+        lineColor
+      ));
+
       // Width Ticks
-      const tickSize = Math.min(size.x, size.y, size.z) * 0.1;
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(min.x, widthY - tickSize / 2, zOffset), new THREE.Vector3(min.x, widthY + tickSize / 2, zOffset)
-      ]), material));
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(max.x, widthY - tickSize / 2, zOffset), new THREE.Vector3(max.x, widthY + tickSize / 2, zOffset)
-      ]), material));
+      const tickSize = Math.min(scaledSize.x, scaledSize.y, scaledSize.z) * 0.1;
+      group.add(createThickLine(
+        new THREE.Vector3(min.x, widthY - tickSize / 2, zOffset),
+        new THREE.Vector3(min.x, widthY + tickSize / 2, zOffset),
+        lineColor
+      ));
+      group.add(createThickLine(
+        new THREE.Vector3(max.x, widthY - tickSize / 2, zOffset),
+        new THREE.Vector3(max.x, widthY + tickSize / 2, zOffset),
+        lineColor
+      ));
 
-      // 2. Height Line (Left Side)
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+      // 2. Height Line (Left Side) - WORLD COORDINATES
+      group.add(createThickLine(
         new THREE.Vector3(xOffset, min.y, max.z),
-        new THREE.Vector3(xOffset, max.y, max.z)
-      ]), material));
-      // Height Ticks
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(xOffset - tickSize / 2, min.y, max.z), new THREE.Vector3(xOffset + tickSize / 2, min.y, max.z)
-      ]), material));
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(xOffset - tickSize / 2, max.y, max.z), new THREE.Vector3(xOffset + tickSize / 2, max.y, max.z)
-      ]), material));
+        new THREE.Vector3(xOffset, max.y, max.z),
+        lineColor
+      ));
 
-      // 3. Depth Line (Right Side)
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+      // Height Ticks
+      group.add(createThickLine(
+        new THREE.Vector3(xOffset - tickSize / 2, min.y, max.z),
+        new THREE.Vector3(xOffset + tickSize / 2, min.y, max.z),
+        lineColor
+      ));
+      group.add(createThickLine(
+        new THREE.Vector3(xOffset - tickSize / 2, max.y, max.z),
+        new THREE.Vector3(xOffset + tickSize / 2, max.y, max.z),
+        lineColor
+      ));
+
+      // 3. Depth Line (Right Side) - WORLD COORDINATES
+      group.add(createThickLine(
         new THREE.Vector3(max.x, min.y, min.z),
-        new THREE.Vector3(max.x, min.y, max.z)
-      ]), material));
+        new THREE.Vector3(max.x, min.y, max.z),
+        lineColor
+      ));
+
+      // Depth Ticks (Start/End)
+      group.add(createThickLine(
+        new THREE.Vector3(max.x, min.y, min.z - tickSize / 2),
+        new THREE.Vector3(max.x, min.y, min.z + tickSize / 2),
+        lineColor
+      ));
+      group.add(createThickLine(
+        new THREE.Vector3(max.x, min.y, max.z - tickSize / 2),
+        new THREE.Vector3(max.x, min.y, max.z + tickSize / 2),
+        lineColor
+      ));
 
 
       measurementGroupRef.current = group;
 
-      // ATTACH TO MODEL, NOT SCENE
-      // This ensures lines rotate/scale/translate with the model
-      model.add(group);
+      // ATTACH TO SCENE (not model) since we're using world coordinates
+      scene.add(group);
 
       // Render update
       if (rendererRef.current && cameraRef.current) {
@@ -1209,10 +1174,32 @@ export default function ProductViewScreen() {
         return;
       }
 
-      // Apply rotations and camera distance
-      object.rotation.x = rotationRef.current.x;
-      object.rotation.y = rotationRef.current.y;
-      camera.position.z = cameraDistanceRef.current;
+      // Apply rotations to the GROUP (which is centered at 0,0,0)
+      // Apply rotations to Camera (Orbit)
+      // object.rotation is NOT used anymore for viewer interaction
+      object.rotation.set(0, 0, 0);
+
+      // Update Camera Position for Orbit
+
+
+      // Update Camera Position for Orbit
+      // Model remains static at (0,0,0). Camera moves around sphere.
+      object.rotation.set(0, 0, 0);
+
+      const dist = cameraDistanceRef.current;
+      const phi = rotationRef.current.x; // Elevation (0=Top, PI=Bottom)
+      const theta = rotationRef.current.y; // Azimuth
+
+      // Spherical to Cartesian (Y-up)
+      // Camera position on sphere surface
+      const x = dist * Math.sin(phi) * Math.sin(theta);
+      const y = dist * Math.cos(phi);
+      const z = dist * Math.sin(phi) * Math.cos(theta);
+
+      camera.position.set(x, y, z);
+      camera.lookAt(0, 0, 0); // Look at Center of Model Group
+
+
 
       // animate rain particles if present
       if (rainRef.current && rainVelocities.current) {
@@ -1270,22 +1257,35 @@ export default function ProductViewScreen() {
     const newLabels: any[] = [];
 
     labelPoints.forEach(p => {
-      // Transform Local Point to World Point using Model's Matrix
-      // This handles Rotation, Scale, and Position of the model correctly
-      const v = p.vec.clone().applyMatrix4(object.matrixWorld).project(camera);
+      // Label positions are already in WORLD SPACE (since we use scaledBox)
+      // Just project directly to screen coordinates
+      const v = p.vec.clone().project(camera);
 
-      // Check if in front of camera (NDC z is -1 to 1)
+      // Check if in front of camera
       if (v.z > 1 || v.z < -1) return;
 
       // Convert NDC to Screen Coords
       const x = (v.x * 0.5 + 0.5) * vModW;
       const y = (-(v.y * 0.5) + 0.5) * vModH;
 
-      // Format value
+      // Format value with OVERRIDE from product props if available
+      // This ensures we show the "Spec" dimensions, not the "Bounding Box" (which might include open doors)
       let val = p.val;
+
+      // Override logic
+      // Use productRef for latest values
+      const currentProduct = productRef.current;
+      // Use productRef for latest values
+      if (p.name === 'Width' && currentProduct?.width) val = parseFloat(currentProduct.width) / 1000;
+      if (p.name === 'Height' && currentProduct?.height) val = parseFloat(currentProduct.height) / 1000;
+      if (p.name === 'Thickness' && currentProduct?.thickness) val = parseFloat(currentProduct.thickness) / 1000;
+
+      // Convert to display unit
       let unitStr = unit;
       if (unit === 'mm') {
         val = val * 1000;
+        // If we used product prop which is already mm, this cancels out (x/1000 * 1000)
+        // If we used bounding box (meters), it converts to mm.
       } else if (unit === 'cm') {
         val = val * 100;
       }
@@ -1300,14 +1300,15 @@ export default function ProductViewScreen() {
     setMeasurementLabels(newLabels);
   };
 
-  // PanResponder for 3D controls
-  const panResponder = useRef(
+  // PanResponder for 3D controls - using useMemo to ensure updates during dev
+  const panResponder = React.useMemo(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
         if (evt.nativeEvent.touches.length === 1) {
-          lastRotation.current = { ...rotation };
+          // Use REF to get latest state, fixing "reset on tap" bug
+          lastRotation.current = { ...rotationRef.current };
         }
         if (evt.nativeEvent.touches.length === 2) {
           const [a, b] = evt.nativeEvent.touches;
@@ -1316,9 +1317,24 @@ export default function ProductViewScreen() {
       },
       onPanResponderMove: (evt, gestureState) => {
         if (evt.nativeEvent.touches.length === 1) {
+          // Map gestures to Orbit Angles
+          // dy -> phi (elevation/pitch)
+          // dx -> theta (azimuth/yaw)
+          // Map gestures to Orbit Angles (Spherical)
+          // Inverted controls for natural drag:
+          // Drag down (dy > 0) -> Move Scene DOWN -> Camera UP (phi decreases)
+          // Drag left (dx < 0) -> Move Scene LEFT -> Camera RIGHT (theta increases)
+          // So: Subtract delta.
+
+          const newPhi = lastRotation.current.x - gestureState.dy * 0.005;
+          const newTheta = lastRotation.current.y - gestureState.dx * 0.005;
+
+          // Clamp Phi to avoid flipping over poles (0.1 to PI-0.1)
+          const clampedPhi = Math.max(0.1, Math.min(Math.PI - 0.1, newPhi));
+
           setRotation({
-            x: lastRotation.current.x + gestureState.dy * 0.01,
-            y: lastRotation.current.y + gestureState.dx * 0.01,
+            x: clampedPhi,
+            y: newTheta,
           });
         }
         if (evt.nativeEvent.touches.length === 2) {
@@ -1326,7 +1342,7 @@ export default function ProductViewScreen() {
           const dist = Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
           if (lastDistance) {
             let delta = (dist - lastDistance) * 0.02;
-            setCameraDistance((prev) => Math.max(1, Math.min(10, prev - delta)));
+            setCameraDistance((prev) => Math.max(20, Math.min(1000, prev - delta * 5)));
           }
           setLastDistance(dist);
         }
@@ -1336,7 +1352,7 @@ export default function ProductViewScreen() {
       },
       onPanResponderTerminationRequest: () => false,
     })
-  ).current;
+    , []);
 
   // Optimized 3D Viewer (mobile friendly) with quick weather buttons overlay
   const render3DViewer = () => {
@@ -1360,7 +1376,7 @@ export default function ProductViewScreen() {
         {...panResponder.panHandlers}
       >
         <GLView
-          key={`viewer-${selectedModelIndex}`}
+          key={`viewer-${selectedModelIndex}-v975`}
           style={{ width: viewerWidth, height: viewerHeight, borderRadius: 16 }}
           onContextCreate={async (gl: any) => {
             console.log('🚀 GLView context created, initializing 3D scene...');
@@ -1379,14 +1395,15 @@ export default function ProductViewScreen() {
               // init scene/camera/renderer if missing
               if (!sceneRef.current) {
                 sceneRef.current = new THREE.Scene();
-                sceneRef.current.background = new THREE.Color(0xf2f2f2);
-                console.log('🎬 Scene created with light gray background');
+                sceneRef.current.background = new THREE.Color(0x87CEEB); // Light Blue
+                console.log('🎬 Scene created with light blue background');
               }
               if (!cameraRef.current) {
                 cameraRef.current = new THREE.PerspectiveCamera(60, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 1000);
+                // Initial position - will be updated after model loads
                 cameraRef.current.position.set(0, 0, cameraDistanceRef.current);
-                cameraRef.current.lookAt(0, 0, 0); // Make sure camera looks at origin
-                console.log('📷 Camera positioned at:', cameraRef.current.position, 'looking at origin');
+                cameraRef.current.lookAt(0, 0, 0);
+                console.log('📷 Camera created');
               }
               // Polyfill a canvas to prevent THREE from touching `document`
               const expogl: any = gl;
@@ -1450,76 +1467,107 @@ export default function ProductViewScreen() {
                 console.log(`Initial background set for ${weatherMode}`);
               }
 
-              // Use cached model when available
-              const cached = modelCache.current.get(targetUrl);
-              if (cached) {
-                console.log('Using cached model for:', targetUrl);
-                const inst = cached.clone ? cached.clone() : cached;
-                scene.add(inst);
-                currentModelRef.current = inst;
-                updateMeasurementLines();
-                setModelLoading(false);
-                startAnimationLoop(scene, camera, renderer, inst as THREE.Object3D, gl, viewerWidth, viewerHeight);
-                return;
-              }
+              // CACHE DISABLED: Force proper centering on every load
+              // This ensures camera orbit works correctly
+              // const cached = modelCache.current.get(targetUrl);
+              // if (cached) {
+              //   console.log('Using cached model for:', targetUrl);
+              //   const inst = cached.clone ? cached.clone() : cached;
+              //   scene.add(inst);
+              //   currentModelRef.current = inst;
+              //   updateMeasurementLines();
+              //   setModelLoading(false);
+              //   startAnimationLoop(scene, camera, renderer, inst as THREE.Object3D, gl, viewerWidth, viewerHeight);
+              //   return;
+              // }
 
               let finalModel: THREE.Object3D;
+              const lowerUrl = targetUrl.toLowerCase();
 
-              // Attempt to load proper format based on extension
               if (targetUrl !== 'fallback') {
                 try {
-                  console.log('🔄 Attempting to load 3D model:', targetUrl);
-
-                  if (!targetUrl || targetUrl.trim() === '') {
+                  if (targetUrl) {
+                    finalModel = await loadGLBModel(targetUrl, product.id);
+                  } else {
                     throw new Error("Empty URL");
                   }
-
-                  let model3D: THREE.Object3D;
-                  const lowerUrl = targetUrl.toLowerCase();
-
-                  if (lowerUrl.includes('.fbx')) {
-                    model3D = await loadSupabaseFBXModel(targetUrl, product.id);
-                  } else {
-                    // Default to GLB (most common)
-                    try {
-                      model3D = await loadGLBModel(targetUrl, product.id);
-                    } catch (glbError: any) {
-                      // Fallback: If GLB failed with JSON/Parse error, it might be an FBX file with wrong/missing extension
-                      console.warn('⚠️ Standard GLB load failed, checking for FBX fallback...', glbError);
-                      const errStr = String(glbError);
-                      if (errStr.includes('Unexpected character') || errStr.includes('JSON') || errStr.includes('SyntaxError')) {
-                        console.log('🔄 Retrying as FBX model...');
-                        model3D = await loadSupabaseFBXModel(targetUrl, product.id);
-                      } else {
-                        throw glbError;
-                      }
-                    }
-                  }
-
-                  // Common processing (shadows etc are already done in loaders but good to ensure)
-                  processGLBMaterials(model3D);
-                  finalModel = model3D;
-                  console.log('✅ 3D model loaded successfully');
+                  console.log('3D model loaded successfully');
                 } catch (err) {
-                  console.warn('❌ Model load failed, using fallback:', err);
+                  console.warn('Model load failed, using fallback:', err);
                   finalModel = createFallbackModel();
                 }
               } else {
-                console.log('🔶 Using fallback model directly');
+                console.log('Using fallback model directly');
                 finalModel = createFallbackModel();
               }
 
-              // Process materials and add to scene
+              // Website approach: Use a Group to hold the model
+              finalModel.updateMatrixWorld(true); // Ensure transforms are applied
+              const rawBox = new THREE.Box3().setFromObject(finalModel);
+              const rawCenter = rawBox.getCenter(new THREE.Vector3());
+              const rawSize = rawBox.getSize(new THREE.Vector3());
+
+              console.log('Raw Model Center:', rawCenter);
+              console.log('Raw Model Size:', rawSize);
+
+              // Create a group to hold the model
+              const modelGroup = new THREE.Group();
+
+              // Position model INSIDE the group (Centered exactly)
+              // Orbit controls look at (0,0,0), so center model at (0,0,0)
+              finalModel.position.set(-rawCenter.x, -rawCenter.y, -rawCenter.z);
+              modelGroup.add(finalModel);
+
+              // Scale the GROUP (not the model directly)
+              const maxDimension = Math.max(rawSize.x, rawSize.y, rawSize.z);
+              if (maxDimension > 0) {
+                const targetSize = 100;
+                const scale = targetSize / maxDimension;
+                modelGroup.scale.setScalar(scale);
+                console.log(`Scaled group by ${scale.toFixed(3)}`);
+              }
+
+              modelGroup.position.set(0, 0, 0);
+              /* OLD LOGIC COMMENTED OUT
+                console.log(`⚖️ Auto-scaling model by ${scaleFactor} (Raw size: ${maxDim})`);
+              */
+
+
               processGLBMaterials(finalModel);
               modelCache.current.set(targetUrl, finalModel.clone ? finalModel.clone() : finalModel);
-              scene.add(finalModel);
-              currentModelRef.current = finalModel;
+
+              // Add GROUP to scene (not the model directly)
+              scene.add(modelGroup);
+              // CRITICAL: Store the GROUP (not raw model) so measurements scale correctly
+              currentModelRef.current = modelGroup;
+
+              // Calculate camera position based on SCALED bounds
+              const scaledBounds = new THREE.Box3().setFromObject(modelGroup);
+              const boundsCenter = scaledBounds.getCenter(new THREE.Vector3());
+              const boundsSize = scaledBounds.getSize(new THREE.Vector3());
+              const maxScaledDim = Math.max(boundsSize.x, boundsSize.y, boundsSize.z);
+
+              // Website camera formula (adjusted for closer view)
+              const distance = maxScaledDim * 1.5;
+
+              // Set initial zoom state
+              setCameraDistance(distance);
+              cameraDistanceRef.current = distance;
+              defaultDistanceRef.current = distance;
+
+              // Initial position (will be updated by loop immediately)
+              cameraRef.current.position.set(0, 0, distance);
+              cameraRef.current.lookAt(0, 0, 0);
+
+              console.log(`Camera positioned at distance ${distance.toFixed(1)}`);
+
               updateMeasurementLines();
               setLoadingProgress(100);
               setModelLoading(false);
 
-              console.log('🎯 Model added to scene, starting animation loop');
-              startAnimationLoop(scene, camera, renderer, finalModel, gl, viewerWidth, viewerHeight);
+              console.log('Model added, starting animation');
+              // Pass modelGroup to rotate the whole centered group
+              startAnimationLoop(scene, camera, renderer, modelGroup, gl, viewerWidth, viewerHeight);
             } catch (error) {
               console.error('3D viewer init error', error);
               setModelLoading(false);
@@ -1527,6 +1575,16 @@ export default function ProductViewScreen() {
             }
           }}
         />
+
+        {/* Zoom Controls */}
+        <View style={styles.zoomControls}>
+          <TouchableOpacity style={styles.zoomButton} onPress={() => setCameraDistance(d => Math.max(20, d * 0.8))}>
+            <Ionicons name="add" size={24} color="#333" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.zoomButton} onPress={() => setCameraDistance(d => Math.min(10000, d * 1.25))}>
+            <Ionicons name="remove" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
 
         {/* model selector (if multiple) */}
         {Array.isArray(product?.glb_urls) && product.glb_urls.length > 1 && (
@@ -1579,6 +1637,7 @@ export default function ProductViewScreen() {
           </TouchableOpacity>
         </View>
 
+
         {/* Measurement Labels */}
         {showMeasurements && measurementLabels.map((lbl, i) => (
           <View key={i} style={[styles.measurementLabel, { left: lbl.x, top: lbl.y }]}>
@@ -1603,19 +1662,32 @@ export default function ProductViewScreen() {
               <View style={styles.measurementRow}>
                 <Text style={styles.measurementLabelText}>Width</Text>
                 <Text style={styles.measurementValueText}>
-                  {dimsRef.current ? (measurementUnit === 'mm' ? (dimsRef.current.width * 1000).toFixed(0) : (dimsRef.current.width * 100).toFixed(1)) : '-'} {measurementUnit}
+                  {(() => {
+                    const widthVal = product?.width ? parseFloat(product.width) : (dimsRef.current?.width ? dimsRef.current.width * 1000 : 0);
+                    // widthVal is in mm
+                    if (measurementUnit === 'mm') return widthVal.toFixed(0);
+                    return (widthVal / 10).toFixed(1);
+                  })()} {measurementUnit}
                 </Text>
               </View>
               <View style={styles.measurementRow}>
                 <Text style={styles.measurementLabelText}>Height</Text>
                 <Text style={styles.measurementValueText}>
-                  {dimsRef.current ? (measurementUnit === 'mm' ? (dimsRef.current.height * 1000).toFixed(0) : (dimsRef.current.height * 100).toFixed(1)) : '-'} {measurementUnit}
+                  {(() => {
+                    const heightVal = product?.height ? parseFloat(product.height) : (dimsRef.current?.height ? dimsRef.current.height * 1000 : 0);
+                    if (measurementUnit === 'mm') return heightVal.toFixed(0);
+                    return (heightVal / 10).toFixed(1);
+                  })()} {measurementUnit}
                 </Text>
               </View>
               <View style={styles.measurementRow}>
                 <Text style={styles.measurementLabelText}>Thickness</Text>
                 <Text style={styles.measurementValueText}>
-                  {dimsRef.current ? (measurementUnit === 'mm' ? (dimsRef.current.depth * 1000).toFixed(0) : (dimsRef.current.depth * 100).toFixed(1)) : '-'} {measurementUnit}
+                  {(() => {
+                    const depthVal = product?.thickness ? parseFloat(product.thickness) : (dimsRef.current?.depth ? dimsRef.current.depth * 1000 : 0);
+                    if (measurementUnit === 'mm') return depthVal.toFixed(0);
+                    return (depthVal / 10).toFixed(1);
+                  })()} {measurementUnit}
                 </Text>
               </View>
 
@@ -2571,5 +2643,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: 'bold'
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 12,
+    bottom: 80, // Above "Reset View" button
+    gap: 8,
+    zIndex: 999, // Ensure it's on top
+    elevation: 999, // Android elevation
+  },
+  zoomButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 4,
   }
 });
