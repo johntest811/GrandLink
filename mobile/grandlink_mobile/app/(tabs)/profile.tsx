@@ -13,15 +13,6 @@ export default function ProfileScreen() {
   const [completedCount, setCompletedCount] = useState(0);
   const [cancelledCount, setCancelledCount] = useState(0);
   const [reservationsCount, setReservationsCount] = useState(0);
-  const [showAddressModal, setShowAddressModal] = useState(false);
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [email, setEmail] = useState('');
-  const [address, setAddress] = useState('');
-  const [savedAddress, setSavedAddress] = useState<any>(null);
-  const [loadingAddress, setLoadingAddress] = useState(false);
-  const [savingAddress, setSavingAddress] = useState(false);
   const [deletingAddress, setDeletingAddress] = useState(false);
   const router = useRouter();
 
@@ -44,7 +35,6 @@ export default function ProfileScreen() {
       // load counts when user is available
       await loadCartCount();
       await loadOrdersCounts();
-      await loadUserAddress();
     };
     fetchUser();
   }, []);
@@ -78,7 +68,7 @@ export default function ProfileScreen() {
         .eq('user_id', authData.user.id)
         .eq('item_type', 'order')
         .not('status', 'in', '(cancelled,completed)');
-      
+
       if (!ordersError) setOrdersCount(ordersCount ?? 0);
 
       // Count completed orders
@@ -88,7 +78,7 @@ export default function ProfileScreen() {
         .eq('user_id', authData.user.id)
         .eq('item_type', 'order')
         .eq('status', 'completed');
-      
+
       if (!completedError) setCompletedCount(completedCount ?? 0);
 
       // Count cancelled orders
@@ -98,7 +88,7 @@ export default function ProfileScreen() {
         .eq('user_id', authData.user.id)
         .eq('item_type', 'order')
         .or('status.eq.cancelled,order_status.eq.cancelled');
-      
+
       if (!cancelledError) setCancelledCount(cancelledCount ?? 0);
 
       // Count reservations (paid items pending admin approval)
@@ -107,118 +97,13 @@ export default function ProfileScreen() {
         .select('*', { count: 'exact', head: true })
         .eq('user_id', authData.user.id)
         .eq('item_type', 'reservation');
-      
+
       if (!reservationsError) setReservationsCount(reservationsCount ?? 0);
     } catch (e: any) {
       console.error('Failed to load order counts', e);
     }
   };
 
-  const loadUserAddress = async () => {
-    try {
-      setLoadingAddress(true);
-      const { data: authData } = await supabase.auth.getUser();
-      if (!authData?.user) return;
-
-      const { data, error } = await supabase
-        .from('addresses')
-        .select('*')
-        .eq('user_id', authData.user.id)
-        .eq('is_default', true)
-        .maybeSingle();
-
-      if (error) {
-        // Don't throw error, just log it - table might not exist yet
-        console.error('Load address error:', error);
-        return;
-      }
-      
-      if (data) {
-        setSavedAddress(data);
-        // Try to split full_name if first_name/last_name aren't available
-        if (data.first_name && data.last_name) {
-          setFirstName(data.first_name);
-          setLastName(data.last_name);
-        } else if (data.full_name) {
-          const nameParts = data.full_name.split(' ');
-          setFirstName(nameParts[0] || '');
-          setLastName(nameParts.slice(1).join(' ') || '');
-        }
-        setPhoneNumber(data.phone || '');
-        setEmail(data.email || '');
-        setAddress(data.address || '');
-      }
-    } catch (e: any) {
-      // Failed to load address
-    } finally {
-      setLoadingAddress(false);
-    }
-  };
-
-  const openAddressModal = () => {
-    setShowAddressModal(true);
-  };
-
-  const closeAddressModal = () => {
-    setShowAddressModal(false);
-  };
-
-  const saveAddress = async () => {
-    try {
-      // Validate required fields
-      if (!firstName.trim() || !lastName.trim() || !phoneNumber.trim() || !email.trim() || !address.trim()) {
-        Alert.alert('Missing Information', 'Please fill in all required fields.');
-        return;
-      }
-
-      setSavingAddress(true);
-      const { data: authData } = await supabase.auth.getUser();
-      if (!authData?.user) {
-        Alert.alert('Error', 'Please sign in to save address.');
-        return;
-      }
-
-      const addressRecord = {
-        user_id: authData.user.id,
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        full_name: `${firstName.trim()} ${lastName.trim()}`,
-        phone: phoneNumber.trim(),
-        email: email.trim(),
-        address: address.trim(),
-        is_default: true,
-      };
-
-      if (savedAddress) {
-        // Update existing address
-        const { data, error } = await supabase
-          .from('addresses')
-          .update(addressRecord)
-          .eq('id', savedAddress.id)
-          .select();
-
-        if (error) throw error;
-      } else {
-        // Insert new address
-        const { data, error } = await supabase
-          .from('addresses')
-          .insert(addressRecord)
-          .select();
-
-        if (error) throw error;
-      }
-
-      Alert.alert('Success', 'Your address has been saved successfully!');
-      await loadUserAddress();
-      closeAddressModal();
-    } catch (e: any) {
-      console.error('Save address error:', JSON.stringify(e, null, 2));
-      const errorMsg = e?.message || e?.error_description || e?.hint || e?.details || 'Unknown error';
-      Alert.alert('Error', `Failed to save address: ${errorMsg}`);
-    } finally {
-      setSavingAddress(false);
-    }
-  };
 
   const handleLogout = async () => {
     Alert.alert(
@@ -226,9 +111,9 @@ export default function ProfileScreen() {
       'Are you sure you want to logout?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Logout', 
-          style: 'destructive', 
+        {
+          text: 'Logout',
+          style: 'destructive',
           onPress: async () => {
             await supabase.auth.signOut();
             router.replace('/login');
@@ -239,56 +124,6 @@ export default function ProfileScreen() {
     );
   };
 
-  const confirmDeleteAddress = () => {
-    if (!savedAddress) {
-      Alert.alert('No address', 'There is no saved address to delete.');
-      return;
-    }
-
-    Alert.alert(
-      'Delete address',
-      'Are you sure you want to delete your saved address?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: handleDeleteAddress },
-      ],
-    );
-  };
-
-  const handleDeleteAddress = async () => {
-    try {
-      if (!savedAddress) return;
-      setDeletingAddress(true);
-      const { data: authData } = await supabase.auth.getUser();
-      if (!authData?.user) {
-        Alert.alert('Error', 'Please sign in to delete an address.');
-        return;
-      }
-
-      const { error } = await supabase
-        .from('addresses')
-        .delete()
-        .eq('id', savedAddress.id)
-        .eq('user_id', authData.user.id);
-
-      if (error) throw error;
-
-      setSavedAddress(null);
-      setFirstName('');
-      setLastName('');
-      setPhoneNumber('');
-      setEmail('');
-      setAddress('');
-      Alert.alert('Removed', 'Address deleted successfully.');
-      closeAddressModal();
-    } catch (e: any) {
-      console.error('Delete address error:', e);
-      const errorMsg = e?.message || 'Failed to delete address.';
-      Alert.alert('Error', errorMsg);
-    } finally {
-      setDeletingAddress(false);
-    }
-  };
 
   const openCart = () => {
     router.push('../cart');
@@ -325,11 +160,11 @@ export default function ProfileScreen() {
         {/* Purchases Section */}
         <Text style={styles.sectionTitle}>My Purchases</Text>
         <View style={styles.purchasesRow}>
-           <Pressable
+          <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
             onPress={openCart}
-           >
+          >
             {({ pressed }) => (
               <>
                 <View style={styles.iconContainer}>
@@ -344,11 +179,11 @@ export default function ProfileScreen() {
               </>
             )}
           </Pressable>
-           <Pressable
+          <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
             onPress={() => router.push('../reservation')}
-           >
+          >
             {({ pressed }) => (
               <>
                 <View style={styles.iconContainer}>
@@ -362,12 +197,12 @@ export default function ProfileScreen() {
                 <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Reservation</Text>
               </>
             )}
-           </Pressable>
-           <Pressable
+          </Pressable>
+          <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
             onPress={() => router.push('../orders')}
-           >
+          >
             {({ pressed }) => (
               <>
                 <View style={styles.iconContainer}>
@@ -381,12 +216,12 @@ export default function ProfileScreen() {
                 <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Orders</Text>
               </>
             )}
-           </Pressable>
-           <Pressable
+          </Pressable>
+          <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
             onPress={() => router.push('../completed')}
-           >
+          >
             {({ pressed }) => (
               <>
                 <View style={styles.iconContainer}>
@@ -400,12 +235,12 @@ export default function ProfileScreen() {
                 <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Completed</Text>
               </>
             )}
-           </Pressable>
-           <Pressable
+          </Pressable>
+          <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.purchaseItem, pressed && styles.purchaseItemPressed]}
             onPress={() => router.push('../cancelled')}
-           >
+          >
             {({ pressed }) => (
               <>
                 <View style={styles.iconContainer}>
@@ -419,32 +254,12 @@ export default function ProfileScreen() {
                 <Text style={[styles.purchaseLabel, pressed && { color: '#8B1C1C' }]}>Cancelled</Text>
               </>
             )}
-           </Pressable>
+          </Pressable>
         </View>
         <View style={styles.divider} />
 
         {/* Settings List */}
         <View style={styles.menuList}>
-          <Pressable
-            android_ripple={{ color: '#8B1C1C' }}
-            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
-            onPress={openAddressModal}
-          >
-            {({ pressed }) => (
-              <>
-                <FontAwesome5 name="address-book" size={22} color={pressed ? '#8B1C1C' : '#000'} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>My Address</Text>
-                  {savedAddress && (
-                    <Text style={styles.addressPreview} numberOfLines={1}>
-                      {savedAddress.address}
-                    </Text>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={pressed ? '#8B1C1C' : '#000'} />
-              </>
-            )}
-          </Pressable>
           <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
@@ -477,7 +292,7 @@ export default function ProfileScreen() {
             {({ pressed }) => (
               <>
                 <MaterialIcons name="live-help" size={22} color={pressed ? '#8B1C1C' : '#000'} />
-                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000'}]}>FAQs</Text>
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>FAQs</Text>
               </>
             )}
           </Pressable>
@@ -496,7 +311,19 @@ export default function ProfileScreen() {
           <Pressable
             android_ripple={{ color: '#8B1C1C' }}
             style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
-            onPress={openAddressModal}
+            onPress={() => router.push('../ChangeAddress')}
+          >
+            {({ pressed }) => (
+              <>
+                <Ionicons name="location" size={22} color={pressed ? '#8B1C1C' : '#000'} />
+                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>My Addresses</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            android_ripple={{ color: '#8B1C1C' }}
+            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+            onPress={() => router.push('../inquire')}
           >
             {({ pressed }) => (
               <>
@@ -536,107 +363,6 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
 
-      {/* Address Modal */}
-      <Modal
-        visible={showAddressModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={closeAddressModal}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>My Address</Text>
-              <TouchableOpacity onPress={closeAddressModal}>
-                <Ionicons name="close" size={28} color="#222" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-              <View style={styles.row}>
-                <View style={styles.halfWidth}>
-                  <Text style={styles.inputLabel}>First Name *</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="First Name"
-                    value={firstName}
-                    onChangeText={setFirstName}
-                  />
-                </View>
-                <View style={styles.halfWidth}>
-                  <Text style={styles.inputLabel}>Last Name *</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Last Name"
-                    value={lastName}
-                    onChangeText={setLastName}
-                  />
-                </View>
-              </View>
-
-              <Text style={styles.inputLabel}>Phone Number *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Phone Number"
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                keyboardType="phone-pad"
-              />
-
-              <Text style={styles.inputLabel}>Email *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Email"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-
-              <Text style={styles.inputLabel}>Address *</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                placeholder="e.g., 123 Main Street, Barangay San Jose, Makati City, Metro Manila 1920"
-                value={address}
-                onChangeText={setAddress}
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
-
-              <TouchableOpacity 
-                style={[styles.saveButton, savingAddress && styles.saveButtonDisabled]} 
-                onPress={saveAddress}
-                disabled={savingAddress}
-              >
-                {savingAddress ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.saveButtonText}>Save Address</Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.cancelButton} onPress={closeAddressModal}>
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-
-              {savedAddress && (
-                <TouchableOpacity
-                  style={[styles.deleteButton, deletingAddress && styles.deleteButtonDisabled]}
-                  onPress={confirmDeleteAddress}
-                  disabled={deletingAddress}
-                >
-                  {deletingAddress ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={styles.deleteButtonText}>Delete Saved Address</Text>
-                  )}
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
 
       {/* Modern Bottom Navbar */}
       <BottomNavBar />

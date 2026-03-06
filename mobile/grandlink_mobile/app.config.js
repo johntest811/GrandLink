@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 export default {
   expo: {
-    name: "Grand East",
+    name: "GrandEast",
     slug: "grandlink_mobile",
     version: "1.0.0",
     orientation: "portrait",

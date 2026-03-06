@@ -40,12 +40,17 @@ export default function PaymentScreen() {
   const params = useLocalSearchParams();
   const appState = useRef(AppState.currentState);
   const [awaitingReturn, setAwaitingReturn] = useState(false);
-  
+
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [address, setAddress] = useState<string>('');
-  const [savedAddressData, setSavedAddressData] = useState<any>(null);
-  const [branch, setBranch] = useState<string>('');
+  const [fullName, setFullName] = useState<string>('');
+  const [email, setEmail] = useState<string>('');
+  const [phone, setPhone] = useState<string>('');
+  const [street, setStreet] = useState<string>('');
+  const [addressLine2, setAddressLine2] = useState<string>('');
+  const [city, setCity] = useState<string>('');
+  const [stateRegion, setStateRegion] = useState<string>('');
+  const [zipCode, setZipCode] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('paymongo');
   const [discountCode, setDiscountCode] = useState<string>('');
@@ -53,13 +58,15 @@ export default function PaymentScreen() {
   const [applyingDiscount, setApplyingDiscount] = useState(false);
   const [colorCustomization, setColorCustomization] = useState(false);
   const [customColor, setCustomColor] = useState('');
+  const [savedAddresses, setSavedAddresses] = useState<any[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<string>('manual');
 
   const RESERVATION_FEE = 500;
   const COLOR_CUSTOMIZATION_PRICE = 2500;
 
   useEffect(() => {
     loadCartItems();
-    loadUserAddress();
+    loadSavedAddresses();
   }, []); // Run only once on mount
 
   // When the user returns to the app after opening the PayMongo checkout in the browser,
@@ -80,7 +87,8 @@ export default function PaymentScreen() {
     return () => sub.remove();
   }, [awaitingReturn]);
 
-  const loadUserAddress = async () => {
+
+  const loadSavedAddresses = async () => {
     try {
       const { data: authData } = await supabase.auth.getUser();
       if (!authData?.user) return;
@@ -89,18 +97,53 @@ export default function PaymentScreen() {
         .from('addresses')
         .select('*')
         .eq('user_id', authData.user.id)
-        .eq('is_default', true)
-        .maybeSingle();
+        .order('is_default', { ascending: false });
 
-      if (data) {
-        setSavedAddressData(data);
-        // Format the full address
-        const fullAddress = `${data.full_name || ''}\n${data.phone || ''}\n${data.address || ''}`.trim();
-        setAddress(fullAddress);
-      }
-    } catch (e: any) {
-      console.error('Failed to load address', e);
+      if (error) throw error;
+      setSavedAddresses(data || []);
+      // Don't auto-fill; user must explicitly select from the picker
+    } catch (e) {
+      console.error('Failed to load saved addresses', e);
     }
+  };
+
+  const fillFormWithAddress = (addr: any) => {
+    setFullName(addr.full_name || '');
+    setEmail(addr.email || '');
+    setPhone(addr.phone || '');
+
+    // The address is stored as JSON; parse to get granular fields
+    try {
+      const parsed = JSON.parse(addr.address);
+      if (parsed && typeof parsed === 'object' && parsed.street) {
+        setStreet(parsed.street || '');
+        setAddressLine2(parsed.addressLine2 || '');
+        setCity(parsed.city || '');
+        setStateRegion(parsed.stateRegion || '');
+        setZipCode(parsed.zipCode || '');
+      } else {
+        // Fallback: put the whole address string into street field
+        setStreet(addr.address || '');
+        setAddressLine2('');
+        setCity('');
+        setStateRegion('');
+        setZipCode('');
+      }
+    } catch (e) {
+      // Legacy plain text address
+      setStreet(addr.address || '');
+      setAddressLine2('');
+      setCity('');
+      setStateRegion('');
+      setZipCode('');
+    }
+
+    setSelectedAddressId(addr.id);
+  };
+
+  const manualEdit = (setter: (v: string) => void, val: string) => {
+    setter(val);
+    setSelectedAddressId('manual');
   };
 
   const loadCartItems = async () => {
@@ -113,7 +156,7 @@ export default function PaymentScreen() {
         router.replace('/login');
         return;
       }
-      
+
       // Get selected item IDs from navigation params
       let selectedIds: string[] = [];
       if (params.selectedIds) {
@@ -123,48 +166,48 @@ export default function PaymentScreen() {
           console.error('Failed to parse selectedIds', e);
         }
       }
-      
+
+      // Use the same 'cart' table as cart screen for consistency
       let query = supabase
-        .from('user_items')
+        .from('cart')
         .select(`
           id,
           product_id,
           quantity,
-          price,
+          meta,
           products (
             name,
             image1,
+            price,
             category,
             material
           )
         `)
         .eq('user_id', authData.user.id)
-        .eq('item_type', 'order')
-        .eq('status', 'active')
         .order('created_at', { ascending: false });
-      
+
       // If specific items were selected, filter by those IDs
       if (selectedIds.length > 0) {
         query = query.in('id', selectedIds);
       }
-      
+
       const { data, error } = await query;
-      
+
       if (error) throw error;
-      
+
       // Transform data to match CartItem type
       const items = (data ?? []).map((item: any) => ({
         id: item.id,
         product_id: item.product_id,
         name: item.products?.name || 'Unknown Product',
         qty: item.quantity || 1,
-        price: item.price || 0,
+        price: item.products?.price || 0, // Get price from products table  
         image: item.products?.image1 || null,
         category: item.products?.category || '',
         material: item.products?.material || '',
       }));
       setCartItems(items as CartItem[]);
-      
+
       if (items.length === 0) {
         Alert.alert('Empty Cart', 'Your cart is empty. Please add items first.', [
           { text: 'OK', onPress: () => router.back() }
@@ -195,10 +238,10 @@ export default function PaymentScreen() {
       console.log('Discount Amount: No discount applied');
       return 0;
     }
-    
+
     const value = parseFloat(appliedDiscount.value) || 0;
     console.log('Discount calculation - Type:', appliedDiscount.type, 'Value:', value, 'SubtotalWithAddOns:', subtotalWithAddOns);
-    
+
     let discount = 0;
     if (appliedDiscount.type === 'percent') {
       discount = (subtotalWithAddOns * value) / 100;
@@ -207,13 +250,13 @@ export default function PaymentScreen() {
       discount = value;
       console.log('Fixed discount applied:', discount);
     }
-    
+
     console.log('Final discount amount:', discount);
     return discount;
   }, [appliedDiscount, subtotalWithAddOns]);
 
   const totalProductValue = subtotalWithAddOns - discountAmount;
-  
+
   console.log('=== PRICE BREAKDOWN ===');
   console.log('Subtotal:', subtotal);
   console.log('Add-ons:', addOnsTotal);
@@ -221,7 +264,7 @@ export default function PaymentScreen() {
   console.log('Discount amount:', discountAmount);
   console.log('Total product value:', totalProductValue);
   console.log('=======================');
-  
+
   const remainingBalance = Math.max(0, totalProductValue - RESERVATION_FEE);
 
   const formatCurrency = (v: number) =>
@@ -235,20 +278,20 @@ export default function PaymentScreen() {
 
     try {
       setApplyingDiscount(true);
-      
+
       const codeToCheck = discountCode.trim();
       console.log('========== DISCOUNT CODE DEBUG ==========');
       console.log('1. Input code:', codeToCheck);
       console.log('2. Uppercase code:', codeToCheck.toUpperCase());
-      
+
       // First, try to get all discount codes to test RLS
       const { data: allCodes, error: allError } = await supabase
         .from('discount_codes')
         .select('code, active');
-      
+
       console.log('3. All discount codes in database:', allCodes);
       console.log('4. RLS Error (if any):', allError);
-      
+
       // Try exact match first (case-insensitive)
       const { data, error } = await supabase
         .from('discount_codes')
@@ -279,7 +322,7 @@ export default function PaymentScreen() {
       // Check if code is active
       const isActive = data.active === true || data.active === 'true' || data.active === 1 || data.active === '1';
       console.log('12. Is active check result:', isActive);
-      
+
       if (!isActive) {
         Alert.alert('Invalid Code', 'This discount code is no longer active.');
         return;
@@ -331,7 +374,7 @@ export default function PaymentScreen() {
 
       console.log('17. ✅ All checks passed! Applying discount...');
       setAppliedDiscount(data);
-      
+
       const discountValue = parseFloat(data.value) || 0;
       const discountType = data.type === 'percent' ? 'percentage' : 'fixed amount';
       Alert.alert('Success!', `Discount code "${data.code}" applied!\n\n${discountValue}${data.type === 'percent' ? '%' : ' PHP'} ${discountType} discount`);
@@ -375,8 +418,16 @@ export default function PaymentScreen() {
           quantity: item.qty,
           price: item.price,
         })),
-        address: savedAddressData || { address },
-        branch,
+        address: {
+          fullName,
+          email,
+          phone,
+          addressLine1: street,
+          addressLine2,
+          city,
+          stateRegion,
+          zipCode
+        },
         notes,
         add_ons: colorCustomization ? {
           color_customization: {
@@ -426,7 +477,9 @@ export default function PaymentScreen() {
             reference_number: `GE-${Date.now()}`,
             metadata: {
               user_id: authData.user.id,
-              branch: branch,
+              address: `${street}${addressLine2 ? ', ' + addressLine2 : ''}, ${city}, ${stateRegion}, ${zipCode}`,
+              customer_name: fullName,
+              customer_phone: phone,
               has_discount: appliedDiscount ? 'yes' : 'no',
               has_addon: colorCustomization ? 'yes' : 'no',
             }
@@ -455,10 +508,72 @@ export default function PaymentScreen() {
         console.log('Checkout URL:', checkoutUrl);
         console.log('Payment Session ID:', sessionId);
 
+        // --- SAVE TO DATABASE ---
+        // Create records in 'user_items' for each product in the cart
+        const fullFormattedAddress = [
+          `Full Name: ${fullName}`,
+          `Email: ${email}`,
+          `Phone: ${phone}`,
+          `Address: ${street}${addressLine2 ? ', ' + addressLine2 : ''}, ${city}, ${stateRegion}, ${zipCode}`
+        ].join('\n');
+
+        const orderRecords = cartItems.map(item => ({
+          user_id: authData.user.id,
+          product_id: item.product_id,
+          item_type: 'order',
+          quantity: item.qty,
+          price: item.price,
+          total_amount: (item.price ?? 0) * (item.qty ?? 1),
+          status: 'pending',
+          order_status: 'pending',
+          payment_status: 'pending',
+          delivery_address: fullFormattedAddress,
+          special_instructions: notes,
+          payment_session_id: sessionId,
+          meta: {
+            add_ons: colorCustomization ? {
+              color_customization: {
+                enabled: true,
+                color: customColor,
+                price: COLOR_CUSTOMIZATION_PRICE,
+              }
+            } : null,
+            discount: appliedDiscount ? {
+              code: appliedDiscount.code,
+              amount: discountAmount,
+            } : null,
+            contact_info: {
+              fullName,
+              email,
+              phone
+            },
+            detailed_address: {
+              street,
+              addressLine2,
+              city,
+              stateRegion,
+              zipCode
+            }
+          }
+        }));
+
+        const { error: dbError } = await supabase.from('user_items').insert(orderRecords);
+
+        if (dbError) {
+          console.error('Failed to save order to database:', dbError);
+          // We continue anyway since PayMongo session is already created, 
+          // but we log it for debugging.
+        } else {
+          // Clear cart items that were just ordered
+          const cartItemIds = cartItems.map(i => i.id);
+          await supabase.from('cart').delete().in('id', cartItemIds);
+        }
+        // -------------------------
+
         // Open PayMongo checkout in browser
         const { Linking } = require('react-native');
         const canOpen = await Linking.canOpenURL(checkoutUrl);
-        
+
         if (canOpen) {
           setAwaitingReturn(true);
           await Linking.openURL(checkoutUrl);
@@ -483,12 +598,19 @@ export default function PaymentScreen() {
   };
 
   const onReserve = () => {
-    if (!address) {
-      Alert.alert('Missing info', 'Please select or enter a delivery address.');
-      return;
-    }
-    if (!branch) {
-      Alert.alert('Missing info', 'Please select a store branch.');
+    const requiredFields = [
+      { val: fullName, label: 'Full Name' },
+      { val: email, label: 'Email' },
+      { val: phone, label: 'Phone' },
+      { val: street, label: 'Address Line 1' },
+      { val: city, label: 'City' },
+      { val: stateRegion, label: 'State/Region' },
+      { val: zipCode, label: 'Zip Code' }
+    ];
+
+    const missing = requiredFields.filter(f => !f.val.trim());
+    if (missing.length > 0) {
+      Alert.alert('Missing info', `Please fill in: ${missing.map(m => m.label).join(', ')}`);
       return;
     }
     if (colorCustomization && !customColor.trim()) {
@@ -547,143 +669,200 @@ export default function PaymentScreen() {
               <View style={styles.formCard}>
                 <Text style={styles.reserveTitle}>Delivery & Payment Details</Text>
 
-              <Text style={styles.formLabel}>Delivery Address *</Text>
-              {savedAddressData && (
-                <View style={styles.savedAddressCard}>
-                  <View style={styles.savedAddressHeader}>
-                    <Ionicons name="location" size={18} color="#a81d1d" />
-                    <Text style={styles.savedAddressTitle}>Saved Address</Text>
+                {savedAddresses.length > 0 && (
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={styles.formLabel}>Use Saved Address</Text>
+                    <View style={styles.pickerWrap}>
+                      <Picker
+                        selectedValue={selectedAddressId}
+                        onValueChange={(itemValue) => {
+                          if (itemValue === 'manual') {
+                            setSelectedAddressId('manual');
+                          } else {
+                            const addr = savedAddresses.find(a => a.id === itemValue);
+                            if (addr) fillFormWithAddress(addr);
+                          }
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="-- Select Saved Address --" value="manual" />
+                        {savedAddresses.map((addr) => {
+                          let addrLabel = addr.full_name;
+                          try {
+                            const parsed = JSON.parse(addr.address);
+                            if (parsed?.display) {
+                              addrLabel = `${addr.full_name} - ${parsed.display.substring(0, 30)}...`;
+                            } else {
+                              addrLabel = `${addr.full_name} - ${(addr.address || '').substring(0, 30)}...`;
+                            }
+                          } catch (e) {
+                            addrLabel = `${addr.full_name} - ${(addr.address || '').substring(0, 30)}...`;
+                          }
+                          return (
+                            <Picker.Item
+                              key={addr.id}
+                              label={addrLabel}
+                              value={addr.id}
+                            />
+                          );
+                        })}
+                      </Picker>
+                    </View>
                   </View>
-                  <Text style={styles.savedAddressText}>{savedAddressData.full_name}</Text>
-                  <Text style={styles.savedAddressText}>{savedAddressData.phone}</Text>
-                  <Text style={styles.savedAddressText}>{savedAddressData.address}</Text>
-                  <TouchableOpacity 
-                    style={styles.changeAddressBtn}
-                    onPress={() => {
-                      Alert.alert(
-                        'Change Address',
-                        'Go to Profile > My Address to update your saved address.',
-                        [{ text: 'OK' }]
-                      );
-                    }}
-                  >
-                    <Text style={styles.changeAddressBtnText}>Change Address</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              {!savedAddressData && (
+                )}
+
+                <Text style={styles.formLabel}>Contact Information *</Text>
                 <TextInput
-                  placeholder="Enter delivery address or save one in your profile"
-                  style={[styles.input, styles.textArea]}
-                  value={address}
-                  onChangeText={setAddress}
+                  placeholder="Full Name"
+                  style={styles.input}
+                  value={fullName}
+                  onChangeText={(v) => manualEdit(setFullName, v)}
+                />
+                <TextInput
+                  placeholder="Email Address"
+                  style={styles.input}
+                  value={email}
+                  onChangeText={(v) => manualEdit(setEmail, v)}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+                <TextInput
+                  placeholder="Phone Number"
+                  style={styles.input}
+                  value={phone}
+                  onChangeText={(v) => manualEdit(setPhone, v)}
+                  keyboardType="phone-pad"
+                />
+
+                <View style={styles.dividerSmall} />
+
+                <Text style={styles.formLabel}>Delivery Address *</Text>
+                <TextInput
+                  placeholder="Address Line 1 (Street, House No.)"
+                  style={styles.input}
+                  value={street}
+                  onChangeText={(v) => manualEdit(setStreet, v)}
+                />
+                <TextInput
+                  placeholder="Address Line 2 (Apartment, Suite, etc.) - Optional"
+                  style={styles.input}
+                  value={addressLine2}
+                  onChangeText={(v) => manualEdit(setAddressLine2, v)}
+                />
+                <TextInput
+                  placeholder="City"
+                  style={styles.input}
+                  value={city}
+                  onChangeText={(v) => manualEdit(setCity, v)}
+                />
+                <View style={styles.dimRow}>
+                  <TextInput
+                    placeholder="State / Province / Region"
+                    style={[styles.input, { flex: 2 }]}
+                    value={stateRegion}
+                    onChangeText={(v) => manualEdit(setStateRegion, v)}
+                  />
+                  <TextInput
+                    placeholder="ZIP / Postal Code"
+                    style={[styles.input, { flex: 1 }]}
+                    value={zipCode}
+                    onChangeText={(v) => manualEdit(setZipCode, v)}
+                    keyboardType="numeric"
+                  />
+                </View>
+
+                <Text style={[styles.formLabel, { marginTop: 12 }]}>Special Instructions</Text>
+                <TextInput
+                  placeholder="Any special requirements or notes..."
                   multiline
                   numberOfLines={3}
+                  style={[styles.input, { height: 84, textAlignVertical: 'top' }]}
+                  value={notes}
+                  onChangeText={setNotes}
                 />
-              )}
 
-              <Text style={[styles.formLabel, { marginTop: 12 }]}>Store Branch *</Text>
-              <View style={styles.pickerWrap}>
-                <Picker selectedValue={branch} onValueChange={(v) => setBranch(v)} style={styles.picker}>
-                  <Picker.Item label="Select Store Branch" value="" />
-                  <Picker.Item label="Main Branch - Makati" value="makati" />
-                  <Picker.Item label="North Branch - Quezon" value="quezon" />
-                  <Picker.Item label="South Branch - Paranaque" value="paranaque" />
-                </Picker>
-              </View>
-
-              <Text style={[styles.formLabel, { marginTop: 12 }]}>Special Instructions</Text>
-              <TextInput
-                placeholder="Any special requirements or notes..."
-                multiline
-                numberOfLines={3}
-                style={[styles.input, { height: 84, textAlignVertical: 'top' }]}
-                value={notes}
-                onChangeText={setNotes}
-              />
-
-              <Text style={[styles.formLabel, { marginTop: 12 }]}>Add-ons</Text>
-              <TouchableOpacity 
-                style={styles.addOnRow} 
-                onPress={() => {
-                  setColorCustomization(!colorCustomization);
-                  if (!colorCustomization) {
-                    setCustomColor('');
-                  }
-                }}
-              >
-                <View style={styles.checkboxContainer}>
-                  <View style={[styles.checkbox, colorCustomization && styles.checkboxChecked]}>
-                    {colorCustomization && <Ionicons name="checkmark" size={16} color="#fff" />}
-                  </View>
-                  <Text style={styles.addOnLabel}>
-                    Color Customization (+{formatCurrency(COLOR_CUSTOMIZATION_PRICE)} per unit)
-                  </Text>
-                </View>
-              </TouchableOpacity>
-              {colorCustomization && (
-                <TextInput
-                  placeholder="Enter desired color (e.g., blue, red, custom RGB)"
-                  style={[styles.input, { marginTop: 8, marginBottom: 6 }]}
-                  value={customColor}
-                  onChangeText={setCustomColor}
-                />
-              )}
-
-              <Text style={[styles.formLabel, { marginTop: 12 }]}>Discount Code</Text>
-              {appliedDiscount ? (
-                <View style={styles.appliedDiscountContainer}>
-                  <View style={styles.appliedDiscountInfo}>
-                    <Ionicons name="pricetag" size={20} color="#0b9f34" />
-                    <View style={{ flex: 1, marginLeft: 8 }}>
-                      <Text style={styles.appliedDiscountCode}>{appliedDiscount.code}</Text>
-                      <Text style={styles.appliedDiscountDesc}>
-                        {appliedDiscount.type === 'percent' 
-                          ? `${appliedDiscount.value}% off` 
-                          : `${formatCurrency(parseFloat(appliedDiscount.value))} off`}
-                      </Text>
+                <Text style={[styles.formLabel, { marginTop: 12 }]}>Add-ons</Text>
+                <TouchableOpacity
+                  style={styles.addOnRow}
+                  onPress={() => {
+                    setColorCustomization(!colorCustomization);
+                    if (!colorCustomization) {
+                      setCustomColor('');
+                    }
+                  }}
+                >
+                  <View style={styles.checkboxContainer}>
+                    <View style={[styles.checkbox, colorCustomization && styles.checkboxChecked]}>
+                      {colorCustomization && <Ionicons name="checkmark" size={16} color="#fff" />}
                     </View>
-                    <TouchableOpacity onPress={removeDiscount} style={styles.removeDiscountBtn}>
-                      <Ionicons name="close-circle" size={24} color="#666" />
+                    <Text style={styles.addOnLabel}>
+                      Color Customization (+{formatCurrency(COLOR_CUSTOMIZATION_PRICE)} per unit)
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                {colorCustomization && (
+                  <TextInput
+                    placeholder="Enter desired color (e.g., blue, red, custom RGB)"
+                    style={[styles.input, { marginTop: 8, marginBottom: 6 }]}
+                    value={customColor}
+                    onChangeText={setCustomColor}
+                  />
+                )}
+
+                <Text style={[styles.formLabel, { marginTop: 12 }]}>Discount Code</Text>
+                {appliedDiscount ? (
+                  <View style={styles.appliedDiscountContainer}>
+                    <View style={styles.appliedDiscountInfo}>
+                      <Ionicons name="pricetag" size={20} color="#0b9f34" />
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={styles.appliedDiscountCode}>{appliedDiscount.code}</Text>
+                        <Text style={styles.appliedDiscountDesc}>
+                          {appliedDiscount.type === 'percent'
+                            ? `${appliedDiscount.value}% off`
+                            : `${formatCurrency(parseFloat(appliedDiscount.value))} off`}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={removeDiscount} style={styles.removeDiscountBtn}>
+                        <Ionicons name="close-circle" size={24} color="#666" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.discountInputRow}>
+                    <TextInput
+                      placeholder="Enter discount code"
+                      style={[styles.input, styles.discountInput]}
+                      value={discountCode}
+                      onChangeText={setDiscountCode}
+                      autoCapitalize="characters"
+                    />
+                    <TouchableOpacity
+                      style={[styles.applyDiscountBtn, applyingDiscount && styles.applyDiscountBtnDisabled]}
+                      onPress={applyDiscountCode}
+                      disabled={applyingDiscount}
+                    >
+                      {applyingDiscount ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text style={styles.applyDiscountBtnText}>Apply</Text>
+                      )}
                     </TouchableOpacity>
                   </View>
-                </View>
-              ) : (
-                <View style={styles.discountInputRow}>
-                  <TextInput
-                    placeholder="Enter discount code"
-                    style={[styles.input, styles.discountInput]}
-                    value={discountCode}
-                    onChangeText={setDiscountCode}
-                    autoCapitalize="characters"
-                  />
-                  <TouchableOpacity 
-                    style={[styles.applyDiscountBtn, applyingDiscount && styles.applyDiscountBtnDisabled]} 
-                    onPress={applyDiscountCode}
-                    disabled={applyingDiscount}
-                  >
-                    {applyingDiscount ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text style={styles.applyDiscountBtnText}>Apply</Text>
-                    )}
+                )}
+
+                <Text style={[styles.formLabel, { marginTop: 12 }]}>Payment Method</Text>
+                <View style={styles.paymentMethods}>
+                  <TouchableOpacity style={styles.radioRow} onPress={() => setPaymentMethod('paymongo')}>
+                    <View style={[styles.radio, paymentMethod === 'paymongo' && styles.radioActive]} />
+                    <Text style={styles.radioLabel}>PayMongo - GCash & PayMaya ({formatCurrency(RESERVATION_FEE)})</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={styles.radioRow} onPress={() => setPaymentMethod('paypal')}>
+                    <View style={[styles.radio, paymentMethod === 'paypal' && styles.radioActive]} />
+                    <Text style={styles.radioLabel}>PayPal ({formatCurrency(10)})</Text>
                   </TouchableOpacity>
                 </View>
-              )}
-
-              <Text style={[styles.formLabel, { marginTop: 12 }]}>Payment Method</Text>
-              <View style={styles.paymentMethods}>
-                <TouchableOpacity style={styles.radioRow} onPress={() => setPaymentMethod('paymongo')}>
-                  <View style={[styles.radio, paymentMethod === 'paymongo' && styles.radioActive]} />
-                  <Text style={styles.radioLabel}>PayMongo - GCash & PayMaya ({formatCurrency(RESERVATION_FEE)})</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.radioRow} onPress={() => setPaymentMethod('paypal')}>
-                  <View style={[styles.radio, paymentMethod === 'paypal' && styles.radioActive]} />
-                  <Text style={styles.radioLabel}>PayPal ({formatCurrency(10)})</Text>
-                </TouchableOpacity>
               </View>
-            </View>
 
               <View style={styles.summaryCard}>
                 <Text style={styles.summaryTitle}>Order Summary</Text>
@@ -729,8 +908,8 @@ export default function PaymentScreen() {
                   </Text>
                 </View>
 
-                <TouchableOpacity 
-                  style={[styles.reserveBtn, processingPayment && styles.reserveBtnDisabled]} 
+                <TouchableOpacity
+                  style={[styles.reserveBtn, processingPayment && styles.reserveBtnDisabled]}
                   onPress={onReserve}
                   disabled={processingPayment}
                 >
@@ -850,6 +1029,11 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   productTitle: { fontSize: 20, fontWeight: '700', marginBottom: 4 },
   productSku: { color: '#777' },
+  dividerSmall: {
+    height: 1,
+    backgroundColor: '#eee',
+    marginVertical: 12,
+  },
 
   priceBlock: { alignItems: 'flex-end' },
   price: { color: '#0b9f34', fontSize: 20, fontWeight: '700' },
@@ -874,22 +1058,23 @@ const styles = StyleSheet.create({
   qtyBtnText: { fontSize: 20, fontWeight: '700' },
   qtyInput: { marginHorizontal: 12, borderBottomWidth: Platform.OS === 'web' ? 0 : 1, borderColor: '#ddd', padding: 8, width: 72, textAlign: 'center', borderRadius: 6 },
 
-  input: { borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 10, backgroundColor: '#fff', marginBottom: 6 },
+  input: { borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 10, backgroundColor: '#fff', marginBottom: 6, color: '#333' },
   textArea: {
     height: 80,
     textAlignVertical: 'top',
   },
-  pickerWrap: { 
-    borderWidth: 1, 
-    borderColor: '#eee', 
-    borderRadius: 8, 
-    overflow: 'hidden', 
+  pickerWrap: {
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 8,
+    overflow: 'hidden',
     marginBottom: 6,
     justifyContent: 'center',
   },
-  picker: { 
-    height: 50, 
+  picker: {
+    height: 50,
     width: '100%',
+    color: '#333',
   },
   dimRow: { flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: 6 },
   dimInput: { flex: 1 },

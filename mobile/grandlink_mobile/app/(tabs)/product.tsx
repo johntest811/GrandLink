@@ -2,7 +2,7 @@ import '../../utils/polyfills';
 // Force reload
 import React, { useEffect, useState, useRef } from 'react';
 import { Asset } from 'expo-asset';
-import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, PanResponder, Modal, Alert, Platform, Switch } from 'react-native';
+import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, Modal, Alert, Platform, Switch, PanResponder } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +26,11 @@ import BottomNavBar from "@BottomNav/../components/BottomNav";
 
 const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
+// Performance configuration for mobile optimization
+const PERFORMANCE_MODE = false; // Enable performance optimizations
+const MAX_TEXTURE_SIZE = 512; // Limit texture size for mobile
+const DISABLE_COMPLEX_EFFECTS = true; // Disable heavy visual effects
+
 export default function ProductViewScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -38,15 +43,23 @@ export default function ProductViewScreen() {
   const [selectedModelIndex, setSelectedModelIndex] = useState(0);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
-  // Weather state
+  // Cache for preventing redundant operations
+  const lastWeatherModeRef = useRef<string>('');
+  const lastActiveColorRef = useRef<string>('');
+  const colorChangeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Weather state - simplified for performance
   const [weatherMode, setWeatherMode] = useState<'sunny' | 'rainy' | 'foggy' | 'night'>('sunny');
 
-  // Measurements State
+  // Measurements State - derived from 3D model
   const [showMeasurements, setShowMeasurements] = useState(false);
-  const [measurementUnit, setMeasurementUnit] = useState<'mm' | 'cm'>('mm');
-  const [modelDimensions, setModelDimensions] = useState<{ width: number, height: number, depth: number } | null>(null);
+  const [modelDimensions, setModelDimensions] = useState<{ width: number, height: number, depth: number, area: number } | null>(null);
   const [measurementLabels, setMeasurementLabels] = useState<Array<{ text: string, x: number, y: number }>>([]);
   const measurementGroupRef = useRef<THREE.Group | null>(null);
+  const showMeasurementsRef = useRef(false);
+  const viewerVisibleRef = useRef(false);
+  const modelScaleRef = useRef<number>(1);
+  const rawDimensionsRef = useRef<{ width: number, height: number, thickness: number } | null>(null);
 
   // Custom Skybox & Color State (Supabase)
   const [skyboxData, setSkyboxData] = useState<Record<string, string> | null>(null);
@@ -58,34 +71,27 @@ export default function ProductViewScreen() {
   const [colorPickerModalVisible, setColorPickerModalVisible] = useState(false); // Modal for color picker
   const activeColorRef = useRef<string>('#ORIGINAL');
 
-  // Keep skyboxDataRef in sync and re-apply current weather when skybox data changes
   useEffect(() => {
     skyboxDataRef.current = skyboxData;
-    
-    // Clear cached textures so new URLs are loaded fresh
-    skyboxTextureCache.current.forEach((tex) => {
-      try { tex.dispose(); } catch { }
-    });
-    skyboxTextureCache.current.clear();
-    envMapCache.current.clear();
 
-    // IMPORTANT: If 3D viewer is open AND we now have skybox data, re-apply current weather
-    if (skyboxData && sceneRef.current && rendererRef.current) {
-      setupWeatherLighting(sceneRef.current, weatherMode);
+    // Skip texture disposal in performance mode for faster changes
+    if (!PERFORMANCE_MODE) {
+      skyboxTextureCache.current.forEach((tex) => {
+        try { tex.dispose(); } catch { }
+      });
+      skyboxTextureCache.current.clear();
+      envMapCache.current.clear();
     }
-  }, [skyboxData, weatherMode]);
+  }, [skyboxData]);
 
-  // React to weather mode changes and update 3D environment
+  // Keep refs in sync for the animation loop
   useEffect(() => {
-    if (sceneRef.current && rendererRef.current) {
-      setupWeatherLighting(sceneRef.current, weatherMode);
-      
-      // Force a render to show the new skybox immediately
-      if (cameraRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
-      }
-    }
-  }, [weatherMode, skyboxData]); // Also depend on skyboxData so it re-renders when data arrives
+    showMeasurementsRef.current = showMeasurements;
+  }, [showMeasurements]);
+
+  useEffect(() => {
+    viewerVisibleRef.current = viewerVisible;
+  }, [viewerVisible]);
 
   // 3D model cache and references
   const modelCache = useRef<Map<string, THREE.Object3D>>(new Map());
@@ -116,6 +122,10 @@ export default function ProductViewScreen() {
   const skyboxRef = useRef<THREE.Mesh | null>(null);
   const sunMeshRef = useRef<THREE.Mesh | null>(null);
 
+  // Cancellation token: incremented each time a new skybox load starts.
+  // Each async load captures its token and bails if superseded.
+  const skyboxLoadIdRef = useRef<number>(0);
+
   // Store the expo-gl context for WebGL operations and texture management
   const glRef = useRef<any>(null);
 
@@ -124,20 +134,18 @@ export default function ProductViewScreen() {
     if (rainRef.current) {
       return;
     }
-    const count = 3500; // Massively increased for intense rain coverage
-    const positions = new Float32Array(count * 6); // 2 points per line = 6 values (x1,y1,z1,x2,y2,z2)
+    const count = 800; // More particles for denser rain  
+    const positions = new Float32Array(count * 6); // LineSegments: 2 points per line = 6 values (x1,y1,z1,x2,y2,z2)
     const velocities = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
+      // Position rain across large area for full coverage
+      const x = (Math.random() - 0.5) * 800;
+      const y = Math.random() * 800 - 200; // Range from -200 to +600 for full vertical coverage
+      const z = (Math.random() - 0.5) * 800;
 
-      // Position rain across MASSIVE area - covers entire possible view
-      // Create rain in an enormous area to ensure full coverage
-      const x = (Math.random() - 0.5) * 900;
-      const y = Math.random() * 1000 - 200; // Range from -200 to +800 for full vertical coverage
-      const z = (Math.random() - 0.5) * 900;
-
-      // Each raindrop is a vertical line segment (streak)
-      const streakLength = 6.0 + Math.random() * 6.0; // MUCH BIGGER streaks (6.0-10.0 units)
+      // Each raindrop is a vertical line segment (streak) - make them LONGER and more visible
+      const streakLength = 12.0 + Math.random() * 18.0; // Much longer streaks (12-30 units)
       positions[i * 6 + 0] = x;
       positions[i * 6 + 1] = y;
       positions[i * 6 + 2] = z;
@@ -145,26 +153,25 @@ export default function ProductViewScreen() {
       positions[i * 6 + 4] = y - streakLength;
       positions[i * 6 + 5] = z;
 
-      // Extremely fast falling speeds - intense downpour
-      velocities[i] = 1.2 + Math.random() * 10; // Extremely fast (1.2-1.6)
+      velocities[i] = 4.0 + Math.random() * 12.0; // Fast falling speeds
     }
 
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-    // Create blue rain streaks for realistic rain effect
+    // LineBasicMaterial with enhanced visibility
     const mat = new THREE.LineBasicMaterial({
-      color: 0x4da6ff, // Light blue color for rain
+      color: 0x66aaff, // Brighter blue color for better visibility
       transparent: true,
-      opacity: 0.7, // Semi-transparent
-      linewidth: 3, // Thicker lines
-      depthTest: true,
+      opacity: 0.75, // Increased opacity for better visibility
+      linewidth: 3, // Increase linewidth (may be ignored on mobile but worth trying)
+      depthTest: false,
       depthWrite: false
     });
 
     const lines = new THREE.LineSegments(geom, mat);
-    lines.frustumCulled = false; // Always render
-    lines.renderOrder = 999; // Render on top
+    lines.frustumCulled = false;
+    lines.renderOrder = 999;
     rainRef.current = lines;
     rainVelocities.current = velocities;
     scene.add(lines);
@@ -192,71 +199,63 @@ export default function ProductViewScreen() {
 
   // SKYBOX: Load texture from URL and apply as background sphere
   const loadAndApplySkybox = async (weatherType: 'sunny' | 'rainy' | 'foggy' | 'night'): Promise<void> => {
+    // Increment the token so any previous in-flight load knows it is stale.
+    skyboxLoadIdRef.current += 1;
+    const myToken = skyboxLoadIdRef.current;
+
     const skyUrl = skyboxDataRef.current?.[weatherType]?.trim();
-    
-    // Remove any existing skybox
+
+    // Remove any existing skybox immediately (synchronous) so the old weather's
+    // background is gone right away, regardless of whether we load a new one.
     removeSkybox();
-    
+
     if (!skyUrl) {
+      // No texture configured for this weather – use a solid clear colour.
       if (rendererRef.current) {
         const colors = { sunny: 0x87ceeb, rainy: 0xbfd1e5, foggy: 0xd6dbe0, night: 0x0b1020 };
         rendererRef.current.setClearColor(colors[weatherType] || 0x87ceeb, 1);
       }
       return;
     }
-    
+
     if (!sceneRef.current || !rendererRef.current || !glRef.current) {
       return;
     }
-    
+
     try {
-      
-      // Step 1: Get image dimensions
-      const dimensions = await new Promise<{width: number, height: number}>((resolve) => {
-        RNImage.getSize(
-          skyUrl, 
-          (w, h) => {
-            resolve({ width: w, height: h });
-          },
-          () => resolve({ width: 2048, height: 1024 })
-        );
-      });
-      
-      // Step 2: Download image file to local filesystem
+      // Step 1: Download image file to local filesystem
       const asset = Asset.fromURI(skyUrl);
       await asset.downloadAsync();
-      
+
+      // ── Stale-load guard: bail if a newer weather switch happened ──
+      if (skyboxLoadIdRef.current !== myToken) return;
+
       if (!asset.localUri) {
         throw new Error('Asset download failed - no localUri');
       }
-      
-      // Step 3: Create a native WebGL texture directly via expo-gl
-      // expo-gl's C++ texImage2D reads localUri from any JS object and decodes with stb_image
+
+      // Step 2: Create a native WebGL texture directly via expo-gl
       const gl = glRef.current;
       const nativeTexture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, nativeTexture);
-      
-      // Set texture parameters BEFORE uploading data
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      
-      // Upload image data - expo-gl's native layer reads localUri and decodes the image
       gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        { localUri: asset.localUri } as any  // expo-gl reads this in C++ via stb_image
+        gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE,
+        { localUri: asset.localUri } as any
       );
-      
       gl.bindTexture(gl.TEXTURE_2D, null);
-      
-      console.log(`Native GL texture created and uploaded`);
-      
-      // Step 4: Create a THREE.Texture wrapper that uses our native texture
+
+      // ── Stale-load guard (after GPU upload) ──
+      if (skyboxLoadIdRef.current !== myToken) {
+        // Texture uploaded but we no longer need it – delete from GPU.
+        try { gl.deleteTexture(nativeTexture); } catch { }
+        return;
+      }
+
+      // Step 3: Wrap in THREE.Texture and link to the GPU texture
       const texture = new THREE.Texture();
       texture.minFilter = THREE.LinearFilter;
       texture.magFilter = THREE.LinearFilter;
@@ -264,19 +263,17 @@ export default function ProductViewScreen() {
       texture.wrapS = THREE.ClampToEdgeWrapping;
       texture.wrapT = THREE.ClampToEdgeWrapping;
       texture.flipY = false;
-      
-      // CRITICAL: Tell THREE.js this texture is already uploaded to the GPU
-      // By setting __webglTexture directly on the renderer's texture properties,
-      // THREE.js will skip its own upload and use our native texture
+
       const renderer = rendererRef.current;
       const textureProperties = renderer.properties.get(texture);
       textureProperties.__webglTexture = nativeTexture;
       textureProperties.__webglInit = true;
-      
-      console.log(`THREE.Texture linked to native GL texture`);
-      
-      // Step 5: Create skybox sphere
-      const geometry = new THREE.SphereGeometry(500, 64, 32);
+
+      // Step 4: Build skybox sphere and add to scene
+      // Remove whatever may have loaded while we were awaiting (safety net)
+      removeSkybox();
+
+      const geometry = new THREE.SphereGeometry(500, 32, 16);
       const material = new THREE.MeshBasicMaterial({
         map: texture,
         side: THREE.BackSide,
@@ -284,30 +281,29 @@ export default function ProductViewScreen() {
         depthWrite: false,
         depthTest: false,
       });
-      
+
       const skyboxMesh = new THREE.Mesh(geometry, material);
       skyboxMesh.name = 'SkyboxSphere';
       skyboxMesh.renderOrder = -1000;
       skyboxMesh.frustumCulled = false;
-      skyboxMesh.scale.set(1, -1, 1); // Flip vertically — expo-gl loads textures upside down
-      
-      sceneRef.current.add(skyboxMesh);
+      skyboxMesh.scale.set(1, -1, 1); // expo-gl textures are upside-down
+
+      sceneRef.current!.add(skyboxMesh);
       skyboxRef.current = skyboxMesh;
-      
-      // Transparent clear so the sphere shows
+
+      // Transparent clear so the sphere colour dominates
       renderer.setClearColor(0x000000, 0);
       renderer.setClearAlpha(0);
-      
-      // Force render
+
       if (cameraRef.current) {
-        renderer.render(sceneRef.current, cameraRef.current);
+        renderer.render(sceneRef.current!, cameraRef.current);
       }
-      
-      console.log(`Skybox visible for ${weatherType}!`);
-      
+
+      console.log(`Skybox loaded for weather: ${weatherType}`);
     } catch (error) {
       console.error(`Failed to load skybox for ${weatherType}:`, error);
-      if (rendererRef.current) {
+      // Only apply fallback colour if this load is still the authoritative one
+      if (skyboxLoadIdRef.current === myToken && rendererRef.current) {
         const colors = { sunny: 0x87ceeb, rainy: 0xbfd1e5, foggy: 0xd6dbe0, night: 0x0b1020 };
         rendererRef.current.setClearColor(colors[weatherType] || 0x87ceeb, 1);
       }
@@ -318,7 +314,7 @@ export default function ProductViewScreen() {
   const removeSkybox = () => {
     if (skyboxRef.current && sceneRef.current) {
       sceneRef.current.remove(skyboxRef.current);
-      
+
       // Dispose resources
       try {
         (skyboxRef.current.geometry as any).dispose();
@@ -329,12 +325,12 @@ export default function ProductViewScreen() {
       } catch (e) {
         console.warn('Disposal warning:', e);
       }
-      
+
       skyboxRef.current = null;
     }
   };
 
-  // Enhanced fog effects with better visibility  
+  // Enhanced fog effects with better visibility and weather-specific lighting
   const setupFogEffects = (scene: THREE.Scene, weatherType: 'sunny' | 'rainy' | 'foggy' | 'night') => {
     // Remove existing fog
     scene.fog = null;
@@ -366,15 +362,51 @@ export default function ProductViewScreen() {
   const rotationRef = useRef(rotation);
   useEffect(() => { rotationRef.current = rotation; }, [rotation]);
 
+  // Touch gesture handling for 3D model rotation
+  const initialRotation = useRef({ x: 0, y: 0 });
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // Respond to any meaningful touch movement
+        return Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2;
+      },
+      onMoveShouldSetPanResponderCapture: () => false,
+      onPanResponderGrant: (evt) => {
+        // Store initial rotation when gesture starts
+        initialRotation.current = { ...rotationRef.current };
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        // Convert touch movement to rotation with reduced sensitivity and inverted directions
+        const sensitivity = 0.010; // Much lower sensitivity for smoother control
+        const deltaX = -gestureState.dx * sensitivity; // Inverted horizontal
+        const deltaY = -gestureState.dy * sensitivity; // Inverted vertical
+
+        const newRotation = {
+          x: Math.max(0.1, Math.min(Math.PI - 0.1, initialRotation.current.x + deltaY)), // Vertical rotation with limits
+          y: initialRotation.current.y + deltaX // Horizontal rotation (unlimited)
+        };
+
+        setRotation(newRotation);
+      },
+      onPanResponderTerminationRequest: () => false, // Don't allow termination during gesture
+      onPanResponderRelease: () => {
+        // Touch ended
+      },
+      onPanResponderTerminate: () => {
+        // Gesture was terminated
+      },
+    })
+  ).current;
+
   const [cameraDistance, setCameraDistance] = useState(5.0);
   const cameraDistanceRef = useRef(cameraDistance);
   useEffect(() => { cameraDistanceRef.current = cameraDistance; }, [cameraDistance]);
 
   // Store the calculated "optimal" distance for reset
   const defaultDistanceRef = useRef(5.0);
-
-  const [lastDistance, setLastDistance] = useState<number | null>(null);
-  const lastRotation = useRef({ x: 0, y: 0 });
 
   const resetViewerTransform = () => {
     setRotation({ x: Math.PI / 2, y: 0 });
@@ -535,7 +567,7 @@ export default function ProductViewScreen() {
           console.log('SKYBOX DATA FOUND in Supabase:', normalized.skyboxes);
           console.log('Skybox type:', typeof normalized.skyboxes);
           console.log('Skybox stringified:', JSON.stringify(normalized.skyboxes));
-          
+
           // Handle string JSON skyboxes data
           let skyboxData = normalized.skyboxes;
           if (typeof skyboxData === 'string') {
@@ -547,10 +579,10 @@ export default function ProductViewScreen() {
               skyboxData = null;
             }
           }
-          
+
           if (skyboxData && typeof skyboxData === 'object') {
             setSkyboxData(skyboxData);
-            
+
             // FORCE IMMEDIATE SKYBOX LOAD FOR TESTING
             const testWeather = 'sunny';
             const testUrl = skyboxData[testWeather];
@@ -1034,65 +1066,80 @@ export default function ProductViewScreen() {
     scene.add(sun);
   };
 
-  // Store original material colors
+  // Store original material colors and cached mesh references
   const originalColorsRef = useRef<Map<string, THREE.Color>>(new Map());
+  const cachedMeshesRef = useRef<Array<{ mesh: any, originalColor: THREE.Color }>>([]);
 
-  // Apply color to model materials
-  const applyModelColor = (model: THREE.Object3D, colorHex: string) => {
+  // Optimized color application with material caching
+  const applyModelColorDebounced = (model: THREE.Object3D, colorHex: string) => {
+    // Update ref for tracking
+    lastActiveColorRef.current = colorHex;
+
     if (!model || !colorHex) return;
 
-    // Special case: #ORIGINAL means restore the original model colors
-    if (colorHex === '#ORIGINAL') {
+    // Build cache on first run
+    if (cachedMeshesRef.current.length === 0) {
       model.traverse((child: any) => {
         if (child.isMesh && child.material) {
-          const originalColor = originalColorsRef.current.get(child.uuid);
-          if (originalColor && (child.material.isMeshStandardMaterial || child.material.isMeshPhysicalMaterial)) {
-            child.material.color.copy(originalColor);
+          if (child.name === 'Skybox' || child.name === 'Sun') return;
+
+          const matName = (child.material.name || '').toLowerCase();
+          const meshName = (child.name || '').toLowerCase();
+
+          if (matName.includes('glass') || meshName.includes('glass') ||
+            matName.includes('window') || meshName.includes('window') ||
+            child.material.transparent) {
+            return;
+          }
+
+          if (child.material.isMeshStandardMaterial || child.material.isMeshPhysicalMaterial) {
+            cachedMeshesRef.current.push({
+              mesh: child,
+              originalColor: child.material.color.clone()
+            });
           }
         }
       });
-      return;
     }
 
-    const color = new THREE.Color(colorHex);
-
-    model.traverse((child: any) => {
-      if (child.isMesh && child.material) {
-        // Skip skybox and sun
-        if (child.name === 'Skybox' || child.name === 'Sun') return;
-
-        // Dont color glass or transparent materials usually
-        // Heuristic: check if material name implies "paint" or "body" or just apply to everything that isn't glass/chrome
-        const matName = (child.material.name || '').toLowerCase();
-        const meshName = (child.name || '').toLowerCase();
-
-        if (matName.includes('glass') || meshName.includes('glass') ||
-          matName.includes('window') || meshName.includes('window') ||
-          child.material.transparent) {
-          return;
+    // Fast color application using cache
+    if (colorHex === '#ORIGINAL') {
+      cachedMeshesRef.current.forEach(({ mesh, originalColor }) => {
+        if (mesh.material) {
+          mesh.material.color.copy(originalColor);
         }
-
-        // Store original color if not already stored
-        if (!originalColorsRef.current.has(child.uuid) &&
-          (child.material.isMeshStandardMaterial || child.material.isMeshPhysicalMaterial)) {
-          originalColorsRef.current.set(child.uuid, child.material.color.clone());
+      });
+    } else {
+      const color = new THREE.Color(colorHex);
+      cachedMeshesRef.current.forEach(({ mesh }) => {
+        if (mesh.material) {
+          mesh.material.color.set(color);
         }
-
-        // Simple approach: Apply to all standard/physical materials that aren't glass
-        if (child.material.isMeshStandardMaterial || child.material.isMeshPhysicalMaterial) {
-          child.material.color.set(color);
-        }
-      }
-    });
+      });
+    }
   };
 
-  // Optimize color application effect to prevent unnecessary re-renders
+  // Apply color when it changes
   useEffect(() => {
     activeColorRef.current = activeColor;
-    // Only apply colors if we have an active scene and model
-    if (activeColor && sceneRef.current && currentModelRef.current) {
-      applyModelColor(currentModelRef.current, activeColor);
+
+    // Clear existing timeout
+    if (colorChangeTimeoutRef.current) {
+      clearTimeout(colorChangeTimeoutRef.current);
     }
+
+    // Quick debounce to handle rapid color changes
+    colorChangeTimeoutRef.current = setTimeout(() => {
+      if (activeColor && sceneRef.current && currentModelRef.current) {
+        applyModelColorDebounced(currentModelRef.current, activeColor);
+      }
+    }, 50);
+
+    return () => {
+      if (colorChangeTimeoutRef.current) {
+        clearTimeout(colorChangeTimeoutRef.current);
+      }
+    };
   }, [activeColor]);
 
   const removeSun = (scene: THREE.Scene) => {
@@ -1105,228 +1152,148 @@ export default function ProductViewScreen() {
     sunMeshRef.current = null;
   };
 
-  // Optimized Weather Lighting System 
+  // Weather Lighting System - always applies to ensure proper lighting
   const setupWeatherLighting = (scene: THREE.Scene, weather: string, gl?: any) => {
+    // Update ref for tracking  
+    lastWeatherModeRef.current = weather;
+
     // Initialize lights if first time
     initializeLights(scene);
 
     // Remove sun by default, add only if sunny
     removeSun(scene);
 
-    // Load and apply skybox from Supabase URLs
-    if (skyboxDataRef.current) {
-      loadAndApplySkybox(weather as 'sunny' | 'rainy' | 'foggy' | 'night');
-    } else {
-      // Fallback colors if no skybox data
-      const weatherColors: Record<string, number> = {
-        sunny: 0x87ceeb, rainy: 0xbfd1e5, foggy: 0xd6dbe0, night: 0x0b1020
-      };
-      if (rendererRef.current) {
-        rendererRef.current.setClearColor(weatherColors[weather] || 0x87ceeb, 1);
-      }
+    // Use simple background colors instead of skybox for faster loading
+    // This is the key optimization - no texture loading delays
+    const weatherColors: Record<string, number> = {
+      sunny: 0x87ceeb, rainy: 0xbfd1e5, foggy: 0xd6dbe0, night: 0x0b1020
+    };
+    if (rendererRef.current) {
+      rendererRef.current.setClearColor(weatherColors[weather] || 0x87ceeb, 1);
     }
 
-    // Setup fog effects
+    // Apply fog effects for atmosphere
     setupFogEffects(scene, weather as any);
 
-    // Note: Skybox sphere loading happens async in loadAndApplySkybox
-
-    // Configure lighting based on weather
+    // Full lighting configuration based on weather
     switch (weather) {
       case 'sunny':
         createSun(scene);
         ambientLightRef.current!.color.setHex(0xfff5e0);
-        ambientLightRef.current!.intensity = 1.5; // Enhanced from 1.4
+        ambientLightRef.current!.intensity = 1.5;
         if (hemisphereLightRef.current) {
           hemisphereLightRef.current.color.setHex(0xb0d8ff);
-          (hemisphereLightRef.current as any).groundColor?.setHex(0xc8b89a);
-          hemisphereLightRef.current.intensity = 1.7; // Enhanced from 1.6
+          hemisphereLightRef.current.intensity = 1.7;
         }
         directionalLightRef.current!.color.setHex(0xfff1c0);
-        directionalLightRef.current!.intensity = 4.2; // Enhanced sunlight from 3.8
-        directionalLightRef.current!.position.set(8, 12, 8); // Closer, angled position for visible shadows
-        directionalLightRef.current!.target.position.set(0, 0, 0); // Target center of model
+        directionalLightRef.current!.intensity = 4.2;
+        directionalLightRef.current!.position.set(8, 12, 8);
+        directionalLightRef.current!.target.position.set(0, 0, 0);
         directionalLightRef.current!.castShadow = true;
         pointLight1Ref.current!.color.setHex(0x88bbff);
-        pointLight1Ref.current!.intensity = 2.0; // Enhanced from 1.8
+        pointLight1Ref.current!.intensity = 2.0;
         pointLight1Ref.current!.distance = 600;
         pointLight1Ref.current!.position.set(-80, 40, -60);
-        pointLight1Ref.current!.castShadow = true; // Enable shadows for sunny fill light
+        pointLight1Ref.current!.castShadow = true;
         removeRain(scene);
-        if (rendererRef.current) {
-          rendererRef.current.setClearColor(0x87ceeb, 1);
-        }
         break;
 
       case 'rainy':
-        ambientLightRef.current!.color.setHex(0xffffff);
-        ambientLightRef.current!.intensity = 0.6; // Enhanced from 0.5
+        ambientLightRef.current!.color.setHex(0xe6f3ff);
+        ambientLightRef.current!.intensity = 1.1;
         if (hemisphereLightRef.current) {
-          hemisphereLightRef.current.intensity = 0.6; // Enhanced from 0.5
+          hemisphereLightRef.current.color.setHex(0xc0d6ed);
+          hemisphereLightRef.current.intensity = 1.3;
         }
-        directionalLightRef.current!.color.setHex(0xffffff);
-        directionalLightRef.current!.intensity = 1.4; // Enhanced from 1.2
-        directionalLightRef.current!.position.set(-6, 10, 6); // Better angle for visible shadows
-        directionalLightRef.current!.target.position.set(-10, -10, -10); // Target center of model
-        directionalLightRef.current!.castShadow = true;
-        pointLight1Ref.current!.color.setHex(0x9bb3d1);
-        pointLight1Ref.current!.intensity = 0.3; // Add subtle fill light
+        directionalLightRef.current!.color.setHex(0xd4e6f1);
+        directionalLightRef.current!.intensity = 2.1;
+        directionalLightRef.current!.position.set(2, 10, 4);
+        directionalLightRef.current!.target.position.set(0, 0, 0);
+        directionalLightRef.current!.castShadow = false;
+        pointLight1Ref.current!.color.setHex(0x6699cc);
+        pointLight1Ref.current!.intensity = 1.1;
         pointLight1Ref.current!.distance = 400;
         pointLight1Ref.current!.position.set(50, 30, 40);
-        pointLight1Ref.current!.castShadow = true; // Enable shadows for rainy fill light
+        pointLight1Ref.current!.castShadow = false;
         createRain(scene);
-        if (rendererRef.current) {
-          rendererRef.current.setClearColor(0xbfd1e5, 1);
-        }
         break;
 
       case 'foggy':
-        ambientLightRef.current!.color.setHex(0xffffff);
-        ambientLightRef.current!.intensity = 1.0; // Enhanced from 0.9
+        ambientLightRef.current!.color.setHex(0xf0f4f8);
+        ambientLightRef.current!.intensity = 1.2;
         if (hemisphereLightRef.current) {
-          hemisphereLightRef.current.intensity = 0.8; // Enhanced from 0.7
+          hemisphereLightRef.current.color.setHex(0xe8f2f6);
+          hemisphereLightRef.current.intensity = 1.0;
         }
-        directionalLightRef.current!.color.setHex(0xffffff);
-        directionalLightRef.current!.intensity = 0.9; // Enhanced from 0.8
-        directionalLightRef.current!.position.set(5, 8, 5); // Angled position instead of directly overhead
-        directionalLightRef.current!.target.position.set(0, 0, 0); // Target center of model
-        directionalLightRef.current!.castShadow = true; // Enable shadows for foggy weather
+        directionalLightRef.current!.color.setHex(0xf4f8fc);
+        directionalLightRef.current!.intensity = 1.8;
+        directionalLightRef.current!.position.set(5, 8, 5);
+        directionalLightRef.current!.target.position.set(0, 0, 0);
+        directionalLightRef.current!.castShadow = false;
         pointLight1Ref.current!.color.setHex(0xe6eef7);
-        pointLight1Ref.current!.intensity = 0.2; // Add subtle diffused light
+        pointLight1Ref.current!.intensity = 0.2;
         pointLight1Ref.current!.distance = 300;
         pointLight1Ref.current!.position.set(20, 25, 30);
-        pointLight1Ref.current!.castShadow = true; // Enable shadows for point light
+        pointLight1Ref.current!.castShadow = false;
         removeRain(scene);
-        if (rendererRef.current) {
-          rendererRef.current.setClearColor(0xd6dbe0, 1);
-        }
         break;
 
       case 'night':
-        ambientLightRef.current!.color.setHex(0x7788aa);
-        ambientLightRef.current!.intensity = 0.8; // Enhanced from 0.6 for more 3D visibility
+        // Balanced night lighting - bright enough to see model but still feels like night
+        ambientLightRef.current!.color.setHex(0x6b7fb8);  // Soft blue-white 
+        ambientLightRef.current!.intensity = 1.2;  // Moderately bright ambient
         if (hemisphereLightRef.current) {
-          hemisphereLightRef.current.intensity = 0.5; // Enhanced from 0.4
+          hemisphereLightRef.current.color.setHex(0x4a5c8a);  // Night sky color
+          hemisphereLightRef.current.intensity = 1.5;  // Gentle hemisphere light
         }
-        directionalLightRef.current!.color.setHex(0xbdd1ff);
-        directionalLightRef.current!.intensity = 1.4; // Enhanced from 1.2
-        directionalLightRef.current!.position.set(-7, 12, 7); // Better moonlight angle for dramatic shadows
-        directionalLightRef.current!.target.position.set(0, 0, 0); // Target center of model
-        directionalLightRef.current!.castShadow = true;
-        pointLight1Ref.current!.color.setHex(0x4d6699); // Cool blue moonlight
-        pointLight1Ref.current!.intensity = 0.8; // Add realistic moonlight for 3D effect
-        pointLight1Ref.current!.distance = 500;
-        pointLight1Ref.current!.position.set(-40, 60, -30);
-        pointLight1Ref.current!.castShadow = true; // Enable shadows for moonlight
+        directionalLightRef.current!.color.setHex(0xc4d7f0);  // Cool moonlight color
+        directionalLightRef.current!.intensity = 2.0;  // Good directional light
+        directionalLightRef.current!.position.set(-7, 12, 7);
+        directionalLightRef.current!.target.position.set(0, 0, 0);
+        directionalLightRef.current!.castShadow = false;
         removeRain(scene);
-        if (rendererRef.current) {
-          rendererRef.current.setClearColor(0x0b1020, 1);
-        }
+        console.log('Night mode: Balanced lighting for night atmosphere with good visibility');
         break;
 
       default:
         ambientLightRef.current!.color.setHex(0xffffff);
         ambientLightRef.current!.intensity = 1.0;
+        if (hemisphereLightRef.current) {
+          hemisphereLightRef.current.intensity = 1.0;
+        }
         directionalLightRef.current!.color.setHex(0xffffeb);
         directionalLightRef.current!.intensity = 1.2;
-        directionalLightRef.current!.position.set(6, 10, 6); // Angled position for visible shadows
-        directionalLightRef.current!.target.position.set(0, 0, 0); // Target center of model
+        directionalLightRef.current!.position.set(6, 10, 6);
+        directionalLightRef.current!.target.position.set(0, 0, 0);
         directionalLightRef.current!.castShadow = true;
         pointLight1Ref.current!.intensity = 0;
-        pointLight1Ref.current!.castShadow = false; // Disable shadows when no intensity
+        pointLight1Ref.current!.castShadow = false;
         removeRain(scene);
+        break;
     }
 
-    // Enhanced shadow configuration for realistic weather effects
+    // Enhanced shadow configuration
     if (rendererRef.current) {
       rendererRef.current.shadowMap.enabled = true;
       rendererRef.current.shadowMap.type = THREE.PCFSoftShadowMap;
       rendererRef.current.shadowMap.autoUpdate = true;
 
-      // Weather-specific shadow settings
+      // Configure shadows for lights that cast them
       if (directionalLightRef.current!.castShadow) {
-        switch (weather) {
-          case 'sunny':
-            // Sharp, high-quality shadows for sunny weather
-            directionalLightRef.current!.shadow.mapSize.width = 2048;
-            directionalLightRef.current!.shadow.mapSize.height = 2048;
-            directionalLightRef.current!.shadow.camera.near = 0.5;
-            directionalLightRef.current!.shadow.camera.far = 100;
-            directionalLightRef.current!.shadow.camera.left = -45; // Match 90x90 ground plane
-            directionalLightRef.current!.shadow.camera.right = 45;
-            directionalLightRef.current!.shadow.camera.top = 45;
-            directionalLightRef.current!.shadow.camera.bottom = -45;
-            directionalLightRef.current!.shadow.bias = -0.0002;
-            directionalLightRef.current!.shadow.normalBias = 0.02;
-            break;
-
-          case 'rainy':
-            // Softer shadows for overcast conditions
-            directionalLightRef.current!.shadow.mapSize.width = 1536;
-            directionalLightRef.current!.shadow.mapSize.height = 1536;
-            directionalLightRef.current!.shadow.camera.near = 0.5;
-            directionalLightRef.current!.shadow.camera.far = 60;
-            directionalLightRef.current!.shadow.camera.left = -45; // Match 90x90 ground plane
-            directionalLightRef.current!.shadow.camera.right = 45;
-            directionalLightRef.current!.shadow.camera.top = 45;
-            directionalLightRef.current!.shadow.camera.bottom = -45;
-            directionalLightRef.current!.shadow.bias = -0.0001;
-            directionalLightRef.current!.shadow.normalBias = 0.01;
-            break;
-
-          case 'foggy':
-            // Very soft, diffused shadows
-            directionalLightRef.current!.shadow.mapSize.width = 1024;
-            directionalLightRef.current!.shadow.mapSize.height = 1024;
-            directionalLightRef.current!.shadow.camera.near = 0.5;
-            directionalLightRef.current!.shadow.camera.far = 40;
-            directionalLightRef.current!.shadow.camera.left = -45; // Match 90x90 ground plane
-            directionalLightRef.current!.shadow.camera.right = 45;
-            directionalLightRef.current!.shadow.camera.top = 45;
-            directionalLightRef.current!.shadow.camera.bottom = -45;
-            directionalLightRef.current!.shadow.bias = -0.00005;
-            directionalLightRef.current!.shadow.normalBias = 0.005;
-            break;
-
-          case 'night':
-            // Dramatic shadows for moonlight
-            directionalLightRef.current!.shadow.mapSize.width = 1536;
-            directionalLightRef.current!.shadow.mapSize.height = 1536;
-            directionalLightRef.current!.shadow.camera.near = 0.5;
-            directionalLightRef.current!.shadow.camera.far = 80;
-            directionalLightRef.current!.shadow.camera.left = -45; // Match 90x90 ground plane
-            directionalLightRef.current!.shadow.camera.right = 45;
-            directionalLightRef.current!.shadow.camera.top = 45;
-            directionalLightRef.current!.shadow.camera.bottom = -45;
-            directionalLightRef.current!.shadow.bias = -0.0003;
-            directionalLightRef.current!.shadow.normalBias = 0.015;
-            break;
-
-          default:
-            // Default shadow settings
-            directionalLightRef.current!.shadow.mapSize.width = 1024;
-            directionalLightRef.current!.shadow.mapSize.height = 1024;
-            directionalLightRef.current!.shadow.camera.near = 0.5;
-            directionalLightRef.current!.shadow.camera.far = 50;
-            directionalLightRef.current!.shadow.bias = -0.0001;
-            break;
-        }
-        
-        // Update shadow camera projection matrix after all configuration changes
+        directionalLightRef.current!.shadow.mapSize.width = 1024;
+        directionalLightRef.current!.shadow.mapSize.height = 1024;
+        directionalLightRef.current!.shadow.camera.near = 0.5;
+        directionalLightRef.current!.shadow.camera.far = 50;
+        directionalLightRef.current!.shadow.camera.left = -45;
+        directionalLightRef.current!.shadow.camera.right = 45;
+        directionalLightRef.current!.shadow.camera.top = 45;
+        directionalLightRef.current!.shadow.camera.bottom = -45;
+        directionalLightRef.current!.shadow.bias = -0.0001;
         directionalLightRef.current!.shadow.camera.updateProjectionMatrix();
-      }
-
-      // Configure point light shadows for enhanced lighting
-      if (pointLight1Ref.current!.castShadow && pointLight1Ref.current!.intensity > 0) {
-        pointLight1Ref.current!.shadow.mapSize.width = 512;
-        pointLight1Ref.current!.shadow.mapSize.height = 512;
-        pointLight1Ref.current!.shadow.camera.near = 0.5;
-        pointLight1Ref.current!.shadow.camera.far = pointLight1Ref.current!.distance || 100;
-        pointLight1Ref.current!.shadow.bias = -0.0001;
       }
     }
 
-    // Ensure directional light target is added to scene and properly positioned
+    // Ensure directional light target is added to scene
     if (directionalLightRef.current && directionalLightRef.current.target) {
       if (!scene.children.includes(directionalLightRef.current.target)) {
         scene.add(directionalLightRef.current.target);
@@ -1338,8 +1305,8 @@ export default function ProductViewScreen() {
   // Re-apply weather lighting whenever mode changes (keeps viewer responsive)
   useEffect(() => {
     if (sceneRef.current && rendererRef.current && cameraRef.current) {
-      // setupWeatherLighting is synchronous – apply weather effects immediately,
-      // skybox texture loads in the background and self-renders when ready.
+      // setupWeatherLighting is synchronous – solid color shows immediately,
+      // then skybox texture loads in the background.
       setupWeatherLighting(sceneRef.current, weatherMode);
       sceneRef.current.updateMatrixWorld(true);
       try {
@@ -1347,16 +1314,15 @@ export default function ProductViewScreen() {
       } catch (e) {
         console.warn('Manual render failed:', e);
       }
+      // Trigger skybox load for the new weather mode
+      if (glRef.current) {
+        loadAndApplySkybox(weatherMode).catch((e) => console.warn('Weather skybox error:', e));
+      }
     }
   }, [weatherMode]);
 
   const currentModelRef = useRef<THREE.Object3D | null>(null);
-  const dimsRef = useRef<{ width: number, height: number, depth: number, labelPoints: { name: string, vec: THREE.Vector3, val: number }[] } | null>(null);
-  const unitRef = useRef(measurementUnit);
-
-  useEffect(() => {
-    unitRef.current = measurementUnit;
-  }, [measurementUnit]);
+  const dimsRef = useRef<{ width: number, height: number, depth: number, area: number, labelPoints: { name: string, vec: THREE.Vector3, val: number }[] } | null>(null);
 
   // Use ref to keep product fresh in animation loop
   const productRef = useRef(product);
@@ -1398,7 +1364,8 @@ export default function ProductViewScreen() {
       scaledBox.getCenter(center);
 
       // Pre-calculate label 3D positions (World Coordinates)
-      const pushFactor = 0.05;
+      // Push labels further out to avoid intersection with model components
+      const pushFactor = 0.12;
       const zOffset = max.z + (scaledSize.z * pushFactor);
       const widthY = min.y;
       const widthMid = new THREE.Vector3(center.x, widthY, zOffset);
@@ -1408,17 +1375,26 @@ export default function ProductViewScreen() {
 
       const depthMid = new THREE.Vector3(max.x, min.y, center.z);
 
-      // Dimensions for UI display
+      // Dimensions for UI display - Convert back to RAW METERS
+      const scale = modelScaleRef.current || 1;
+      const rawWidth = scaledSize.x / scale;
+      const rawHeight = scaledSize.y / scale;
+      const rawThickness = scaledSize.z / scale;
+      const rawArea = rawWidth * rawHeight;
+
       const dims = {
-        width: scaledSize.x, height: scaledSize.y, depth: scaledSize.z,
+        width: rawWidth, height: rawHeight, depth: rawThickness,
+        area: rawArea,
         labelPoints: [
-          { name: 'Width', vec: widthMid, val: scaledSize.x },
-          { name: 'Height', vec: heightMid, val: scaledSize.y },
-          { name: 'Thickness', vec: depthMid, val: scaledSize.z }
+          { name: 'Width', vec: widthMid, val: rawWidth },
+          { name: 'Height', vec: heightMid, val: rawHeight },
+          { name: 'Thickness', vec: depthMid, val: rawThickness }
         ]
       };
+
       setModelDimensions(dims);
       dimsRef.current = dims;
+      rawDimensionsRef.current = { width: rawWidth, height: rawHeight, thickness: rawThickness };
 
       const group = new THREE.Group();
 
@@ -1517,9 +1493,9 @@ export default function ProductViewScreen() {
 
   useEffect(() => {
     updateMeasurementLines();
-  }, [showMeasurements, measurementUnit]);
+  }, [showMeasurements]);
 
-  // Optimized animation loop
+  // Heavily optimized animation loop with performance controls
   const startAnimationLoop = (
     scene: THREE.Scene,
     camera: THREE.PerspectiveCamera,
@@ -1532,70 +1508,91 @@ export default function ProductViewScreen() {
     let animationId: number;
     let frameCount = 0;
     let lastRainUpdate = 0;
-    
-    const animate = () => {
-      if (!viewerVisible) {
+    let lastTime = 0;
+    const TARGET_FPS = 30; // Limit to 30fps for better performance
+    const FRAME_TIME = 1000 / TARGET_FPS;
+
+    // Cache previous values to avoid unnecessary updates
+    let lastPhi = -1;
+    let lastTheta = -1;
+    let lastDistance = -1;
+
+    const animate = (currentTime: number) => {
+      if (!viewerVisibleRef.current) {
         if (animationId) {
           cancelAnimationFrame(animationId);
         }
         return;
       }
-      
+
+      // FPS throttling
+      if (currentTime - lastTime < FRAME_TIME) {
+        animationId = requestAnimationFrame(animate);
+        return;
+      }
+
       frameCount++;
       const now = Date.now();
 
       // Apply rotations to the GROUP (which is centered at 0,0,0)
       object.rotation.set(0, 0, 0);
 
-      // Update Camera Position for Orbit
+      // Update Camera Position only if rotation or distance changed
       const dist = cameraDistanceRef.current;
-      const phi = rotationRef.current.x; // Elevation (0=Top, PI=Bottom)
-      const theta = rotationRef.current.y; // Azimuth
+      const phi = rotationRef.current.x;
+      const theta = rotationRef.current.y;
 
-      // Spherical to Cartesian (Y-up)
-      const x = dist * Math.sin(phi) * Math.sin(theta);
-      const y = dist * Math.cos(phi);
-      const z = dist * Math.sin(phi) * Math.cos(theta);
+      if (phi !== lastPhi || theta !== lastTheta || dist !== lastDistance) {
+        // Spherical to Cartesian (Y-up)
+        const x = dist * Math.sin(phi) * Math.sin(theta);
+        const y = dist * Math.cos(phi);
+        const z = dist * Math.sin(phi) * Math.cos(theta);
+        camera.position.set(x, y, z);
+        camera.lookAt(0, 0, 0);
 
-      camera.position.set(x, y, z);
-      camera.lookAt(0, 0, 0); // Look at Center of Model Group
+        lastPhi = phi;
+        lastTheta = theta;
+        lastDistance = dist;
+      }
 
-
-
-      // Optimized rain animation - update less frequently for performance
-      if (rainRef.current && rainVelocities.current && (now - lastRainUpdate > 16)) { // ~60fps for rain
+      // Rain animation — LineSegments layout: 6 floats per line (2 points)
+      if (rainRef.current && rainVelocities.current && (now - lastRainUpdate > 33)) {
         lastRainUpdate = now;
         const geom = rainRef.current.geometry as THREE.BufferGeometry;
         const attr = geom.getAttribute('position') as THREE.BufferAttribute;
         const positions = attr.array as Float32Array;
         const velocities = rainVelocities.current;
 
-        for (let i = 0; i < velocities.length; i++) {
-          positions[i * 6 + 1] -= velocities[i];
-          positions[i * 6 + 4] -= velocities[i];
-          if (positions[i * 6 + 1] < -250) {
-            const x = (Math.random() - 0.5) * 900;
-            const z = (Math.random() - 0.5) * 900;
-            const streakLength = 6.0 + Math.random() * 6.0;
-            positions[i * 6 + 0] = x;
-            positions[i * 6 + 1] = 800;
-            positions[i * 6 + 2] = z;
-            positions[i * 6 + 3] = x;
-            positions[i * 6 + 4] = 800 - streakLength;
-            positions[i * 6 + 5] = z;
-            velocities[i] = 1.2 + Math.random() * 10;
+        const maxParticles = velocities.length;
+        for (let i = 0; i < maxParticles; i++) {
+          positions[i * 6 + 1] -= velocities[i]; // top point falls
+          positions[i * 6 + 4] -= velocities[i]; // bottom point falls
+          if (positions[i * 6 + 1] < -300) {
+            // Reset both points of the line segment
+            const x = (Math.random() - 0.5) * 800;
+            const z = (Math.random() - 0.5) * 800;
+            const streakLength = 12.0 + Math.random() * 18.0;
+            positions[i * 6 + 0] = x;     // top x
+            positions[i * 6 + 1] = 400;   // top y (reset to top)
+            positions[i * 6 + 2] = z;     // top z
+            positions[i * 6 + 3] = x;     // bottom x (same as top)
+            positions[i * 6 + 4] = 400 - streakLength; // bottom y
+            positions[i * 6 + 5] = z;     // bottom z (same as top)
+            velocities[i] = 4.0 + Math.random() * 12.0;
           }
         }
         attr.needsUpdate = true;
+
+
       }
 
-      // Label Calculation (Every 10 frames instead of 5 to save performance)
-      if (measurementGroupRef.current && frameCount % 10 === 0) {
+      // Less frequent label updates (every 10 frames for better responsiveness)
+      if (measurementGroupRef.current && showMeasurementsRef.current && frameCount % 10 === 0) {
         updateLabels(object, camera, viewWidth, viewHeight);
       }
 
-      // Keep skybox centered on camera so it always surrounds the viewer (true 3D parallax)
-      if (skyboxRef.current) {
+      // Less frequent skybox updates (every 5 frames)
+      if (skyboxRef.current && frameCount % 5 === 0) {
         skyboxRef.current.position.copy(camera.position);
       }
 
@@ -1604,19 +1601,28 @@ export default function ProductViewScreen() {
         gl.endFrameEXP();
       } catch (error) {
         console.warn('Render error:', error);
+        // On render error, slow down frame rate even more
+        lastTime = currentTime + FRAME_TIME;
       }
-      frameCount++;
+
+      lastTime = currentTime;
       animationId = requestAnimationFrame(animate);
     };
 
-    animate();
+    animate(0);
+
+    // Return cleanup function
+    return () => {
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+    };
   };
 
   // Helper to update labels
   const updateLabels = (object: THREE.Object3D, camera: THREE.Camera, vModW: number, vModH: number) => {
     if (!dimsRef.current) return;
     const { labelPoints } = dimsRef.current;
-    const unit = unitRef.current;
 
     // Ensure matrix is up to date with latest rotation applied in loop
     object.updateMatrixWorld(true);
@@ -1624,102 +1630,45 @@ export default function ProductViewScreen() {
     const newLabels: any[] = [];
 
     labelPoints.forEach(p => {
-      // Label positions are already in WORLD SPACE (since we use scaledBox)
-      // Just project directly to screen coordinates
-      const v = p.vec.clone().project(camera);
+      // 1. Copy world position
+      const worldPos = p.vec.clone();
 
-      // Check if in front of camera
+      // 2. Project to NDC (-1 to 1)
+      const v = worldPos.project(camera);
+
+      // 3. Check if in front of camera (Standard Three.js NDC z is -1 to 1)
       if (v.z > 1 || v.z < -1) return;
 
-      // Convert NDC to Screen Coords
+      // 4. Convert NDC to Screen Coords (0 to viewWidth/Height)
       const x = (v.x * 0.5 + 0.5) * vModW;
       const y = (-(v.y * 0.5) + 0.5) * vModH;
 
-      // Format value with OVERRIDE from product props if available
-      // This ensures we show the "Spec" dimensions, not the "Bounding Box" (which might include open doors)
+      // Format value - Always use raw model units (meters)
       let val = p.val;
 
-      // Override logic
-      // Use productRef for latest values
-      const currentProduct = productRef.current;
-      // Use productRef for latest values
-      if (p.name === 'Width' && currentProduct?.width) val = parseFloat(currentProduct.width) / 1000;
-      if (p.name === 'Height' && currentProduct?.height) val = parseFloat(currentProduct.height) / 1000;
-      if (p.name === 'Thickness' && currentProduct?.thickness) val = parseFloat(currentProduct.thickness) / 1000;
-
       // Convert to display unit
-      let unitStr = unit;
-      if (unit === 'mm') {
-        val = val * 1000;
-        // If we used product prop which is already mm, this cancels out (x/1000 * 1000)
-        // If we used bounding box (meters), it converts to mm.
-      } else if (unit === 'cm') {
-        val = val * 100;
-      }
+      let unitStr = 'm';
+      let displayVal = val;
 
-      newLabels.push({
-        text: `${val.toFixed(0)} ${unitStr}`,
-        x,
-        y
-      });
+      // If we decide to use cm later, we can add logic here, 
+      // but for now, the user requested sqm, which implies meters for linear.
+
+      if (!isNaN(displayVal)) {
+        newLabels.push({
+          text: `${displayVal.toFixed(2)} ${unitStr}`,
+          x,
+          y
+        });
+      }
     });
 
-    setMeasurementLabels(newLabels);
+    // Only update state if labels actually changed or we need to clear them
+    if (newLabels.length > 0 || measurementLabels.length > 0) {
+      setMeasurementLabels(newLabels);
+    }
   };
 
-  // PanResponder for 3D controls - using useMemo to ensure updates during dev
-  const panResponder = React.useMemo(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (evt) => {
-        if (evt.nativeEvent.touches.length === 1) {
-          // Use REF to get latest state, fixing "reset on tap" bug
-          lastRotation.current = { ...rotationRef.current };
-        }
-        if (evt.nativeEvent.touches.length === 2) {
-          const [a, b] = evt.nativeEvent.touches;
-          setLastDistance(Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY));
-        }
-      },
-      onPanResponderMove: (evt, gestureState) => {
-        if (evt.nativeEvent.touches.length === 1) {
-          // Map gestures to Orbit Angles
-          // dy -> phi (elevation/pitch)
-          // dx -> theta (azimuth/yaw)
-          // Map gestures to Orbit Angles (Spherical)
-          // Inverted controls for natural drag:
-          // Drag down (dy > 0) -> Move Scene DOWN -> Camera UP (phi decreases)
-          // Drag left (dx < 0) -> Move Scene LEFT -> Camera RIGHT (theta increases)
-          // So: Subtract delta.
 
-          const newPhi = lastRotation.current.x - gestureState.dy * 0.005;
-          const newTheta = lastRotation.current.y - gestureState.dx * 0.005;
-
-          // Clamp Phi to avoid flipping over poles (0.1 to PI-0.1)
-          const clampedPhi = Math.max(0.1, Math.min(Math.PI - 0.1, newPhi));
-
-          setRotation({
-            x: clampedPhi,
-            y: newTheta,
-          });
-        }
-        if (evt.nativeEvent.touches.length === 2) {
-          const [a, b] = evt.nativeEvent.touches;
-          const dist = Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
-          if (lastDistance) {
-            let delta = (dist - lastDistance) * 0.02;
-            setCameraDistance((prev) => Math.max(20, Math.min(1000, prev - delta * 5)));
-          }
-          setLastDistance(dist);
-        }
-      },
-      onPanResponderRelease: () => {
-        setLastDistance(null);
-      },
-      onPanResponderTerminationRequest: () => false,
-    })
-    , []);
 
   // Optimized 3D Viewer (mobile friendly) with quick weather buttons overlay
   const render3DViewer = () => {
@@ -1738,12 +1687,12 @@ export default function ProductViewScreen() {
     const viewerHeight = Math.min(SCREEN_HEIGHT * 0.55, 420);
 
     return (
-      <View
-        style={styles.viewerModalContent}
-        {...panResponder.panHandlers}
-      >
+      <View style={styles.viewerModalContent}>
         {/* GL layer – renders 3D model and the immersive environment sphere */}
-        <View style={{ width: viewerWidth, height: viewerHeight, overflow: 'hidden', backgroundColor: 'transparent' }}>
+        <View
+          style={{ width: viewerWidth, height: viewerHeight, overflow: 'hidden', backgroundColor: 'transparent' }}
+          {...panResponder.panHandlers}
+        >
 
 
           {/* GL layer – transparent background, renders 3D model on top of the image */}
@@ -1830,7 +1779,7 @@ export default function ProductViewScreen() {
 
                 // Clear previous children before adding model
                 scene.clear();
-                
+
                 // Reset skybox reference since scene was cleared
                 skyboxRef.current = null;
 
@@ -1878,7 +1827,8 @@ export default function ProductViewScreen() {
                   const targetSize = 100;
                   const scale = targetSize / maxDimension;
                   modelGroup.scale.setScalar(scale);
-                  console.log(`Scaled group by ${scale.toFixed(3)}`);
+                  modelScaleRef.current = scale;
+                  console.log(`Scaled group by ${scale.toFixed(3)} (Max raw dim: ${maxDimension.toFixed(2)}m)`);
                 }
 
                 modelGroup.position.set(0, 0, 0);
@@ -1894,6 +1844,9 @@ export default function ProductViewScreen() {
                 scene.add(modelGroup);
                 // CRITICAL: Store the GROUP (not raw model) so measurements scale correctly
                 currentModelRef.current = modelGroup;
+
+                // Clear mesh cache when new model loads for fresh color application
+                cachedMeshesRef.current = [];
 
                 // Calculate camera position based on SCALED bounds
                 const scaledBounds = new THREE.Box3().setFromObject(modelGroup);
@@ -1926,6 +1879,11 @@ export default function ProductViewScreen() {
 
                 // Pass modelGroup to rotate the whole centered group
                 startAnimationLoop(scene, camera, renderer, modelGroup, gl, viewerWidth, viewerHeight);
+
+                // Load skybox now that GL context is ready
+                if (skyboxDataRef.current) {
+                  loadAndApplySkybox(weatherMode).catch((e) => console.warn('Initial skybox load error:', e));
+                }
               } catch (error) {
                 console.error('3D viewer init error', error);
                 setModelLoading(false);
@@ -1935,11 +1893,11 @@ export default function ProductViewScreen() {
           />
 
           {/* Zoom Controls */}
-          <View style={styles.zoomControls}>
-            <TouchableOpacity style={styles.zoomButton} onPress={() => setCameraDistance(d => Math.max(20, d * 0.8))}>
+          <View style={[styles.zoomControls, { pointerEvents: 'box-none' }]}>
+            <TouchableOpacity style={[styles.zoomButton, { pointerEvents: 'auto' }]} onPress={() => setCameraDistance(d => Math.max(20, d * 0.8))}>
               <Ionicons name="add" size={24} color="#333" />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.zoomButton} onPress={() => setCameraDistance(d => Math.min(10000, d * 1.25))}>
+            <TouchableOpacity style={[styles.zoomButton, { pointerEvents: 'auto' }]} onPress={() => setCameraDistance(d => Math.min(800, d * 1.25))}>
               <Ionicons name="remove" size={24} color="#333" />
             </TouchableOpacity>
           </View>
@@ -1981,25 +1939,25 @@ export default function ProductViewScreen() {
           <View style={styles.weatherOverlay}>
             <TouchableOpacity
               style={[styles.weatherIconButton, weatherMode === 'sunny' && styles.weatherIconActive]}
-              onPress={() => setWeatherMode('sunny')}
+              onPress={() => changeWeatherMode('sunny')}
             >
               <Ionicons name="sunny" size={22} color={weatherMode === 'sunny' ? '#fff' : '#333'} />
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.weatherIconButton, weatherMode === 'rainy' && styles.weatherIconActive]}
-              onPress={() => setWeatherMode('rainy')}
+              onPress={() => changeWeatherMode('rainy')}
             >
               <Ionicons name="rainy" size={22} color={weatherMode === 'rainy' ? '#fff' : '#333'} />
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.weatherIconButton, weatherMode === 'foggy' && styles.weatherIconActive]}
-              onPress={() => setWeatherMode('foggy')}
+              onPress={() => changeWeatherMode('foggy')}
             >
               <Ionicons name="cloudy" size={22} color={weatherMode === 'foggy' ? '#fff' : '#333'} />
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.weatherIconButton, weatherMode === 'night' && styles.weatherIconActive]}
-              onPress={() => setWeatherMode('night')}
+              onPress={() => changeWeatherMode('night')}
             >
               <Ionicons name="moon" size={22} color={weatherMode === 'night' ? '#fff' : '#333'} />
             </TouchableOpacity>
@@ -2031,8 +1989,11 @@ export default function ProductViewScreen() {
 
           {/* Measurement Labels - only show when toggled on */}
           {
-            showMeasurements && measurementLabels.map((lbl, i) => (
-              <View key={i} style={[styles.measurementLabel, { left: lbl.x, top: lbl.y }]}>
+            showMeasurements && measurementLabels.map((lbl: any, i) => (
+              <View key={i} style={[
+                styles.measurementLabel,
+                { left: lbl.x, top: lbl.y }
+              ]}>
                 <Text style={styles.measurementText}>{lbl.text}</Text>
               </View>
             ))
@@ -2071,7 +2032,7 @@ export default function ProductViewScreen() {
                     <TouchableOpacity
                       style={[styles.colorOption, activeColor === '#ORIGINAL' && styles.colorOptionActive]}
                       onPress={() => {
-                        setActiveColor('#ORIGINAL');
+                        changeModelColor('#ORIGINAL');
                         setColorPickerModalVisible(false);
                       }}
                     >
@@ -2086,7 +2047,7 @@ export default function ProductViewScreen() {
                         key={index}
                         style={[styles.colorOption, activeColor === color && styles.colorOptionActive]}
                         onPress={() => {
-                          setActiveColor(color);
+                          changeModelColor(color);
                           setColorPickerModalVisible(false);
                         }}
                       >
@@ -2228,6 +2189,20 @@ export default function ProductViewScreen() {
     }
   };
 
+  // Fast weather mode change handler with caching
+  const changeWeatherMode = (newMode: 'sunny' | 'rainy' | 'foggy' | 'night') => {
+    setWeatherMode(newMode);
+  };
+
+  // Color change handler
+  const changeModelColor = (newColor: string) => {
+    setActiveColor(newColor);
+  };
+
+  const open3DViewer = () => {
+    setViewerVisible(true);
+  };
+
   // Count 3D models (adapted to normalized product)
   const modelsCount = (() => {
     if (!product) return 0;
@@ -2298,7 +2273,7 @@ export default function ProductViewScreen() {
             {/* 3D Viewer Button - Left */}
             <TouchableOpacity
               style={styles.open3DButton}
-              onPress={() => setViewerVisible(true)}
+              onPress={open3DViewer}
             >
               <Ionicons name="cube-outline" size={20} color="#fff" />
               <Text style={{ color: '#fff', marginLeft: 8, fontWeight: '700' }}>
@@ -2385,15 +2360,23 @@ export default function ProductViewScreen() {
               </View>
               <View style={styles.specRow}>
                 <Text style={styles.specLabel}>Width:</Text>
-                <Text style={styles.specValue}>{product?.width ? `${product.width} cm` : '-'}</Text>
+                <Text style={styles.specValue}>{product?.width ? `${(parseFloat(product.width) / 100).toFixed(2)} m` : '-'}</Text>
               </View>
               <View style={styles.specRow}>
                 <Text style={styles.specLabel}>Height:</Text>
-                <Text style={styles.specValue}>{product?.height ? `${product.height} cm` : '-'}</Text>
+                <Text style={styles.specValue}>{product?.height ? `${(parseFloat(product.height) / 100).toFixed(2)} m` : '-'}</Text>
               </View>
               <View style={styles.specRow}>
                 <Text style={styles.specLabel}>Thickness:</Text>
-                <Text style={styles.specValue}>{product?.thickness ? `${product.thickness} cm` : '-'}</Text>
+                <Text style={styles.specValue}>{product?.thickness ? `${(parseFloat(product.thickness) / 100).toFixed(2)} m` : '-'}</Text>
+              </View>
+              <View style={styles.specRow}>
+                <Text style={styles.specLabel}>Total Area:</Text>
+                <Text style={styles.specValue}>
+                  {product?.width && product?.height
+                    ? `${((parseFloat(product.width) * parseFloat(product.height)) / 10000).toFixed(2)} sqm`
+                    : '-'}
+                </Text>
               </View>
               <View style={styles.specRow}>
                 <Text style={styles.specLabel}>Type:</Text>
@@ -3161,17 +3144,18 @@ const styles = StyleSheet.create({
   },
   measurementLabel: {
     position: 'absolute',
-    backgroundColor: 'rgba(30,35,48,0.9)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
+    backgroundColor: 'rgba(30,35,48,0.95)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: '#3b82f6',
-    zIndex: 190,
-    // We handle positioning via left/top style props
-    transform: [{ translateX: -20 }, { translateY: -10 }]
+    zIndex: 9999, // Ensure it's on top of everything including GLView
+    elevation: 10, // Android shadow and layering
+    // Fix positioning: translate to center the bubble on the coordinate
+    transform: [{ translateX: -30 }, { translateY: -15 }]
   },
   measurementText: {
     color: '#fff',

@@ -92,6 +92,9 @@ export default function CartScreen() {
         inserted_at: item.created_at,
       }));
       setCartItems(items as CartItem[]);
+
+      // Items are NOT auto-selected by default to give user more control
+      // setSelectedItems(new Set(items.map(item => item.id)));
     } catch (e: any) {
       console.error('Failed to load cart', e);
       Alert.alert('Error', `Failed to load cart: ${e?.message || 'Unknown error'}`);

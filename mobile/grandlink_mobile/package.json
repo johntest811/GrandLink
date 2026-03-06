@@ -1,5 +1,5 @@
 {
-  "name": "grandlink_mobile",
+  "name": "grand-east",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
@@ -11,7 +11,8 @@
     "lint": "expo lint",
     "prebuild:android": "expo prebuild --platform android",
     "apk:debug": "expo prebuild --platform android && cd android && ./gradlew assembleDebug",
-    "apk:release": "expo prebuild --platform android && cd android && ./gradlew assembleRelease"
+    "apk:release": "expo prebuild --platform android && cd android && ./gradlew assembleRelease",
+    "apk:standalone": "expo prebuild --clear && cd android && ./gradlew assembleDebug -PEXPO_DEV_CLIENT=false"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",

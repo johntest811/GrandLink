@@ -10,6 +10,12 @@
       },
       "distribution": "internal"
     },
+    "standalone": {
+      "android": {
+        "buildType": "apk"
+      },
+      "distribution": "internal"
+    },
     "development": {
       "developmentClient": true,
       "android": {
