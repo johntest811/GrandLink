@@ -47,8 +47,8 @@ export default function SettingsTab() {
   return (
     <View style={{ flex: 1, backgroundColor: darkMode ? "#111" : "#f9f9f9" }}>
       <ScrollView contentContainerStyle={{ paddingBottom: 80 }}>
-
-
+            
+        
         <View
           style={[
             styles.header,
@@ -58,7 +58,7 @@ export default function SettingsTab() {
           <Text style={styles.headerTitle}>Settings</Text>
         </View>
 
-
+        
         <View
           style={[
             styles.section,
@@ -81,6 +81,15 @@ export default function SettingsTab() {
             </Text>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={styles.item}
+            onPress={() => router.push("/ChangeAddress")}
+          >
+            <Feather name="map-pin" size={22} color="#888" />
+            <Text style={[styles.itemText, { color: darkMode ? "#fff" : "#222" }]}>
+              My Address
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.item}
@@ -103,7 +112,7 @@ export default function SettingsTab() {
           </TouchableOpacity>
         </View>
 
-
+        
         <View
           style={[
             styles.section,
@@ -122,7 +131,7 @@ export default function SettingsTab() {
           </TouchableOpacity>
         </View>
 
-
+        
         <View
           style={[
             styles.section,
@@ -168,22 +177,22 @@ export default function SettingsTab() {
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.item} onPress={() => router.push("/showroom")}>
-            <MaterialIcons name="storefront" size={22} color="#888" />
-            <Text
-              style={[styles.itemText, { color: darkMode ? "#fff" : "#222" }]}
-            >
-              Showroom
-            </Text>
-          </TouchableOpacity>
+    <MaterialIcons name="storefront" size={22} color="#888" />
+    <Text
+      style={[styles.itemText, { color: darkMode ? "#fff" : "#222" }]}
+    >
+      Showroom
+    </Text>
+  </TouchableOpacity>
         </View>
 
-
+        
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
       </ScrollView>
 
-
+      
       <BottomNavBar />
     </View>
   );

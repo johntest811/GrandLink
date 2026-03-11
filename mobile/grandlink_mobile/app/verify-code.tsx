@@ -8,13 +8,15 @@ import {
   Alert, 
   ImageBackground, 
   ScrollView,
-  ActivityIndicator
+  ActivityIndicator,
+  BackHandler
 } from 'react-native';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { supabase } from './supabaseClient';
-import { resendVerificationCode, complete2FA, verifyCode } from '@/services/TwoFactorAuthService';
-import { hybridVerifyCode, hybridSendVerificationCode } from '@/services/SupabaseTwoFactorService';
+import { resendVerificationCode } from '@/services/TwoFactorAuthService';
+import { hybridVerifyCode, sendSupabaseOTP } from '@/services/SupabaseTwoFactorService';
 import SecurityService from '@/services/SecurityService';
 
 export default function VerifyCodeScreen() {
@@ -44,6 +46,19 @@ export default function VerifyCodeScreen() {
       setMethod(params.method as 'web' | 'supabase');
     }
   }, [params]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      // On Android hardware back, force users back to login from verify screen.
+      const onBackPress = () => {
+        router.replace('/login');
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [])
+  );
 
   const handleChange = (index: number, value: string) => {
     const newCode = [...code];
@@ -141,10 +156,20 @@ export default function VerifyCodeScreen() {
     setError('');
 
     try {
-      console.log('Resending code with method:', method);
-      
-      // Use hybrid approach for resending
-      const result = await hybridSendVerificationCode(email, password || undefined);
+      console.log('Resending code with method:', method, 'isOAuth:', isOAuth);
+
+      let result: { success: boolean; message?: string; error?: string; method?: 'web' | 'supabase' };
+
+      if (method === 'web' && !isOAuth) {
+        // Force resend to use verification-code endpoint only (never magic-link request flow).
+        result = await resendVerificationCode(email);
+      } else {
+        // OAuth/Supabase path still sends a one-time code via Supabase OTP.
+        result = await sendSupabaseOTP(email);
+        if (result.success) {
+          result.method = 'supabase';
+        }
+      }
       
       if (!result.success) {
         setError(result.error || 'Failed to resend code');

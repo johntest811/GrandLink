@@ -127,6 +127,17 @@ android {
     }
 }
 
+configurations.all {
+    resolutionStrategy {
+        // Expo SDK 53 / AGP 8.8 compileSdk 35 is not compatible with androidx.browser 1.9.0.
+        force "androidx.browser:browser:1.8.0"
+        // Keep Kotlin artifacts aligned with Gradle Kotlin plugin used by this Expo SDK.
+        force "org.jetbrains.kotlin:kotlin-stdlib:2.0.21"
+        force "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21"
+        force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21"
+    }
+}
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
