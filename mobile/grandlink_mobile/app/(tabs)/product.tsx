@@ -70,6 +70,11 @@ export default function ProductViewScreen() {
   const [activeColor, setActiveColor] = useState<string>('#ORIGINAL');
   const [colorPickerModalVisible, setColorPickerModalVisible] = useState(false); // Modal for color picker
   const activeColorRef = useRef<string>('#ORIGINAL');
+  const colorPickerVisibleRef = useRef(false);
+
+  useEffect(() => {
+    colorPickerVisibleRef.current = colorPickerModalVisible;
+  }, [colorPickerModalVisible]);
 
   useEffect(() => {
     skyboxDataRef.current = skyboxData;
@@ -362,9 +367,10 @@ export default function ProductViewScreen() {
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => !colorPickerVisibleRef.current,
       onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (evt, gestureState) => {
+        if (colorPickerVisibleRef.current) return false;
         return Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2;
       },
       onMoveShouldSetPanResponderCapture: () => false,
@@ -372,6 +378,7 @@ export default function ProductViewScreen() {
         initialRotation.current = { ...rotationRef.current };
       },
       onPanResponderMove: (evt, gestureState) => {
+        if (colorPickerVisibleRef.current) return;
         const sensitivity = 0.010; 
         const deltaX = -gestureState.dx * sensitivity; 
         const deltaY = -gestureState.dy * sensitivity; 
@@ -383,7 +390,7 @@ export default function ProductViewScreen() {
 
         setRotation(newRotation);
       },
-      onPanResponderTerminationRequest: () => false, 
+      onPanResponderTerminationRequest: () => colorPickerVisibleRef.current, 
       onPanResponderRelease: () => {
       },
       onPanResponderTerminate: () => {
@@ -591,14 +598,13 @@ export default function ProductViewScreen() {
         } else {
           console.log('No colors found in product data, using frame colors');
           const frameColors = [
-            '#ORIGINAL', 
             '#1a1a1a',   // Matte Black
             '#6b6b6b',   // Matte Gray
             '#8B4513',   // Narra 
             '#5C4033',   // Walnut 
           ];
           setProductColors(frameColors);
-          setActiveColor(frameColors[0]);
+          setActiveColor('#ORIGINAL');
         }
 
         setSelectedModelIndex(0);
@@ -1942,23 +1948,32 @@ export default function ProductViewScreen() {
                       <Text style={styles.colorName}>Default</Text>
                     </TouchableOpacity>
 
-                    {productColors.map((color, index) => (
-                      <TouchableOpacity
-                        key={index}
-                        style={[styles.colorOption, activeColor === color && styles.colorOptionActive]}
-                        onPress={() => {
-                          changeModelColor(color);
-                          setColorPickerModalVisible(false);
-                        }}
-                      >
-                        <View style={[styles.colorCircle, {
-                          backgroundColor: color,
-                          borderWidth: activeColor === color ? 3 : 1,
-                          borderColor: activeColor === color ? '#a81d1d' : 'rgba(0,0,0,0.15)',
-                        }]} />
-                        <Text style={styles.colorName}>{color}</Text>
-                      </TouchableOpacity>
-                    ))}
+                    {productColors.map((color, index) => {
+                      const COLOR_NAMES: Record<string, string> = {
+                        '#1a1a1a': 'Matte Black',
+                        '#6b6b6b': 'Matte Gray',
+                        '#8B4513': 'Narra',
+                        '#5C4033': 'Walnut',
+                      };
+                      const colorLabel = COLOR_NAMES[color] ?? color;
+                      return (
+                        <TouchableOpacity
+                          key={index}
+                          style={[styles.colorOption, activeColor === color && styles.colorOptionActive]}
+                          onPress={() => {
+                            changeModelColor(color);
+                            setColorPickerModalVisible(false);
+                          }}
+                        >
+                          <View style={[styles.colorCircle, {
+                            backgroundColor: color,
+                            borderWidth: activeColor === color ? 3 : 1,
+                            borderColor: activeColor === color ? '#a81d1d' : 'rgba(0,0,0,0.15)',
+                          }]} />
+                          <Text style={styles.colorName}>{colorLabel}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </ScrollView>
                 </View>
               </View>

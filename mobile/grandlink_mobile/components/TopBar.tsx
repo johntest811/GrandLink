@@ -170,6 +170,11 @@ export default function TopBar({ onProfilePress }: TopBarProps) {
     }
   };
 
+  // Auto-mark all as read whenever the dropdown is opened
+  useEffect(() => {
+    if (notifOpen) markAllAsRead();
+  }, [notifOpen]);
+
   const handleProfilePress = () => {
     if (onProfilePress) {
       onProfilePress();
@@ -211,14 +216,9 @@ export default function TopBar({ onProfilePress }: TopBarProps) {
             <View style={styles.dropdown}>
               <View style={styles.dropdownHeader}>
                 <Text style={styles.dropdownTitle}>Notifications</Text>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TouchableOpacity style={styles.actionButton} onPress={markAllAsRead}>
-                    <Text style={styles.actionButtonText}>Mark all as read</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.actionButton} onPress={() => { setNotifOpen(false); router.push('/(tabs)/notification'); }}>
-                    <Text style={styles.actionButtonText}>View all</Text>
-                  </TouchableOpacity>
-                </View>
+                <TouchableOpacity style={styles.actionButton} onPress={() => { setNotifOpen(false); router.push('/(tabs)/notification'); }}>
+                  <Text style={styles.actionButtonText}>View all</Text>
+                </TouchableOpacity>
               </View>
               {notifItems.length === 0 ? (
                 <View style={styles.emptyWrap}>
@@ -229,7 +229,10 @@ export default function TopBar({ onProfilePress }: TopBarProps) {
                 <FlatList
                   data={notifItems}
                   keyExtractor={(n) => String(n.id)}
+                  style={{ maxHeight: 268 }}
                   contentContainerStyle={{ paddingVertical: 6 }}
+                  showsVerticalScrollIndicator={true}
+                  nestedScrollEnabled={true}
                   renderItem={({ item }) => (
                     <TouchableOpacity
                       style={[styles.notifRow, !item.is_read && styles.notifRowUnread]}

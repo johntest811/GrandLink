@@ -37,6 +37,7 @@ export default function ARMeasureScreen() {
   const [measurementDepth, setMeasurementDepth] = useState(100); // cm from camera
   const [showCalibrationModal, setShowCalibrationModal] = useState(false);
   const [calibrationDistance, setCalibrationDistance] = useState('');
+  const [calibrationDimension, setCalibrationDimension] = useState<'width' | 'height'>('width');
   const [planeNormal, setPlaneNormal] = useState({ x: 0, y: 0, z: 1 }); // Surface normal vector
   const [referencePoints, setReferencePoints] = useState<Array<{ screen: { x: number, y: number }, world: { x: number, y: number, z: number } }>>([]);
   const [depthEstimationMode, setDepthEstimationMode] = useState<'manual' | 'auto' | 'reference'>('reference');
@@ -598,43 +599,82 @@ export default function ARMeasureScreen() {
   };
 
   const handleCalibration = () => {
-    const knownDistance = parseFloat(calibrationDistance);
-    if (isNaN(knownDistance) || knownDistance <= 0) {
+    const knownValue = parseFloat(calibrationDistance);
+    if (isNaN(knownValue) || knownValue <= 0) {
       Alert.alert('Invalid Distance', 'Please enter a valid distance in centimeters.');
       return;
     }
 
-    if (!measurements) {
+    if (!measurements || measurementPoints.length < 4) {
       Alert.alert('No Measurement', 'Please complete a frame measurement first (4 corner points).');
       return;
     }
 
-    // Use the first measurement for calibration
-    const measuredWidth = measurements?.width || 0;
-    const newCalibrationFactor = knownDistance / measuredWidth;
-    
-    setCalibrationFactor(newCalibrationFactor);
-    setFocusDistance(knownDistance);
+    // Measure pixel span on screen for the chosen dimension
+    // Points order: TL(0) → TR(1) → BR(2) → BL(3)
+    const p0 = measurementPoints[0]; // TL
+    const p1 = measurementPoints[1]; // TR
+    const p3 = measurementPoints[3]; // BL
+
+    const widthPixels = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2);
+    const heightPixels = Math.sqrt((p3.x - p0.x) ** 2 + (p3.y - p0.y) ** 2);
+    const pixelSpan = calibrationDimension === 'width' ? widthPixels : heightPixels;
+
+    if (pixelSpan < 20) {
+      Alert.alert(
+        'Frame Too Small',
+        'The measured frame appears too small on screen. Move closer to the frame and re-measure, then try calibrating again.'
+      );
+      return;
+    }
+
+    // Pinhole camera model: actualDepth = (knownDimension_cm * focalLength_px) / pixelSpan_px
+    // This correctly estimates the real camera-to-surface distance.
+    const fl = cameraIntrinsics.focalLength > 0
+      ? cameraIntrinsics.focalLength
+      : Dimensions.get('window').width * 0.8;
+    const ppX = cameraIntrinsics.principalPointX > 0
+      ? cameraIntrinsics.principalPointX
+      : Dimensions.get('window').width / 2;
+    const ppY = cameraIntrinsics.principalPointY > 0
+      ? cameraIntrinsics.principalPointY
+      : Dimensions.get('window').height / 2;
+
+    const computedDepth = (knownValue * fl) / pixelSpan;
+
+    // Recompute all 4 world points using the correctly estimated depth.
+    // Using the same pinhole formula: worldCoord = (screenCoord - principalPoint) / focalLength * depth
+    const recalculated = measurementPoints.map(pt => ({
+      ...pt,
+      worldX: ((pt.x - ppX) / fl) * computedDepth,
+      worldY: ((pt.y - ppY) / fl) * computedDepth,
+      worldZ: computedDepth,
+    }));
+
+    const [tl, tr, , bl] = recalculated;
+    const newWidth = Math.sqrt(
+      (tr.worldX - tl.worldX) ** 2 +
+      (tr.worldY - tl.worldY) ** 2 +
+      (tr.worldZ - tl.worldZ) ** 2
+    );
+    const newHeight = Math.sqrt(
+      (bl.worldX - tl.worldX) ** 2 +
+      (bl.worldY - tl.worldY) ** 2 +
+      (bl.worldZ - tl.worldZ) ** 2
+    );
+
+    setMeasurementPoints(recalculated);
+    setMeasurements({ width: newWidth, height: newHeight });
+    setFocusDistance(computedDepth); // Correctly set as camera-to-surface depth
+    setCalibrationFactor(1);         // Factor is now baked into the depth calculation
     setIsCalibrated(true);
+    setDepthEstimationMode('manual'); // Use the calibrated focusDistance for new taps
     setShowCalibrationModal(false);
     setCalibrationDistance('');
-    
-    // Add reference points for future depth estimation
-    if (measurementPoints.length >= 2) {
-      const newRef = {
-        screen: { x: measurementPoints[0].x, y: measurementPoints[0].y },
-        world: { 
-          x: measurementPoints[0].worldX * newCalibrationFactor, 
-          y: measurementPoints[0].worldY * newCalibrationFactor, 
-          z: measurementPoints[0].worldZ * newCalibrationFactor 
-        }
-      };
-      setReferencePoints(prev => [...prev, newRef]);
-    }
-    
+
     Alert.alert(
-      'Calibration Complete', 
-      `AR system calibrated with depth ${knownDistance}cm. Accuracy improved for future measurements.`
+      'Calibration Complete',
+      `Surface estimated ${computedDepth.toFixed(0)} cm from camera.\n\nUpdated measurements:\nWidth: ${newWidth.toFixed(1)} cm\nHeight: ${newHeight.toFixed(1)} cm\n\nFuture taps will use this depth for accuracy.`
     );
   };
   
@@ -657,6 +697,7 @@ export default function ARMeasureScreen() {
   const handleCloseCalibrationModal = () => {
     setShowCalibrationModal(false);
     setCalibrationDistance('');
+    setCalibrationDimension('width');
   };
 
   // Adjust measurement depth based on device tilt
@@ -943,16 +984,17 @@ export default function ARMeasureScreen() {
           <ScrollView 
             style={styles.modalScrollView}
             keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
+            showsVerticalScrollIndicator={true}
           >
             <View style={styles.calibrationInstructions}>
               <MaterialIcons name="straighten" size={48} color="#a81d1d" />
               <Text style={styles.calibrationInstructionTitle}>Frame Measurement Calibration:</Text>
               <Text style={styles.calibrationInstructionText}>
-                1. Measure a rectangular frame with known dimensions{'\n'}
-                2. Tap the 4 corners: Top-left → Top-right → Bottom-right → Bottom-left{'\n'}
-                3. Enter the actual width or height to improve accuracy{'\n'}
-                4. This calibrates the system for better depth estimation
+                1. Tap the 4 corners of a frame with a known real-world size{'\n'}
+                2. Choose whether you know the Width or Height{'\n'}
+                3. Enter the actual measurement in cm (e.g. 90cm wide door){'\n'}
+                4. The system re-calculates depth and updates all measurements instantly{'\n'}
+                Scroll down for the input section.{'\n'}
               </Text>
               
               {measurements && 'width' in measurements && 'height' in measurements && (
@@ -972,12 +1014,38 @@ export default function ARMeasureScreen() {
             </View>
             
             <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Actual Distance (cm) *</Text>
+              <Text style={styles.modalLabel}>Which dimension are you entering?</Text>
+              <View style={styles.typeSelector}>
+                <TouchableOpacity
+                  style={[styles.typeButton, calibrationDimension === 'width' && styles.typeButtonActive]}
+                  onPress={() => setCalibrationDimension('width')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.typeButtonText, calibrationDimension === 'width' && styles.typeButtonTextActive]}>
+                    Width
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.typeButton, calibrationDimension === 'height' && styles.typeButtonActive]}
+                  onPress={() => setCalibrationDimension('height')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.typeButtonText, calibrationDimension === 'height' && styles.typeButtonTextActive]}>
+                    Height
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>
+                Actual {calibrationDimension === 'width' ? 'Width' : 'Height'} (cm) *
+              </Text>
               <TextInput
                 style={styles.modalTextInput}
                 value={calibrationDistance}
                 onChangeText={setCalibrationDistance}
-                placeholder="e.g., 8.5 (for credit card width)"
+                placeholder={calibrationDimension === 'width' ? 'e.g., 90 (standard door width)' : 'e.g., 210 (standard door height)'}
                 placeholderTextColor="#999"
                 keyboardType="decimal-pad"
                 returnKeyType="done"
@@ -991,6 +1059,13 @@ export default function ARMeasureScreen() {
               <Text style={styles.calibrationTipText}>• &quot;Reference&quot; mode uses calibrated points</Text>
               <Text style={styles.calibrationTipText}>• Hold device perpendicular to surface</Text>
               <Text style={styles.calibrationTipText}>• Ensure stable hand position</Text>
+            </View>
+
+            {/* Scroll hint */}
+            <View style={styles.scrollHint}>
+              <Ionicons name="chevron-down" size={18} color="#aaa" />
+              <Text style={styles.scrollHintText}>Scroll down for more</Text>
+              <Ionicons name="chevron-down" size={18} color="#aaa" />
             </View>
           </ScrollView>
           
@@ -1204,14 +1279,26 @@ export default function ARMeasureScreen() {
             
             {/* Control buttons */}
             <View style={styles.controlButtonsRow}>
-              <TouchableOpacity 
-                style={[styles.smallButton, styles.undoButton]}
-                onPress={(e) => { e.stopPropagation(); undoLastPoint(); }}
-                disabled={measurementPoints.length === 0}
-              >
-                <Ionicons name="arrow-undo" size={20} color="#fff" />
-                <Text style={styles.smallButtonText}>Undo</Text>
-              </TouchableOpacity>
+              <View style={styles.undoStack}>
+                <TouchableOpacity 
+                  style={[styles.smallButton, styles.undoButton, measurementPoints.length === 0 && styles.disabledButton]}
+                  onPress={(e) => { e.stopPropagation(); undoLastPoint(); }}
+                  disabled={measurementPoints.length === 0}
+                >
+                  <Ionicons name="arrow-undo" size={20} color="#fff" />
+                  <Text style={styles.smallButtonText}>Undo</Text>
+                </TouchableOpacity>
+
+                {measurementPoints.length >= 2 && (
+                  <TouchableOpacity 
+                    style={[styles.smallButton, styles.undoAllButton]}
+                    onPress={(e) => { e.stopPropagation(); resetMeasurement(); }}
+                  >
+                    <MaterialIcons name="clear-all" size={20} color="#fff" />
+                    <Text style={styles.smallButtonText}>Undo All</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
 
               <TouchableOpacity 
                 style={[styles.smallButton, styles.calibrateButton]}
@@ -2062,6 +2149,18 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     paddingLeft: 8,
   },
+  scrollHint: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingVertical: 8,
+  },
+  scrollHintText: {
+    color: '#999',
+    fontSize: 12,
+    marginHorizontal: 8,
+  },
   
   // Depth Control Styles
   depthControls: {
@@ -2204,8 +2303,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  undoStack: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 6,
+  },
   undoButton: {
     backgroundColor: 'rgba(100, 100, 100, 0.9)',
+  },
+  undoAllButton: {
+    backgroundColor: 'rgba(180, 60, 60, 0.9)',
   },
   calibrateButton: {
     backgroundColor: 'rgba(255, 170, 0, 0.9)',

@@ -234,15 +234,20 @@ export default function NotificationScreen() {
     await saveNotificationPreference(enabled);
   };
 
-  const markAllAsRead = async () => {
-    if (!userId) return;
-    const { error } = await supabase
+  // Auto-mark all as read when the screen is opened and items are loaded
+  useEffect(() => {
+    if (!userId || items.length === 0) return;
+    const hasUnread = items.some((n) => !n.is_read);
+    if (!hasUnread) return;
+    supabase
       .from('user_notifications')
       .update({ is_read: true })
       .eq('user_id', userId)
-      .eq('is_read', false);
-    if (!error) setItems((prev) => prev.map((n) => ({ ...n, is_read: true })));
-  };
+      .eq('is_read', false)
+      .then(({ error }) => {
+        if (!error) setItems((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      });
+  }, [userId, items.length]);
 
   const renderItem = ({ item }: { item: UserNotification }) => {
     const tint = item.is_read ? '#666' : '#8B1C1C';
@@ -280,12 +285,7 @@ export default function NotificationScreen() {
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <TouchableOpacity style={styles.headerBtn} onPress={markAllAsRead}>
-            <Ionicons name="checkmark-done" size={18} color="#fff" />
-            <Text style={styles.headerBtnText}>Mark all as read</Text>
-          </TouchableOpacity>
-        </View>
+        <View style={{ width: 34 }} />
       </View>
 
       <View style={styles.preferenceCard}>
