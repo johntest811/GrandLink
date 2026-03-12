@@ -332,18 +332,6 @@ export default function ProfileScreen() {
               </>
             )}
           </Pressable>
-          <Pressable
-            android_ripple={{ color: '#8B1C1C' }}
-            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
-            onPress={() => router.push('../ar-measure')}
-          >
-            {({ pressed }) => (
-              <>
-                <MaterialIcons name="straighten" size={22} color={pressed ? '#8B1C1C' : '#000'} />
-                <Text style={[styles.menuText, { color: pressed ? '#8B1C1C' : '#000' }]}>AR Measurement</Text>
-              </>
-            )}
-          </Pressable>
         </View>
 
         {/* Logout Menu Item */}
