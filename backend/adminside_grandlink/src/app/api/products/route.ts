@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { logActivity } from "@/app/lib/activity";
-import { notifyProductCreated, notifyInventoryChange } from "@/app/lib/notifications";
+import { notifyProductCreated } from "@/app/lib/notifications";
 import { adminNotificationService } from "@/utils/notificationHelper";
 
 const supabaseAdmin = createClient(
@@ -10,7 +10,7 @@ const supabaseAdmin = createClient(
 );
 
 // GET all products
-export async function GET(req: Request) {
+export async function GET() {
   try {
     const { data: products, error } = await supabaseAdmin
       .from("products")
@@ -42,16 +42,51 @@ export async function POST(req: Request) {
       if (authHeader) {
         currentAdmin = JSON.parse(authHeader);
       }
-    } catch (e) {
+    } catch {
       console.log("No admin auth found in header");
     }
 
     // Insert the product
-    const { data: product, error } = await supabaseAdmin
-      .from("products")
-      .insert(body)
-      .select()
-      .single();
+    let product: any = null;
+    let error: any = null;
+
+    {
+      const result = await supabaseAdmin
+        .from("products")
+        .insert(body)
+        .select()
+        .single();
+      product = result.data;
+      error = result.error;
+    }
+
+    // Backward compatible fallback if optional JSON/array columns don't exist yet
+    if (error) {
+      const msg = String(error.message || "").toLowerCase();
+      const fallbackBody: any = { ...body };
+      let changed = false;
+      if (msg.includes("images")) {
+        delete fallbackBody.images;
+        changed = true;
+      }
+      if (msg.includes("skyboxes")) {
+        delete fallbackBody.skyboxes;
+        changed = true;
+      }
+      if (msg.includes("house_model_url")) {
+        delete fallbackBody.house_model_url;
+        changed = true;
+      }
+      if (changed) {
+        const retry = await supabaseAdmin
+          .from("products")
+          .insert(fallbackBody)
+          .select()
+          .single();
+        product = retry.data;
+        error = retry.error;
+      }
+    }
 
     if (error) {
       console.error("Product creation error:", error);
@@ -60,42 +95,43 @@ export async function POST(req: Request) {
 
     console.log("✅ Product created successfully:", product.id);
 
-    // Log activity for admin dashboard
+    const sideEffects: Promise<unknown>[] = [];
+
     if (currentAdmin) {
-      await logActivity({
-        admin_id: currentAdmin.id,
-        admin_name: currentAdmin.username,
-        action: "create",
-        entity_type: "products",
-        entity_id: product.id,
-        details: `Created new product: ${product.name}`,
-        metadata: {
-          product_name: product.name,
-          price: product.price,
-          inventory: product.inventory
-        }
-      });
+      sideEffects.push(
+        logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: "create",
+          entity_type: "products",
+          entity_id: product.id,
+          details: `Created new product: ${product.name}`,
+          metadata: {
+            product_name: product.name,
+            price: product.price,
+            inventory: product.inventory,
+          },
+        })
+      );
 
-      // Create admin notification about product creation
-      await notifyProductCreated(
-        product.name, 
-        currentAdmin.username, 
-        product.type || 'General'
+      sideEffects.push(
+        notifyProductCreated(
+          product.name,
+          currentAdmin.username,
+          product.type || "General"
+        )
       );
     }
 
-    // Send notification to users about new product
-    try {
-      await adminNotificationService.notifyNewProduct(
-        product.name,
-        product.id,
-        currentAdmin?.username || 'Admin'
-      );
-      console.log("🔔 User notifications sent for new product");
-    } catch (notificationError) {
-      console.error("❌ Failed to send user notifications:", notificationError);
-      // Don't fail the request if user notification fails
-    }
+    sideEffects.push(
+      adminNotificationService
+        .notifyNewProduct(product.name, product.id, currentAdmin?.username || "Admin", req.url)
+        .catch((error) => {
+          console.error("❌ Failed to send user notifications:", error);
+        })
+    );
+
+    await Promise.allSettled(sideEffects);
 
     return NextResponse.json({ product }, { status: 201 });
   } catch (err: any) {

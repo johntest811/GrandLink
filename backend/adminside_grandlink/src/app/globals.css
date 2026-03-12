@@ -3,11 +3,25 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Admin theme (scoped via .admin-app wrapper) */
+  --admin-bg: #f9fafb;
+  --admin-surface: #ffffff;
+  --admin-text: #111827;
+  --admin-muted: #6b7280;
+  --admin-border: #e5e7eb;
+  --admin-sidebar-bg: #1e2939;
+  --admin-sidebar-text: #e5e7eb;
+  --admin-sidebar-hover: #243147;
+  --admin-sidebar-active: #0f172a;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--admin-surface);
+  --color-card-foreground: var(--admin-text);
+  --color-muted-foreground: var(--admin-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -17,6 +31,178 @@
     --background: #0a0a0a;
     --foreground: #ededed;
   }
+}
+
+/*
+  Admin theme switching
+  - Enabled by setting: document.documentElement.dataset.adminTheme = 'light' | 'dark' | 'midnight'
+  - Scoped to dashboard shell via the `.admin-app` wrapper class
+*/
+
+html[data-admin-theme="light"] {
+  --admin-bg: #f9fafb;
+  --admin-surface: #ffffff;
+  --admin-text: #111827;
+  --admin-muted: #6b7280;
+  --admin-border: #e5e7eb;
+  --admin-sidebar-bg: #1e2939;
+  --admin-sidebar-text: #e5e7eb;
+  --admin-sidebar-hover: #243147;
+  --admin-sidebar-active: #0f172a;
+}
+
+html[data-admin-theme="dark"] {
+  --admin-bg: #0b1220;
+  --admin-surface: #111827;
+  --admin-text: #e5e7eb;
+  --admin-muted: #9ca3af;
+  --admin-border: #1f2937;
+  --admin-sidebar-bg: #070b14;
+  --admin-sidebar-text: #e5e7eb;
+  --admin-sidebar-hover: #111827;
+  --admin-sidebar-active: #0b1220;
+}
+
+html[data-admin-theme="midnight"] {
+  --admin-bg: #050816;
+  --admin-surface: #0b1026;
+  --admin-text: #e7e9ff;
+  --admin-muted: #a3a8d6;
+  --admin-border: #1b2455;
+  --admin-sidebar-bg: #030515;
+  --admin-sidebar-text: #e7e9ff;
+  --admin-sidebar-hover: #0b1026;
+  --admin-sidebar-active: #111a3d;
+}
+
+.admin-app {
+  background: var(--admin-bg);
+  color: var(--admin-text);
+}
+
+/* Utility-class overrides to make existing Tailwind classes theme-aware (admin only) */
+html[data-admin-theme] .admin-app .bg-white {
+  background-color: var(--admin-surface) !important;
+}
+html[data-admin-theme] .admin-app .bg-gray-50 {
+  background-color: var(--admin-bg) !important;
+}
+html[data-admin-theme] .admin-app .bg-gray-100 {
+  background-color: color-mix(in srgb, var(--admin-bg) 88%, var(--admin-surface)) !important;
+}
+html[data-admin-theme] .admin-app .text-black {
+  color: var(--admin-text) !important;
+}
+html[data-admin-theme] .admin-app .text-gray-600,
+html[data-admin-theme] .admin-app .text-gray-700,
+html[data-admin-theme] .admin-app .text-gray-500 {
+  color: var(--admin-muted) !important;
+}
+html[data-admin-theme] .admin-app .border-gray-200,
+html[data-admin-theme] .admin-app .border-gray-300,
+html[data-admin-theme] .admin-app .border-gray-700 {
+  border-color: var(--admin-border) !important;
+}
+/* Sidebar-only overrides (avoid leaking into main content) */
+html[data-admin-theme] .admin-app .admin-sidebar.bg-gray-800 {
+  background-color: var(--admin-sidebar-bg) !important;
+}
+html[data-admin-theme] .admin-app .admin-sidebar .bg-gray-900 {
+  background-color: var(--admin-sidebar-active) !important;
+}
+html[data-admin-theme] .admin-app .admin-sidebar .text-gray-300 {
+  color: var(--admin-sidebar-text) !important;
+}
+html[data-admin-theme] .admin-app .admin-sidebar .hover\:bg-gray-700:hover {
+  background-color: var(--admin-sidebar-hover) !important;
+}
+html[data-admin-theme] .admin-app .hover\:bg-gray-50:hover {
+  background-color: color-mix(in srgb, var(--admin-surface) 85%, var(--admin-bg)) !important;
+}
+
+/* TipTap + blog preview content styling (admin only)
+   Tailwind preflight resets headings + list-style, so we re-add the basics here.
+*/
+html[data-admin-theme] .admin-app .tiptap,
+html[data-admin-theme] .admin-app .admin-blog-preview,
+html[data-admin-theme] .admin-app .ProseMirror {
+  color: var(--admin-text);
+}
+
+html[data-admin-theme] .admin-app .ProseMirror p,
+html[data-admin-theme] .admin-app .admin-blog-preview p {
+  margin: 0.65rem 0;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror h1,
+html[data-admin-theme] .admin-app .admin-blog-preview h1 {
+  font-size: 1.875rem;
+  line-height: 2.25rem;
+  font-weight: 800;
+  margin: 1rem 0 0.5rem;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror h2,
+html[data-admin-theme] .admin-app .admin-blog-preview h2 {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  font-weight: 800;
+  margin: 0.9rem 0 0.45rem;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror h3,
+html[data-admin-theme] .admin-app .admin-blog-preview h3 {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 700;
+  margin: 0.8rem 0 0.4rem;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror ul,
+html[data-admin-theme] .admin-app .admin-blog-preview ul {
+  list-style: disc;
+  list-style-position: outside;
+  padding-left: 1.5rem;
+  margin: 0.65rem 0;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror ol,
+html[data-admin-theme] .admin-app .admin-blog-preview ol {
+  list-style: decimal;
+  list-style-position: outside;
+  padding-left: 1.5rem;
+  margin: 0.65rem 0;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror li,
+html[data-admin-theme] .admin-app .admin-blog-preview li {
+  display: list-item;
+  margin: 0.25rem 0;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror blockquote,
+html[data-admin-theme] .admin-app .admin-blog-preview blockquote {
+  border-left: 4px solid var(--admin-border);
+  padding-left: 0.9rem;
+  margin: 0.75rem 0;
+  color: var(--admin-muted);
+}
+
+html[data-admin-theme] .admin-app .ProseMirror hr,
+html[data-admin-theme] .admin-app .admin-blog-preview hr {
+  border: none;
+  border-top: 1px solid var(--admin-border);
+  margin: 1rem 0;
+}
+
+html[data-admin-theme] .admin-app .ProseMirror img,
+html[data-admin-theme] .admin-app .admin-blog-preview img {
+  display: block;
+  margin: 0.75rem auto;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.75rem;
+  border: 1px solid var(--admin-border);
 }
 
 body {

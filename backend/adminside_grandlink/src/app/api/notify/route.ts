@@ -8,16 +8,58 @@ const supabaseAdmin = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
+async function listAllAuthUsers(perPage = 200) {
+  const users: Array<{ id: string; email?: string | null }> = [];
+  let page = 1;
+
+  while (true) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    users.push(...(data.users as Array<{ id: string; email?: string | null }>));
+    if (!data.users || data.users.length < perPage) break;
+    page += 1;
+  }
+
+  return users;
+}
+
 let mailTransporter: nodemailer.Transporter | null = null;
 if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
   mailTransporter = nodemailer.createTransport({
     service: "gmail",
-    auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_PASS },
+    auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_PASS.replace(/\s+/g, "") },
   });
 }
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic'; // avoid caching for webhooks/notifications
+
+function normalizeBaseUrl(value: string | null | undefined) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/$/, "");
+}
+
+function getWebsiteBaseCandidates() {
+  const candidates = [
+    process.env.NEXT_PUBLIC_USER_WEBSITE_URL,
+    process.env.NEXT_PUBLIC_WEBSITE_URL,
+    process.env.WEBSITE_URL,
+    process.env.WEBSITE_PUBLIC_URL,
+    process.env.NEXT_PUBLIC_BASE_URL,
+    process.env.SITE_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+    "http://localhost:3000",
+    "https://grandlink-website.vercel.app",
+    "https://grandlnik-website.vercel.app",
+  ]
+    .map((value) => normalizeBaseUrl(value))
+    .filter((value): value is string => Boolean(value));
+
+  return Array.from(new Set(candidates));
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,6 +71,44 @@ export async function POST(request: NextRequest) {
       const newStatus = payload?.newStatus;
       if (!userItemId || !newStatus) {
         return NextResponse.json({ success: false, error: "Missing userItemId or newStatus" }, { status: 400 });
+      }
+
+      const websiteBases = getWebsiteBaseCandidates();
+
+      for (const websiteBase of websiteBases) {
+        try {
+          const websiteResponse = await fetch(`${websiteBase}/api/update-order-status`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userItemId,
+              newStatus,
+              adminName: payload?.adminName || null,
+              adminNotes: payload?.adminNotes || null,
+              estimatedDeliveryDate: payload?.estimatedDeliveryDate || null,
+              skipUpdate: true,
+            }),
+            cache: "no-store",
+          });
+
+          const websiteJson = await websiteResponse.json().catch(() => ({}));
+          if (websiteResponse.ok) {
+            return NextResponse.json({
+              success: true,
+              proxied: true,
+              websiteBase,
+              message: websiteJson?.message || "Notification processed",
+              invoiceEmailSent: websiteJson?.invoiceEmailSent || false,
+            });
+          }
+
+          console.warn(
+            `Website order-status proxy failed for ${websiteBase}, trying next candidate:`,
+            websiteJson?.error || websiteResponse.statusText
+          );
+        } catch (proxyError) {
+          console.warn(`Website order-status proxy error for ${websiteBase}, trying next candidate:`, proxyError);
+        }
       }
 
       const { data: orderData, error: orderErr } = await supabaseAdmin
@@ -144,21 +224,21 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    console.log("📢 Notification API called:", { type, productName, productId, adminName });
+    console.log("Notification API called:", { type, productName, productId, adminName });
 
     if (type === "new_product") {
-      // Get all users
-      const { data: allUsers, error: usersError } = await supabaseAdmin.auth.admin.listUsers();
-      
-      if (usersError) {
+      let allUsers: Array<{ id: string; email?: string | null }> = [];
+      try {
+        allUsers = await listAllAuthUsers(200);
+      } catch (usersError: any) {
         console.error("Error fetching users:", usersError);
-        return NextResponse.json({ success: false, error: usersError.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: usersError?.message || "Failed to fetch users" }, { status: 500 });
       }
 
       let notificationsSent = 0;
       let emailsSent = 0;
 
-      for (const user of allUsers.users) {
+      for (const user of allUsers) {
         // Check user preferences
         const { data: prefs } = await supabaseAdmin
           .from('user_notification_preferences')
@@ -175,7 +255,7 @@ export async function POST(request: NextRequest) {
             .from('user_notifications')
             .insert({
               user_id: user.id,
-              title: 'New Product Available! 🆕',
+              title: 'New Product Available!',
               message: `Check out our new product: ${productName}`,
               type: 'new_product',
               metadata: {
@@ -212,7 +292,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      console.log(`✅ New product notifications sent: ${notificationsSent} in-app, ${emailsSent} emails`);
+      console.log(`New product notifications sent: ${notificationsSent} in-app, ${emailsSent} emails`);
       return NextResponse.json({ 
         success: true, 
         notificationsSent, 
@@ -221,17 +301,18 @@ export async function POST(request: NextRequest) {
       });
 
     } else if (type === "stock_update") {
-      const { data: allUsers, error: usersError } = await supabaseAdmin.auth.admin.listUsers();
-      
-      if (usersError) {
+      let allUsers: Array<{ id: string; email?: string | null }> = [];
+      try {
+        allUsers = await listAllAuthUsers(200);
+      } catch (usersError: any) {
         console.error("Error fetching users:", usersError);
-        return NextResponse.json({ success: false, error: usersError.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: usersError?.message || "Failed to fetch users" }, { status: 500 });
       }
 
       let notificationsSent = 0;
       let emailsSent = 0;
 
-      for (const user of allUsers.users) {
+      for (const user of allUsers) {
         const { data: prefs } = await supabaseAdmin
           .from('user_notification_preferences')
           .select('*')
@@ -246,7 +327,7 @@ export async function POST(request: NextRequest) {
             .from('user_notifications')
             .insert({
               user_id: user.id,
-              title: 'Stock Replenished! 📦',
+              title: 'Stock Replenished!',
               message: `${productName} is back in stock with ${newStock} units available. Order now!`,
               type: 'stock_update',
               metadata: {
@@ -282,7 +363,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      console.log(`✅ Stock update notifications sent: ${notificationsSent} in-app, ${emailsSent} emails`);
+      console.log(` Stock update notifications sent: ${notificationsSent} in-app, ${emailsSent} emails`);
       return NextResponse.json({ 
         success: true, 
         notificationsSent, 
@@ -299,7 +380,7 @@ export async function POST(request: NextRequest) {
         message: msg,
         type: "order",
         priority: "high",
-  recipient_role: "admin",
+        recipient_role: "admin",
         is_read: false,
         created_at: new Date().toISOString()
       });
@@ -309,7 +390,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: false, error: "Invalid notification type" }, { status: 400 });
   } catch (error) {
-    console.error("💥 Notification API error:", error);
+    console.error(" Notification API error:", error);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }

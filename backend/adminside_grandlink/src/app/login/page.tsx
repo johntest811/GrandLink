@@ -5,21 +5,34 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../Clients/Supabase/SupabaseClients';
 import { logActivity } from '../lib/activity';
 import Logo from '../../components/Logo';
+import ToastPopup, { ToastPopupState } from '../../components/ToastPopup';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [toast, setToast] = useState<ToastPopupState>({
+    open: false,
+    type: 'info',
+    title: undefined,
+    message: '',
+  });
   const router = useRouter();
+
+  const showToast = (next: Omit<ToastPopupState, 'open'>) =>
+    setToast({ open: true, ...next });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setToast((t) => ({ ...t, open: false }));
     setIsLoading(true);
 
     if (!username || !password) {
-      setError('Please fill in all fields');
+      showToast({
+        type: 'error',
+        title: 'Missing details',
+        message: 'Please fill in all fields.',
+      });
       setIsLoading(false);
       return;
     }
@@ -36,7 +49,11 @@ export default function Login() {
 
       if (adminError || !adminData) {
         console.error('❌ Admin not found:', adminError);
-        setError('Invalid username or password');
+        showToast({
+          type: 'error',
+          title: 'Account not found',
+          message: 'This admin account does not exist. Please check the username.',
+        });
         setIsLoading(false);
         return;
       }
@@ -45,19 +62,27 @@ export default function Login() {
 
       // Check if account is active
       if (!adminData.is_active) {
-        setError('Your account has been deactivated. Please contact an administrator.');
+        showToast({
+          type: 'error',
+          title: 'Account not activated',
+          message: 'Your account is not activated. Please contact an administrator.',
+        });
         setIsLoading(false);
         return;
       }
 
       // Direct password comparison (plain text)
       if (adminData.password !== password) {
-        setError('Invalid username or password');
+        showToast({
+          type: 'error',
+          title: 'Wrong password',
+          message: 'The password you entered is incorrect.',
+        });
         setIsLoading(false);
         return;
       }
 
-      console.log('✅ Password verified for user:', adminData.username);
+      console.log(' Password verified for user:', adminData.username);
 
       // Update last login
       const { error: updateError } = await supabase
@@ -66,7 +91,7 @@ export default function Login() {
         .eq('id', adminData.id);
 
       if (updateError) {
-        console.warn('⚠️ Failed to update last login:', updateError);
+        console.warn(' Failed to update last login:', updateError);
       }
 
       // Store admin session data in localStorage
@@ -81,7 +106,7 @@ export default function Login() {
 
       // Log login activity with better error handling
       try {
-        console.log('📝 Logging login activity for admin ID:', adminData.id);
+        console.log(' Logging login activity for admin ID:', adminData.id);
         const activityResult = await logActivity({
           admin_id: adminData.id.toString(), // Convert UUID to string
           admin_name: adminData.username,
@@ -98,21 +123,25 @@ export default function Login() {
         });
 
         if (activityResult.success) {
-          console.log('✅ Login activity logged successfully');
+          console.log(' Login activity logged successfully');
         } else {
-          console.error('❌ Failed to log login activity:', activityResult.error);
+          console.error(' Failed to log login activity:', activityResult.error);
         }
       } catch (logError) {
-        console.error('💥 Exception while logging activity:', logError);
+        console.error(' Exception while logging activity:', logError);
         // Don't block login if activity logging fails
       }
 
-      console.log('🎉 Login successful, redirecting to dashboard');
+      console.log(' Login successful, redirecting to dashboard');
       router.push('/dashboard');
 
     } catch (error: any) {
-      console.error('💥 Login exception:', error);
-      setError('An unexpected error occurred. Please try again.');
+      console.error(' Login exception:', error);
+      showToast({
+        type: 'error',
+        title: 'Login failed',
+        message: 'An unexpected error occurred. Please try again.',
+      });
     } finally {
       setIsLoading(false);
     }
@@ -120,6 +149,7 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4">
+      <ToastPopup state={toast} onClose={() => setToast((t) => ({ ...t, open: false }))} />
       <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
         <div className="flex justify-center mb-8">
           <Logo size="large" />
@@ -127,20 +157,7 @@ export default function Login() {
 
         <h1 className="text-2xl font-bold text-center text-gray-800 mb-6">Admin Login</h1>
 
-        {error && (
-          <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded">
-            <div className="flex">
-              <div className="py-1">
-                <svg className="h-6 w-6 text-red-500 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              </div>
-              <div>
-                <p className="font-medium">{error}</p>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Errors now show as popup notifications */}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>

@@ -11,6 +11,27 @@ function supabaseAdmin() {
 export async function GET() {
   try {
     const supabase = supabaseAdmin();
+
+    await supabase
+      .from("rbac_pages")
+      .upsert(
+        [
+          {
+            key: "content_management_products",
+            name: "Content Management - Products Page",
+            path: "/dashboard/Content_management/products",
+            group_name: "Content Management",
+          },
+          {
+            key: "user_accounts_delete",
+            name: "User Accounts Delete",
+            path: "/dashboard/user-accounts/delete",
+            group_name: "Accounts",
+          },
+        ],
+        { onConflict: "key" }
+      );
+
     const { data, error } = await supabase
       .from("rbac_pages")
       .select("key,name,path,group_name")

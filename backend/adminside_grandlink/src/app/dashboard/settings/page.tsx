@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 
 type Admin = {
@@ -8,15 +8,17 @@ type Admin = {
   username: string;
   role: "superadmin" | "admin" | "manager" | "employee";
   position?: string | null;
+  theme?: "light" | "dark" | "midnight" | string | null;
   full_name?: string | null;
   employee_number?: string | null;
   is_active?: boolean | null;
   created_at?: string | null;
   last_login?: string | null;
   password?: string | null;
+  profile_image_url?: string | null;
+  avatar_url?: string | null;
 };
 
-type HomeContentRow = { id: string; content: any; updated_at?: string };
 type InquireContentRow = {
   id: string;
   title: string;
@@ -42,19 +44,20 @@ export default function SettingsPage() {
   const [currentAdmin, setCurrentAdmin] = useState<Admin | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
 
-  // RBAC positions (for create/edit admin forms)
+  // Positions list used by the profile editor dropdown
   const [positionsList, setPositionsList] = useState<string[]>(DEFAULT_POSITIONS);
 
-  const norm = (v?: string | null) => String(v || "").toLowerCase().replace(/[\s_-]/g, "");
-  const isCurrentSuperadmin =
-    norm(currentAdmin?.role) === "superadmin" || norm(currentAdmin?.position) === "superadmin";
+  // Admin theme (persisted to localStorage; applied by dashboard layout)
+  const [adminTheme, setAdminTheme] = useState<"light" | "dark" | "midnight">("light");
 
   // Edit profile modal
   const [editOpen, setEditOpen] = useState(false);
   const [editFullName, setEditFullName] = useState("");
   const [editPosition, setEditPosition] = useState<string>("");
+  const [editProfileImageUrl, setEditProfileImageUrl] = useState("");
   const [editPassword, setEditPassword] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingProfileImage, setUploadingProfileImage] = useState(false);
 
   useEffect(() => {
     loadCurrentAdminProfile();
@@ -71,12 +74,55 @@ export default function SettingsPage() {
           : [];
         if (names.length) setPositionsList(names);
       } catch {
-        // ignore, keep defaults
+        // ignore
       }
     };
 
     loadPositions();
   }, []);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("adminTheme");
+      if (saved === "light" || saved === "dark" || saved === "midnight") {
+        setAdminTheme(saved);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const setTheme = async (theme: "light" | "dark" | "midnight") => {
+    setAdminTheme(theme);
+    try {
+      localStorage.setItem("adminTheme", theme);
+    } catch {}
+    try {
+      document.documentElement.dataset.adminTheme = theme;
+    } catch {}
+    try {
+      window.dispatchEvent(new Event("admin-theme-changed"));
+    } catch {}
+
+    // Persist to the admin account (requires `admins.theme` column)
+    if (currentAdmin?.id) {
+      try {
+        const { error } = await supabase
+          .from("admins")
+          // use any-cast to avoid TS mismatch if the column isn't in generated types
+          .update({ theme } as any)
+          .eq("id", currentAdmin.id);
+        if (error) {
+          // If the column doesn't exist yet, this will fail; UI still works via localStorage.
+          console.warn("Failed to persist theme to admins.theme", error);
+        } else {
+          setCurrentAdmin((prev) => (prev ? ({ ...prev, theme } as any) : prev));
+        }
+      } catch (e) {
+        console.warn("Theme persist exception", e);
+      }
+    }
+  };
 
   const loadCurrentAdminProfile = async () => {
     setProfileLoading(true);
@@ -134,7 +180,26 @@ export default function SettingsPage() {
       }
 
       if (adminRow) {
+        try {
+          const fallbackImage = localStorage.getItem(`adminProfileImage:${adminRow.id}`) || "";
+          if (fallbackImage && !(adminRow as any).profile_image_url) {
+            (adminRow as any).profile_image_url = fallbackImage;
+          }
+        } catch {}
+
         setCurrentAdmin(adminRow);
+
+        // Prefer theme saved on the account (fallback to localStorage/default)
+        const t = (adminRow as any)?.theme;
+        if (t === "light" || t === "dark" || t === "midnight") {
+          setAdminTheme(t);
+          try {
+            localStorage.setItem("adminTheme", t);
+          } catch {}
+          try {
+            window.dispatchEvent(new Event("admin-theme-changed"));
+          } catch {}
+        }
       } else {
         setCurrentAdmin(null);
       }
@@ -150,8 +215,44 @@ export default function SettingsPage() {
     if (!currentAdmin) return;
     setEditFullName(currentAdmin.full_name || "");
     setEditPosition(currentAdmin.position || "Admin");
+    setEditProfileImageUrl(
+      currentAdmin.profile_image_url || currentAdmin.avatar_url || ""
+    );
     setEditPassword("");
     setEditOpen(true);
+  };
+
+  const getProfileImageUrl = (admin?: Admin | null) => {
+    if (!admin) return "";
+    return String(admin.profile_image_url || admin.avatar_url || "").trim();
+  };
+
+  const uploadProfileImage = async (file: File): Promise<string> => {
+    if (!currentAdmin?.id) throw new Error("No admin session found.");
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `admin-profiles/${currentAdmin.id}/${Date.now()}-${safeName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("uploads")
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from("uploads").getPublicUrl(path);
+    if (!data?.publicUrl) throw new Error("Failed to resolve public image URL.");
+    return data.publicUrl;
+  };
+
+  const onPickProfileImage = async (file: File | null) => {
+    if (!file) return;
+    setUploadingProfileImage(true);
+    try {
+      const publicUrl = await uploadProfileImage(file);
+      setEditProfileImageUrl(publicUrl);
+    } catch (e: any) {
+      alert(`Failed to upload profile image: ${e?.message || e}`);
+    } finally {
+      setUploadingProfileImage(false);
+    }
   };
 
   const saveProfile = async () => {
@@ -161,11 +262,27 @@ export default function SettingsPage() {
       const updates: Partial<Admin> = {
         full_name: editFullName || null,
         position: editPosition || null,
+        profile_image_url: editProfileImageUrl || null,
       };
-      const { error } = await supabase
+      let { error } = await supabase
         .from("admins")
         .update(updates)
         .eq("id", currentAdmin.id);
+
+      if (error && String(error.message || "").toLowerCase().includes("profile_image_url")) {
+        const fallback = {
+          full_name: editFullName || null,
+          position: editPosition || null,
+        };
+        const retry = await supabase.from("admins").update(fallback).eq("id", currentAdmin.id);
+        error = retry.error;
+        if (!error) {
+          try {
+            localStorage.setItem(`adminProfileImage:${currentAdmin.id}`, editProfileImageUrl || "");
+          } catch {}
+        }
+      }
+
       if (error) throw error;
 
       if (editPassword.trim()) {
@@ -204,8 +321,19 @@ export default function SettingsPage() {
     return parts.map((p) => p[0]?.toUpperCase() || "").join("") || "AD";
   })();
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("adminTheme");
+      if (saved === "light" || saved === "dark" || saved === "midnight") {
+        document.documentElement.dataset.adminTheme = saved;
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // General site settings (stored in home_content.content JSONB)
-  const [homeId, setHomeId] = useState<string | null>(null);
+  const [homeContent, setHomeContent] = useState<Record<string, any>>({});
   const [general, setGeneral] = useState({
     siteName: "GrandLink Glass and Aluminium",
     siteDescription:
@@ -214,6 +342,15 @@ export default function SettingsPage() {
     contactPhone: "+63 900 000 0000",
     address: "Cebu City, Philippines",
     facebook: "https://facebook.com/grandlink",
+    topNavContactEmail: "grandeast.org@gmail.com",
+    topNavFacebookText: "Click here visit to our FB Page",
+    topNavPhoneText: "Smart | 09082810586 Globe (Viber) | 09277640475",
+    topNavInquireLabel: "INQUIRE NOW",
+    topNavInquireLink: "/Inquire",
+    footerFacebookUrl: "https://facebook.com/grandlink",
+    footerPhoneText: "Smart || 09082810586 Globe (Viber) || 09277640475",
+    footerInquireLabel: "INQUIRE NOW",
+    footerInquireLink: "/Inquire",
   });
   const [savingGeneral, setSavingGeneral] = useState(false);
 
@@ -228,37 +365,24 @@ export default function SettingsPage() {
   });
   const [savingInquire, setSavingInquire] = useState(false);
 
-  // Admin management
-  const [admins, setAdmins] = useState<Admin[]>([]);
-  const [adminsLoading, setAdminsLoading] = useState(true);
-  const [adminSearch, setAdminSearch] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [newAdmin, setNewAdmin] = useState({
-    username: "",
-    password: "",
-    role: "admin" as Admin["role"],
-    position: "Admin",
-    full_name: "",
-  });
-
   useEffect(() => {
-    // Load initial settings/admins
+    // Load initial settings
     const load = async () => {
-      // home_content (get latest row)
+      // home_content singleton via local admin API
       {
-        const { data, error } = await supabase
-          .from("home_content")
-          .select("*")
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle<HomeContentRow>();
-        if (!error && data) {
-          setHomeId(data.id);
-          const c = data.content || {};
-          setGeneral((g) => ({
-            ...g,
-            ...c,
-          }));
+        try {
+          const res = await fetch("/api/home", { credentials: "include" });
+          const payload = await res.json().catch(() => ({}));
+          if (res.ok) {
+            const c = (payload?.content ?? payload) || {};
+            setHomeContent(c);
+            setGeneral((g) => ({
+              ...g,
+              ...c,
+            }));
+          }
+        } catch {
+          // ignore and keep defaults
         }
       }
 
@@ -281,54 +405,29 @@ export default function SettingsPage() {
         }
       }
 
-      // admins list
-      if (isCurrentSuperadmin) {
-        await fetchAdmins();
-      } else {
-        setAdmins([]);
-        setAdminsLoading(false);
-      }
     };
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCurrentSuperadmin]);
-
-  const fetchAdmins = async () => {
-    setAdminsLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("admins")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      setAdmins((data as any) || []);
-    } catch (e) {
-      console.error("Load admins error:", e);
-      setAdmins([]);
-    } finally {
-      setAdminsLoading(false);
-    }
-  };
+  }, []);
 
   // Save general site settings to home_content
   const saveGeneral = async () => {
     setSavingGeneral(true);
     try {
-      if (homeId) {
-        const { error } = await supabase
-          .from("home_content")
-          .update({ content: general, updated_at: new Date().toISOString() })
-          .eq("id", homeId);
-        if (error) throw error;
-      } else {
-        const { data, error } = await supabase
-          .from("home_content")
-          .insert({ content: general })
-          .select()
-          .maybeSingle();
-        if (error) throw error;
-        if (data?.id) setHomeId(data.id);
+      const nextContent = {
+        ...homeContent,
+        ...general,
+      };
+      const res = await fetch("/api/home", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextContent),
+        credentials: "include",
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload?.error || `${res.status} ${res.statusText}`);
       }
+      setHomeContent(nextContent);
       alert("General settings saved.");
     } catch (e: any) {
       alert(`Failed to save general settings: ${e.message || e}`);
@@ -377,160 +476,23 @@ export default function SettingsPage() {
     }
   };
 
-  // Create admin
-  const createAdmin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isCurrentSuperadmin) {
-      alert("Only a superadmin can manage admin accounts.");
-      return;
-    }
-    if (!newAdmin.username || !newAdmin.password) {
-      alert("Username and password are required.");
-      return;
-    }
-
-    if (
-      String(newAdmin.role || "")
-        .toLowerCase()
-        .replace(/[\s_-]/g, "") === "superadmin" &&
-      !isCurrentSuperadmin
-    ) {
-      alert("Only a superadmin can create another superadmin.");
-      return;
-    }
-    setCreating(true);
-    try {
-      const payload = {
-        username: newAdmin.username,
-        password: newAdmin.password, // NOTE: stored as plain text per schema
-        role: newAdmin.role,
-        position: newAdmin.position,
-        full_name: newAdmin.full_name || null,
-        is_active: true,
-      };
-      const { error } = await supabase.from("admins").insert(payload);
-      if (error) throw error;
-
-      // Optional: create notification record for audit/visibility
-      await supabase.from("notifications").insert({
-        title: "Admin created",
-        message: `Admin "${newAdmin.username}" created with role "${newAdmin.role}".`,
-        type: "general",
-        recipient_role: "admin",
-        metadata: { created_by: currentAdmin?.username || "system" },
-      });
-
-      setNewAdmin({
-        username: "",
-        password: "",
-        role: "admin",
-        position: "Admin",
-        full_name: "",
-      });
-      await fetchAdmins();
-      alert("Admin account created.");
-    } catch (e: any) {
-      alert(`Create admin failed: ${e.message || e}`);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // Toggle active
-  const toggleActive = async (a: Admin) => {
-    if (!isCurrentSuperadmin) {
-      alert("Only a superadmin can manage admin accounts.");
-      return;
-    }
-    try {
-      const { error } = await supabase
-        .from("admins")
-        .update({ is_active: !a.is_active })
-        .eq("id", a.id);
-      if (error) throw error;
-      await fetchAdmins();
-    } catch (e: any) {
-      alert(`Update failed: ${e.message || e}`);
-    }
-  };
-
-  // Update role/position single row
-  const updateAdminField = async (
-    id: string,
-    changes: Partial<Pick<Admin, "role" | "position" | "full_name">>
-  ) => {
-    if (!isCurrentSuperadmin) {
-      alert("Only a superadmin can manage admin accounts.");
-      return;
-    }
-    try {
-      if (
-        changes.role &&
-        String(changes.role)
-          .toLowerCase()
-          .replace(/[\s_-]/g, "") === "superadmin" &&
-        !isCurrentSuperadmin
-      ) {
-        alert("Only a superadmin can promote another account to superadmin.");
-        return;
-      }
-
-      const { error } = await supabase.from("admins").update(changes).eq("id", id);
-      if (error) throw error;
-      await fetchAdmins();
-    } catch (e: any) {
-      alert(`Update failed: ${e.message || e}`);
-    }
-  };
-
-  // Reset password (prompt)
-  const resetPassword = async (a: Admin) => {
-    if (!isCurrentSuperadmin) {
-      alert("Only a superadmin can manage admin accounts.");
-      return;
-    }
-    const pw = window.prompt(
-      `Enter new password for ${a.username}`,
-      Math.random().toString(36).slice(2, 10)
-    );
-    if (!pw) return;
-    try {
-      const { error } = await supabase
-        .from("admins")
-        .update({ password: pw })
-        .eq("id", a.id);
-      if (error) throw error;
-      alert("Password updated.");
-    } catch (e: any) {
-      alert(`Password reset failed: ${e.message || e}`);
-    }
-  };
-
-  const filteredAdmins = useMemo(() => {
-    const q = adminSearch.trim().toLowerCase();
-    if (!q) return admins;
-    return admins.filter((a) =>
-      [
-        a.username,
-        a.role,
-        a.position,
-        a.full_name,
-        a.employee_number,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [adminSearch, admins]);
-
   return (
     <div className="space-y-8">
       {/* Profile header */}
       <div className="bg-white shadow rounded-lg p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
         <div className="flex items-center gap-4">
-          <div className="h-14 w-14 rounded-full bg-black text-white flex items-center justify-center text-xl font-bold">
-            {profileLoading ? "…" : initials}
+          <div className="h-14 w-14 rounded-full bg-black text-white flex items-center justify-center text-xl font-bold overflow-hidden">
+            {profileLoading ? (
+              "…"
+            ) : getProfileImageUrl(currentAdmin) ? (
+              <img
+                src={getProfileImageUrl(currentAdmin)}
+                alt="Admin profile"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              initials
+            )}
           </div>
           <div>
             <div className="text-xl font-semibold text-black">
@@ -575,6 +537,45 @@ export default function SettingsPage() {
             Logout
           </button>
         </div>
+      </div>
+
+      {/* Theme settings */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <h2 className="text-xl font-semibold mb-4 text-black">Theme</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <button
+            onClick={() => setTheme("light")}
+            className={`p-4 rounded border text-left ${
+              adminTheme === "light" ? "bg-black text-white" : "bg-gray-50 text-black"
+            }`}
+          >
+            <div className="font-semibold">Light</div>
+            <div className="text-sm opacity-80">Default light theme</div>
+          </button>
+
+          <button
+            onClick={() => setTheme("dark")}
+            className={`p-4 rounded border text-left ${
+              adminTheme === "dark" ? "bg-black text-white" : "bg-gray-50 text-black"
+            }`}
+          >
+            <div className="font-semibold">Dark</div>
+            <div className="text-sm opacity-80">Classic dark mode</div>
+          </button>
+
+          <button
+            onClick={() => setTheme("midnight")}
+            className={`p-4 rounded border text-left ${
+              adminTheme === "midnight" ? "bg-black text-white" : "bg-gray-50 text-black"
+            }`}
+          >
+            <div className="font-semibold">Midnight</div>
+            <div className="text-sm opacity-80">Deep navy dark theme</div>
+          </button>
+        </div>
+        <p className="mt-3 text-sm text-black">
+          This applies across the entire admin dashboard.
+        </p>
       </div>
 
       {/* General site settings */}
@@ -636,6 +637,86 @@ export default function SettingsPage() {
               className="w-full p-2 border rounded text-black"
               value={general.address}
               onChange={(e) => setGeneral({ ...general, address: e.target.value })}
+            />
+          </div>
+
+          <div className="md:col-span-2 border-t pt-4 mt-2">
+            <h3 className="text-lg font-semibold text-black mb-3">Top Navigation</h3>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Top Bar Email</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.topNavContactEmail}
+              onChange={(e) => setGeneral({ ...general, topNavContactEmail: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Top Bar Facebook Text</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.topNavFacebookText}
+              onChange={(e) => setGeneral({ ...general, topNavFacebookText: e.target.value })}
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-black mb-1">Top Bar Phone Text</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.topNavPhoneText}
+              onChange={(e) => setGeneral({ ...general, topNavPhoneText: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Inquire Button Label (Top Nav)</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.topNavInquireLabel}
+              onChange={(e) => setGeneral({ ...general, topNavInquireLabel: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Inquire Button Link (Top Nav)</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.topNavInquireLink}
+              onChange={(e) => setGeneral({ ...general, topNavInquireLink: e.target.value })}
+            />
+          </div>
+
+          <div className="md:col-span-2 border-t pt-4 mt-2">
+            <h3 className="text-lg font-semibold text-black mb-3">Footer</h3>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Footer Facebook URL</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.footerFacebookUrl}
+              onChange={(e) => setGeneral({ ...general, footerFacebookUrl: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Footer Phone Text</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.footerPhoneText}
+              onChange={(e) => setGeneral({ ...general, footerPhoneText: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Inquire Button Label (Footer)</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.footerInquireLabel}
+              onChange={(e) => setGeneral({ ...general, footerInquireLabel: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-black mb-1">Inquire Button Link (Footer)</label>
+            <input
+              className="w-full p-2 border rounded text-black"
+              value={general.footerInquireLink}
+              onChange={(e) => setGeneral({ ...general, footerInquireLink: e.target.value })}
             />
           </div>
         </div>
@@ -709,192 +790,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Admin management */}
-      <div className="bg-white shadow rounded-lg p-6">
-        <h2 className="text-xl font-semibold mb-4 text-black">Admin Accounts</h2>
-
-        {!isCurrentSuperadmin ? (
-          <div className="p-4 border rounded bg-gray-50 text-black">
-            Only Superadmins can view and manage admin accounts.
-          </div>
-        ) : (
-          <>
-
-        {/* Create admin */}
-        <form onSubmit={createAdmin} className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
-          <div>
-            <label className="block text-sm text-black mb-1">Username</label>
-            <input
-              className="w-full p-2 border rounded text-black"
-              value={newAdmin.username}
-              onChange={(e) =>
-                setNewAdmin({ ...newAdmin, username: e.target.value })
-              }
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-black mb-1">Password</label>
-            <input
-              type="password"
-              className="w-full p-2 border rounded text-black"
-              value={newAdmin.password}
-              onChange={(e) =>
-                setNewAdmin({ ...newAdmin, password: e.target.value })
-              }
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-black mb-1">Role</label>
-            <select
-              className="w-full p-2 border rounded text-black"
-              value={newAdmin.role}
-              onChange={(e) =>
-                setNewAdmin({ ...newAdmin, role: e.target.value as Admin["role"] })
-              }
-            >
-              <option value="admin">admin</option>
-              <option value="manager">manager</option>
-              {isCurrentSuperadmin && <option value="superadmin">superadmin</option>}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm text-black mb-1">Position</label>
-            <select
-              className="w-full p-2 border rounded text-black"
-              value={newAdmin.position}
-              onChange={(e) =>
-                setNewAdmin({ ...newAdmin, position: e.target.value })
-              }
-            >
-                      {positionsList.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-end">
-            <button
-              type="submit"
-              disabled={creating}
-              className="bg-black text-white px-4 py-2 rounded w-full disabled:opacity-60"
-            >
-              {creating ? "Creating..." : "Create Admin"}
-            </button>
-          </div>
-        </form>
-
-        {/* Search */}
-        <div className="flex items-center gap-3 mb-3">
-          <input
-            placeholder="Search admins (username, role, position)"
-            className="w-full p-2 border rounded text-black"
-            value={adminSearch}
-            onChange={(e) => setAdminSearch(e.target.value)}
-          />
-          <button
-            onClick={fetchAdmins}
-            className="px-3 py-2 bg-black text-white rounded"
-          >
-            Refresh
-          </button>
-        </div>
-
-        {/* Admins table */}
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="text-left p-2 text-black">Username</th>
-                <th className="text-left p-2 text-black">Role</th>
-                <th className="text-left p-2 text-black">Position</th>
-                <th className="text-left p-2 text-black">Active</th>
-                <th className="text-left p-2 text-black">Last login</th>
-                <th className="text-left p-2 text-black">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {adminsLoading ? (
-                <tr>
-                  <td className="p-3 text-black" colSpan={6}>
-                    Loading…
-                  </td>
-                </tr>
-              ) : filteredAdmins.length === 0 ? (
-                <tr>
-                  <td className="p-3 text-black" colSpan={6}>
-                    No admins found
-                  </td>
-                </tr>
-              ) : (
-                filteredAdmins.map((a) => (
-                  <tr key={a.id} className="hover:bg-gray-50">
-                    <td className="p-2 text-black">{a.username}</td>
-                    <td className="p-2">
-                      <select
-                        className="p-1 border rounded text-black"
-                        value={a.role}
-                        onChange={(e) =>
-                          updateAdminField(a.id, {
-                            role: e.target.value as Admin["role"],
-                          })
-                        }
-                      >
-                        <option value="admin">admin</option>
-                        <option value="manager">manager</option>
-                        {isCurrentSuperadmin && <option value="superadmin">superadmin</option>}
-                      </select>
-                    </td>
-                    <td className="p-2">
-                      <select
-                        className="p-1 border rounded text-black"
-                        value={a.position || ""}
-                        onChange={(e) =>
-                          updateAdminField(a.id, { position: e.target.value })
-                        }
-                      >
-                        {positionsList.map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="p-2">
-                      <button
-                        onClick={() => toggleActive(a)}
-                        className={`px-2 py-1 rounded text-white ${
-                          a.is_active ? "bg-green-600" : "bg-gray-500"
-                        }`}
-                      >
-                        {a.is_active ? "Active" : "Inactive"}
-                      </button>
-                    </td>
-                    <td className="p-2 text-black">
-                      {a.last_login
-                        ? new Date(a.last_login).toLocaleString()
-                        : "—"}
-                    </td>
-                    <td className="p-2">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => resetPassword(a)}
-                          className="px-2 py-1 rounded bg-black text-white"
-                        >
-                          Reset Password
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-          </>
-        )}
-      </div>
-
       {/* Edit profile modal */}
       {editOpen && (
         <div className="fixed inset-0 flex items-center justify-center z-50">
@@ -940,6 +835,42 @@ export default function SettingsPage() {
                   onChange={(e) => setEditPassword(e.target.value)}
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-black mb-1">
+                  Profile Image URL
+                </label>
+                <input
+                  className="w-full p-2 border rounded text-black"
+                  value={editProfileImageUrl}
+                  onChange={(e) => setEditProfileImageUrl(e.target.value)}
+                  placeholder="https://..."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-black mb-1">
+                  Upload Profile Image
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="w-full p-2 border rounded text-black"
+                  onChange={(e) => onPickProfileImage(e.target.files?.[0] || null)}
+                  disabled={uploadingProfileImage}
+                />
+                {uploadingProfileImage && (
+                  <p className="mt-1 text-xs text-gray-600">Uploading image...</p>
+                )}
+              </div>
+              {editProfileImageUrl && (
+                <div className="flex items-center gap-3 p-2 border rounded">
+                  <img
+                    src={editProfileImageUrl}
+                    alt="Profile preview"
+                    className="h-12 w-12 rounded-full object-cover border"
+                  />
+                  <span className="text-xs text-black break-all">Preview</span>
+                </div>
+              )}
             </div>
             <div className="mt-4 flex gap-2">
               <button
