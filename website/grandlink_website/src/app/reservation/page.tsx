@@ -1,13 +1,56 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useSearchParams, useRouter } from "next/navigation";
+import { computeMeasurementPricing } from "../../utils/measurementPricing";
+import {
+  buildAddressPayloads,
+  emptyAddressForm,
+  formatAddressLineFromRecord,
+  isAddressColumnError,
+  toAddressFormFromRecord,
+  type AddressFormFields,
+} from "@/utils/addressFields";
+import {
+  getLocationDropdownOptions,
+  getPhilippineLocationDropdownOptions,
+  mergeLocationDropdownOptions,
+  type LocationDropdownOptions,
+} from "@/utils/locationSuggestions";
+import { PICKUP_ADDRESS, type FulfillmentMethod } from "@/utils/fulfillment";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
+
+const DELIVERY_FEE = 2599;
+
+const formatMillimeters = (valueMm?: number) => {
+  if (!Number.isFinite(valueMm) || !valueMm || valueMm <= 0) return "";
+  return Number(valueMm.toFixed(2)).toString();
+};
+
+const metersToMillimetersDisplay = (value?: number | string | null) => {
+  if (value === "" || value == null) return "";
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return "";
+  return formatMillimeters(numericValue * 1000);
+};
+
+const millimetersInputToMetersString = (value: string) => {
+  if (!value.trim()) return "";
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return value;
+  return String(numericValue / 1000);
+};
+
+const measurementsMatch = (left?: number, right?: number) => {
+  if (left == null && right == null) return true;
+  if (left == null || right == null) return false;
+  return Math.abs(left - right) < 0.000001;
+};
 
 type Product = {
   id: string;
@@ -29,11 +72,17 @@ type Product = {
 
 type Address = {
   id: string;
-  first_name: string;
-  last_name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   full_name: string;
   phone: string;
+  email?: string | null;
   address: string;
+  full_address?: string | null;
+  province?: string | null;
+  city?: string | null;
+  postal_code?: string | null;
+  label?: string | null;
   is_default: boolean;
 };
 
@@ -47,14 +96,25 @@ function ReservationPageContent() {
   const [product, setProduct] = useState<Product | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string>("");
-  const [selectedBranch, setSelectedBranch] = useState<string>("");
-  const [fulfillmentMethod, setFulfillmentMethod] = useState<"delivery" | "pickup">("delivery");
+  const [fulfillmentMethod, setFulfillmentMethod] = useState<FulfillmentMethod>("delivery");
+  const [showAddressPopup, setShowAddressPopup] = useState(false);
+  const [addressFormMode, setAddressFormMode] = useState<"add" | "edit" | null>(null);
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
+  const [addressSaving, setAddressSaving] = useState(false);
+  const [addressForm, setAddressForm] = useState<AddressFormFields>(emptyAddressForm());
+  const [remoteLocationOptions, setRemoteLocationOptions] = useState<LocationDropdownOptions>({
+    provinceOptions: [],
+    cityOptions: [],
+    barangayOptions: [],
+  });
+  const [barangayOptionsLoading, setBarangayOptionsLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
     quantity: 1,
+    measurementEnabled: false,
     customWidth: "",
     customHeight: "",
     customThickness: "",
@@ -65,27 +125,185 @@ function ReservationPageContent() {
   const [voucherCode, setVoucherCode] = useState("");
   const [voucherInfo, setVoucherInfo] = useState<VoucherInfo | null>(null);
   const [applyingVoucher, setApplyingVoucher] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<"paymongo" | "paypal">(
-    "paymongo"
+  const [paymentMethod, setPaymentMethod] = useState<"paymongo" | "paypal">("paymongo");
+
+  const locationOptions = useMemo(
+    () =>
+      getLocationDropdownOptions(
+        addresses,
+        addressForm.province,
+        addressForm.city,
+        addressForm.barangay
+      ),
+    [addresses, addressForm.province, addressForm.city, addressForm.barangay]
   );
 
-  const branches = [
-    "BALINTAWAK BRANCH",
-    "STA. ROSA BRANCH",
-    "UGONG BRANCH",
-    "ALABANG SHOWROOM",
-    "IMUS BRANCH",
-    "PAMPANGA SHOWROOM",
-    "HIHOME BRANCH",
-    "MC HOME DEPO ORTIGAS",
-    "SAN JUAN CITY",
-    "CW COMMONWEALTH",
-    "MC HOME DEPO BGC",
-  ];
+  const mergedLocationOptions = useMemo(
+    () => mergeLocationDropdownOptions(locationOptions, remoteLocationOptions),
+    [locationOptions, remoteLocationOptions]
+  );
 
   const handleGoBack = () => {
     if (productId) router.push(`/Product/details?id=${productId}`);
     else router.push("/Product");
+  };
+
+  const resetAddressForm = () => {
+    setAddressForm(emptyAddressForm());
+  };
+
+  const fetchAddresses = async (uid: string, preferredAddressId?: string | null) => {
+    const { data: addressData } = await supabase
+      .from("addresses")
+      .select("*")
+      .eq("user_id", uid)
+      .order("is_default", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    const list = (addressData || []) as Address[];
+    setAddresses(list);
+
+    setSelectedAddressId((prev) => {
+      if (preferredAddressId && list.some((a) => a.id === preferredAddressId)) {
+        return preferredAddressId;
+      }
+      if (prev && list.some((a) => a.id === prev)) {
+        return prev;
+      }
+      const def = list.find((a) => a.is_default);
+      return def?.id || list[0]?.id || "";
+    });
+  };
+
+  const openAddressListPopup = () => {
+    setAddressFormMode(null);
+    setEditingAddressId(null);
+    resetAddressForm();
+    setShowAddressPopup(true);
+  };
+
+  const openAddAddressForm = () => {
+    setAddressFormMode("add");
+    setEditingAddressId(null);
+    resetAddressForm();
+    setShowAddressPopup(true);
+  };
+
+  const openEditAddressForm = (addr: Address) => {
+    setAddressFormMode("edit");
+    setEditingAddressId(addr.id);
+    setAddressForm(toAddressFormFromRecord(addr));
+    setShowAddressPopup(true);
+  };
+
+  const saveAddressFromPopup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) {
+      alert("Please sign in first.");
+      return;
+    }
+    if (
+      !addressForm.full_name.trim() ||
+      !addressForm.email.trim() ||
+      !addressForm.phone.trim() ||
+      !addressForm.street.trim() ||
+      !addressForm.barangay.trim() ||
+      !addressForm.city.trim() ||
+      !addressForm.province.trim() ||
+      !addressForm.postal_code.trim()
+    ) {
+      alert("Please complete all required address fields.");
+      return;
+    }
+
+    setAddressSaving(true);
+    try {
+      const { basePayload, extendedPayload } = buildAddressPayloads(addressForm);
+      if (!basePayload.address) {
+        alert("Please provide a valid full address.");
+        return;
+      }
+
+      if (editingAddressId) {
+        if (addressForm.is_default) {
+          await supabase
+            .from("addresses")
+            .update({ is_default: false })
+            .eq("user_id", userId)
+            .neq("id", editingAddressId);
+        }
+
+        let { error: updateError } = await supabase
+          .from("addresses")
+          .update({
+            ...extendedPayload,
+            is_default: !!addressForm.is_default,
+          })
+          .match({ id: editingAddressId, user_id: userId });
+
+        if (updateError && isAddressColumnError(updateError.message || "")) {
+          const fallback = await supabase
+            .from("addresses")
+            .update({
+              ...basePayload,
+              is_default: !!addressForm.is_default,
+            })
+            .match({ id: editingAddressId, user_id: userId });
+          updateError = fallback.error;
+        }
+
+        if (updateError) throw updateError;
+        await fetchAddresses(userId, editingAddressId);
+      } else {
+        const wantDefault = addressForm.is_default || addresses.length === 0;
+
+        let insertResult = await supabase
+          .from("addresses")
+          .insert([
+            {
+              user_id: userId,
+              ...extendedPayload,
+              is_default: false,
+            },
+          ])
+          .select("id")
+          .single();
+
+        if (insertResult.error && isAddressColumnError(insertResult.error.message || "")) {
+          insertResult = await supabase
+            .from("addresses")
+            .insert([
+              {
+                user_id: userId,
+                ...basePayload,
+                is_default: false,
+              },
+            ])
+            .select("id")
+            .single();
+        }
+
+        if (insertResult.error) throw insertResult.error;
+
+        if (wantDefault && insertResult.data?.id) {
+          await supabase.from("addresses").update({ is_default: false }).eq("user_id", userId);
+          await supabase
+            .from("addresses")
+            .update({ is_default: true })
+            .match({ id: insertResult.data.id, user_id: userId });
+        }
+
+        await fetchAddresses(userId, insertResult.data?.id || null);
+      }
+
+      setAddressFormMode(null);
+      setEditingAddressId(null);
+      resetAddressForm();
+    } catch (error: any) {
+      alert(error?.message || "Failed to save address.");
+    } finally {
+      setAddressSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -109,17 +327,7 @@ function ReservationPageContent() {
           setProduct(productData as any);
         }
 
-        const { data: addressData } = await supabase
-          .from("addresses")
-          .select("*")
-          .eq("user_id", uid)
-          .order("is_default", { ascending: false });
-
-        if (addressData) {
-          setAddresses(addressData as any);
-          const def = addressData.find((a: any) => a.is_default);
-          if (def) setSelectedAddressId(def.id);
-        }
+        await fetchAddresses(uid);
       } catch (e) {
         console.error(e);
       } finally {
@@ -129,8 +337,73 @@ function ReservationPageContent() {
     loadData();
   }, [productId, router]);
 
+  useEffect(() => {
+    let isActive = true;
+
+    const loadRemoteLocationOptions = async () => {
+      setBarangayOptionsLoading(Boolean(addressForm.city.trim()));
+      const nextOptions = await getPhilippineLocationDropdownOptions(
+        addressForm.province,
+        addressForm.city,
+        addressForm.barangay
+      );
+
+      if (!isActive) return;
+
+      setRemoteLocationOptions(nextOptions);
+      setBarangayOptionsLoading(false);
+    };
+
+    loadRemoteLocationOptions();
+
+    return () => {
+      isActive = false;
+    };
+  }, [addressForm.province, addressForm.city, addressForm.barangay]);
+
   const qty = Math.max(1, Number(formData.quantity || 1));
-  const productSubtotal = (product?.price || 0) * qty;
+  const selectedAddressPreview = addresses.find((a) => a.id === selectedAddressId) || null;
+
+  const measurementPricing = (() => {
+    const defaultUnitPrice = Math.max(0, Number(product?.price || 0));
+
+    const baseWmm = Number(product?.width || 0);
+    const baseHmm = Number(product?.height || 0);
+    const baseWidthM = Number.isFinite(baseWmm) && baseWmm > 0 ? baseWmm / 1000 : undefined;
+    const baseHeightM = Number.isFinite(baseHmm) && baseHmm > 0 ? baseHmm / 1000 : undefined;
+    const unitPricePerSqm = defaultUnitPrice;
+
+    const widthMeters = formData.customWidth ? Number(formData.customWidth) : baseWidthM;
+    const heightMeters = formData.customHeight ? Number(formData.customHeight) : baseHeightM;
+
+    const defaultPricing = computeMeasurementPricing({
+      widthMeters: baseWidthM,
+      heightMeters: baseHeightM,
+      unitPricePerSqm,
+      minSqm: 0,
+      sqmDecimals: 2,
+    });
+
+    const customMeasurementActive =
+      formData.measurementEnabled &&
+      !(
+        measurementsMatch(widthMeters, baseWidthM) &&
+        measurementsMatch(heightMeters, baseHeightM)
+      );
+
+    if (!customMeasurementActive) return defaultPricing;
+
+    return computeMeasurementPricing({
+      widthMeters,
+      heightMeters,
+      unitPricePerSqm,
+      minSqm: 0,
+      sqmDecimals: 2,
+    });
+  })();
+
+  const computedUnitPrice = measurementPricing.unit_price;
+  const productSubtotal = computedUnitPrice * qty;
   const addonsTotal = formData.colorCustomization ? 2500 * qty : 0;
   const preDiscount = productSubtotal + addonsTotal;
   const discountValue = voucherInfo
@@ -139,8 +412,9 @@ function ReservationPageContent() {
       : Math.min(preDiscount, voucherInfo.value)
     : 0;
   const discountedTotal = Math.max(0, preDiscount - discountValue);
-  const reservationFee = 500;
+  const reservationFee = fulfillmentMethod === "delivery" ? DELIVERY_FEE : 0;
   const balanceDue = Math.max(0, discountedTotal - reservationFee);
+  const originalPrice = Math.max(0, Number(product?.price || 0));
 
   const applyVoucher = async () => {
     if (preDiscount <= 0) {
@@ -191,9 +465,9 @@ function ReservationPageContent() {
           quantity: qty,
           meta: {
             custom_dimensions: {
-              width: parseFloat(formData.customWidth) || product.width,
-              height: parseFloat(formData.customHeight) || product.height,
-              thickness: parseFloat(formData.customThickness) || product.thickness,
+              enabled: formData.measurementEnabled,
+              width: formData.measurementEnabled ? measurementPricing.width_m : undefined,
+              height: formData.measurementEnabled ? measurementPricing.height_m : undefined,
             },
             addons,
             voucher_code: voucherInfo?.code || null,
@@ -218,8 +492,14 @@ function ReservationPageContent() {
       alert("Please select a delivery address");
       return;
     }
-    if (fulfillmentMethod === "pickup" && !selectedBranch) {
-      alert("Please select a pickup branch");
+    const parsedWidth = formData.customWidth ? Number(formData.customWidth) : null;
+    const parsedHeight = formData.customHeight ? Number(formData.customHeight) : null;
+    if (
+      formData.measurementEnabled &&
+      ((parsedWidth != null && (!Number.isFinite(parsedWidth) || parsedWidth <= 0)) ||
+        (parsedHeight != null && (!Number.isFinite(parsedHeight) || parsedHeight <= 0)))
+    ) {
+      alert("Please enter valid custom width/height in mm (greater than 0).");
       return;
     }
     if (product.inventory < qty) {
@@ -228,8 +508,13 @@ function ReservationPageContent() {
     }
     setSubmitting(true);
     try {
-      const selectedAddress = fulfillmentMethod === "delivery" ? addresses.find((a) => a.id === selectedAddressId) : null;
-      if (fulfillmentMethod === "delivery" && !selectedAddress) throw new Error("Selected address not found");
+      const selectedAddress =
+        fulfillmentMethod === "delivery"
+          ? addresses.find((a) => a.id === selectedAddressId) || null
+          : null;
+      if (fulfillmentMethod === "delivery" && !selectedAddress) {
+        throw new Error("Selected address not found");
+      }
 
       const addons = formData.colorCustomization
         ? [
@@ -257,7 +542,8 @@ function ReservationPageContent() {
         meta: {
           product_name: product.name,
           product_fullname: product.fullproductname,
-          product_price: product.price,
+          product_price: computedUnitPrice,
+          product_price_base: product.price,
           product_category: product.category,
           product_type: product.type,
           product_material: product.material,
@@ -265,12 +551,24 @@ function ReservationPageContent() {
           additional_features: product.additionalfeatures,
           payment_method: paymentMethod,
           delivery_method: fulfillmentMethod,
-          selected_branch: fulfillmentMethod === "pickup" ? selectedBranch : null,
+          selected_branch: fulfillmentMethod === "pickup" ? "TAYTAY Main" : null,
+          branch: fulfillmentMethod === "pickup" ? "TAYTAY Main" : null,
+          pickup_address: fulfillmentMethod === "pickup" ? PICKUP_ADDRESS : null,
           custom_dimensions: {
-            width: parseFloat(formData.customWidth) || product.width,
-            height: parseFloat(formData.customHeight) || product.height,
-            thickness:
-              parseFloat(formData.customThickness) || product.thickness,
+            enabled: formData.measurementEnabled,
+            width: formData.measurementEnabled ? measurementPricing.width_m : undefined,
+            height: formData.measurementEnabled ? measurementPricing.height_m : undefined,
+          },
+          pricing: {
+            unit_price: computedUnitPrice,
+            unit_price_per_sqm: Number(product.price || 0),
+            sqm_raw: measurementPricing.sqm_raw,
+            sqm_rounded: measurementPricing.sqm_rounded,
+            sqm_billable: measurementPricing.sqm_billable,
+            base_width_mm: product.width,
+            base_height_mm: product.height,
+            custom_width_m: measurementPricing.width_m,
+            custom_height_m: measurementPricing.height_m,
           },
           delivery_address: selectedAddress
             ? {
@@ -278,7 +576,12 @@ function ReservationPageContent() {
                 last_name: selectedAddress.last_name,
                 full_name: selectedAddress.full_name,
                 phone: selectedAddress.phone,
-                address: selectedAddress.address,
+                email: selectedAddress.email,
+                province: selectedAddress.province,
+                city: selectedAddress.city,
+                barangay: selectedAddress.label,
+                postal_code: selectedAddress.postal_code,
+                address: formatAddressLineFromRecord(selectedAddress),
               }
             : null,
           addons,
@@ -309,8 +612,9 @@ function ReservationPageContent() {
         payment_type: "reservation",
         delivery_method: fulfillmentMethod,
         delivery_address_id: fulfillmentMethod === "delivery" ? selectedAddressId : null,
-        branch: fulfillmentMethod === "pickup" ? selectedBranch : null,
-        success_url: `${window.location.origin}/reservation/success?reservation_id=${userItem.id}`,
+        branch: fulfillmentMethod === "pickup" ? "TAYTAY Main" : null,
+        pickup_address: fulfillmentMethod === "pickup" ? PICKUP_ADDRESS : null,
+        success_url: `${window.location.origin}/reservation/success?reservation_id=${userItem.id}&payment_provider=${paymentMethod}`,
         cancel_url: `${window.location.origin}/reservation?productId=${product.id}`,
         voucher: voucherInfo || undefined,
       };
@@ -329,7 +633,7 @@ function ReservationPageContent() {
         user_item_id: userItem.id,
         stripe_session_id: sessionId,
         amount: reservationFee,
-        currency: paymentMethod === "paypal" ? "USD" : "PHP",
+        currency: "PHP",
         status: "pending",
         payment_type: "reservation",
         payment_provider: paymentMethod,
@@ -374,101 +678,20 @@ function ReservationPageContent() {
           <span>←</span> Back to Product
         </button>
 
-        <h1 className="text-2xl md:text-3xl font-bold text-center text-black mb-4">
+        <h1 className="text-2xl md:text-3xl font-bold text-center text-black mb-6">
           Reserve Your Product
         </h1>
 
-        <div className="bg-white rounded-lg shadow-lg p-6 md:p-8 text-black">
-          <div className="flex flex-col md:flex-row gap-8">
-            {/* Left */}
-            <div className="flex-1">
-              <div className="w-full aspect-[16/9] bg-gray-100 rounded overflow-hidden mb-4">
-                <img
-                  src={
-                    (product?.images && product.images[0]) ||
-                    product?.image1 ||
-                    "/no-orders.png"
-                  }
-                  alt={product?.name || "Product"}
-                  className="w-full h-full object-cover"
-                />
-              </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-black">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-3">Reservation Details</h2>
 
-              <h2 className="text-2xl font-bold">{product.name}</h2>
-              <div className="text-gray-600 mt-1">{product.fullproductname || ""}</div>
-
-              <div className="mt-3 flex items-center gap-3">
-                <div className="text-2xl font-extrabold text-green-600">
-                  ₱{Number(product.price).toLocaleString()}
-                </div>
-                <span className="text-xs px-2 py-1 bg-gray-100 rounded">
-                  Stock: {product.inventory}
-                </span>
-              </div>
-
-              <div className="mt-6">
-                <h3 className="font-semibold text-gray-800 mb-2">Description</h3>
-                <p className="text-gray-700 text-sm leading-6">
-                  {product.description || "—"}
-                </p>
-              </div>
-
-              <div className="mt-6">
-                <h3 className="font-semibold text-gray-800 mb-2">
-                  Product Specifications
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-3 text-sm text-gray-700">
-                  <div>
-                    <span className="text-gray-500">Category:</span>{" "}
-                    {product.category || "—"}
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Type:</span>{" "}
-                    {product.type || "—"}
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Material:</span>{" "}
-                    {product.material || "—"}
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Width:</span>{" "}
-                    {product.width ?? "—"} cm
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Height:</span>{" "}
-                    {product.height ?? "—"} cm
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Thickness:</span>{" "}
-                    {product.thickness ?? "—"} cm
-                  </div>
-                </div>
-              </div>
-
-              {!!product.additionalfeatures && (
-                <div className="mt-6">
-                  <h3 className="font-semibold text-gray-800 mb-2">
-                    Additional Features
-                  </h3>
-                  <ul className="list-disc ml-6 text-sm text-gray-700 whitespace-pre-line">
-                    {String(product.additionalfeatures)
-                      .split("\n")
-                      .filter(Boolean)
-                      .map((l, i) => (
-                        <li key={i}>{l}</li>
-                      ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            {/* Right */}
-            <div className="w-full md:w-80">
-              <h2 className="text-lg font-semibold mb-3">Reservation Details</h2>
-
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <div>
-                  <label className="text-sm text-gray-600">Quantity *</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Quantity <span className="text-red-600">*</span>
+                  </label>
                   <input
                     type="number"
                     min={1}
@@ -479,28 +702,28 @@ function ReservationPageContent() {
                         quantity: Math.max(1, Number(e.target.value || 1)),
                       })
                     }
-                    className="w-full border rounded px-3 py-2"
+                    className="w-full border border-gray-300 rounded-lg px-4 py-3"
                   />
                 </div>
 
                 <div>
-                  <label className="text-sm text-gray-600">Fulfillment Method *</label>
-                  <div className="flex gap-4 mt-2">
-                    <label className="inline-flex items-center gap-2 text-sm">
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Delivery Option <span className="text-red-600">*</span>
+                  </label>
+                  <div className="flex flex-wrap gap-6">
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
                       <input
                         type="radio"
                         name="fulfillmentMethod"
-                        value="delivery"
                         checked={fulfillmentMethod === "delivery"}
                         onChange={() => setFulfillmentMethod("delivery")}
                       />
                       Delivery
                     </label>
-                    <label className="inline-flex items-center gap-2 text-sm">
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
                       <input
                         type="radio"
                         name="fulfillmentMethod"
-                        value="pickup"
                         checked={fulfillmentMethod === "pickup"}
                         onChange={() => setFulfillmentMethod("pickup")}
                       />
@@ -511,105 +734,62 @@ function ReservationPageContent() {
 
                 {fulfillmentMethod === "delivery" ? (
                   <div>
-                    <label className="text-sm text-gray-600">Delivery Address *</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Delivery Address <span className="text-red-600">*</span>
+                    </label>
                     <select
-                      className="w-full border rounded px-3 py-2"
+                      className="w-full border border-gray-300 rounded-lg px-4 py-3"
                       value={selectedAddressId}
                       onChange={(e) => setSelectedAddressId(e.target.value)}
                     >
                       <option value="">Select Address</option>
                       {addresses.map((a) => (
                         <option key={a.id} value={a.id}>
-                          {a.full_name} — {a.address}
+                          {a.full_name} — {formatAddressLineFromRecord(a)}
                         </option>
                       ))}
                     </select>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={openAddressListPopup}
+                        className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        Manage Addresses
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openAddAddressForm}
+                        className="px-3 py-1.5 rounded bg-[#8B1C1C] text-sm text-white hover:bg-[#7a1919]"
+                      >
+                        + Add New Address
+                      </button>
+                    </div>
+                    {selectedAddressPreview ? (
+                      <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700">
+                        <div className="font-semibold text-gray-900">{selectedAddressPreview.full_name}</div>
+                        <div>{selectedAddressPreview.phone}</div>
+                        <div>{formatAddressLineFromRecord(selectedAddressPreview)}</div>
+                        {selectedAddressPreview.email ? <div>{selectedAddressPreview.email}</div> : null}
+                      </div>
+                    ) : null}
+                    {addresses.length === 0 ? (
+                      <div className="mt-1 text-xs text-gray-600">
+                        No saved addresses yet. Add one to continue delivery checkout.
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
-                  <div>
-                    <label className="text-sm text-gray-600">Store Branch *</label>
-                    <select
-                      className="w-full border rounded px-3 py-2"
-                      value={selectedBranch}
-                      onChange={(e) => setSelectedBranch(e.target.value)}
-                    >
-                      <option value="">Select Store Branch</option>
-                      {branches.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="rounded-lg border border-gray-300 bg-gray-50 px-4 py-3">
+                    <div className="text-sm font-semibold text-gray-700">Pickup Address</div>
+                    <div className="mt-1 text-sm text-gray-800">{PICKUP_ADDRESS}</div>
                   </div>
                 )}
 
                 <div>
-                  <label className="text-sm text-gray-600">
-                    Custom Dimensions (Optional)
-                  </label>
-                  <div className="grid grid-cols-3 gap-2 mt-1">
-                    <input
-                      placeholder="Width"
-                      className="border rounded px-2 py-2"
-                      value={formData.customWidth}
-                      onChange={(e) =>
-                        setFormData({ ...formData, customWidth: e.target.value })
-                      }
-                    />
-                    <input
-                      placeholder="Height"
-                      className="border rounded px-2 py-2"
-                      value={formData.customHeight}
-                      onChange={(e) =>
-                        setFormData({ ...formData, customHeight: e.target.value })
-                      }
-                    />
-                    <input
-                      placeholder="Thick."
-                      className="border rounded px-2 py-2"
-                      value={formData.customThickness}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          customThickness: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="inline-flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={formData.colorCustomization}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          colorCustomization: e.target.checked,
-                        })
-                      }
-                    />
-                    <span className="text-sm">
-                      Color Customization (+₱2,500 per unit)
-                    </span>
-                  </label>
-                  {formData.colorCustomization && (
-                    <input
-                      placeholder="Enter desired color"
-                      className="mt-2 w-full border rounded px-3 py-2"
-                      value={formData.colorText}
-                      onChange={(e) =>
-                        setFormData({ ...formData, colorText: e.target.value })
-                      }
-                    />
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-sm text-gray-600">Special Instructions</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Special Instructions</label>
                   <textarea
-                    className="w-full border rounded px-3 py-2"
+                    className="w-full border border-gray-300 rounded-lg px-4 py-3"
                     rows={3}
                     value={formData.specialInstructions}
                     onChange={(e) =>
@@ -617,115 +797,485 @@ function ReservationPageContent() {
                     }
                   />
                 </div>
-
-                <div>
-                  <label className="text-sm text-gray-600">Discount Code</label>
-                  <div className="flex gap-2 mt-1">
-                    <input
-                      className="flex-1 border rounded px-3 py-2"
-                      placeholder="Enter voucher code"
-                      value={voucherCode}
-                      onChange={(e) => setVoucherCode(e.target.value)}
-                    />
-                    <button
-                      onClick={applyVoucher}
-                      disabled={applyingVoucher}
-                      className="px-4 py-2 bg-[#8B1C1C] text-white rounded disabled:opacity-60"
-                    >
-                      {applyingVoucher ? "Applying..." : "Apply"}
-                    </button>
-                  </div>
-                  {voucherInfo && (
-                    <div className="text-xs text-green-700 mt-2">
-                      Applied {voucherInfo.code} (
-                      {voucherInfo.type === "percent"
-                        ? `${voucherInfo.value}%`
-                        : `₱${voucherInfo.value.toLocaleString()}`}
-                      )
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-sm text-gray-600">Payment Method</label>
-                  <div className="flex gap-4 mt-1">
-                    <label className="inline-flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="pmethod"
-                        checked={paymentMethod === "paymongo"}
-                        onChange={() => setPaymentMethod("paymongo")}
-                      />
-                      <span className="text-sm">PayMongo - GCash, Maya, Card</span>
-                    </label>
-                  </div>
-                  <div className="flex gap-4 mt-1">
-                    <label className="inline-flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="pmethod"
-                        checked={paymentMethod === "paypal"}
-                        onChange={() => setPaymentMethod("paypal")}
-                      />
-                      <span className="text-sm">PayPal</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <h3 className="font-semibold mb-2">Reservation Summary</h3>
-                  <div className="bg-gray-50 rounded p-4 space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span>Product Subtotal</span>
-                      <span>₱{productSubtotal.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Add-ons</span>
-                      <span>₱{addonsTotal.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Discount</span>
-                      <span className="text-green-700">
-                        -₱{Number(discountValue).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Total Product Value</span>
-                      <span>₱{discountedTotal.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-medium">Reservation Fee (Pay now)</span>
-                      <span className="font-medium text-green-600">
-                        ₱{reservationFee.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Remaining Balance</span>
-                      <span>₱{balanceDue.toLocaleString()}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-2 pt-2">
-                  <button
-                    onClick={handleReservation}
-                    disabled={submitting}
-                    className="w-full bg-[#8B1C1C] text-white rounded px-4 py-2 disabled:opacity-60"
-                  >
-                    {submitting ? "Processing…" : "Pay Reservation Fee & Reserve"}
-                  </button>
-                  <button
-                    onClick={addToCartInstead}
-                    className="w-full bg-gray-200 text-black rounded px-4 py-2 hover:bg-gray-300"
-                  >
-                    Add to Cart Instead
-                  </button>
-                </div>
               </div>
             </div>
-            {/* Right end */}
+
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-3">Measurements (mm)</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Keep the default size and price, or turn this on to request custom measurements.
+              </p>
+              <div className="text-xs text-gray-500 mb-3">
+                Default size: {formatMillimeters(Number(product.width || 0)) || "-"}mm x {formatMillimeters(Number(product.height || 0)) || "-"}mm
+              </div>
+              <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={formData.measurementEnabled}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      measurementEnabled: e.target.checked,
+                    })
+                  }
+                />
+                Change the default measurement
+              </label>
+              <div className="mt-2 text-xs text-gray-500">
+                {formData.measurementEnabled
+                  ? "Custom pricing only applies once you enter a size different from the default measurement."
+                  : "Default size and default price are currently being used."}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Width (mm)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="e.g. 2400"
+                    className="w-full border border-gray-300 rounded-lg px-4 py-3 disabled:bg-gray-100 disabled:text-gray-500"
+                    disabled={!formData.measurementEnabled}
+                    value={
+                      formData.measurementEnabled
+                        ? metersToMillimetersDisplay(formData.customWidth)
+                        : formatMillimeters(Number(product.width || 0))
+                    }
+                    onChange={(e) =>
+                      setFormData({ ...formData, customWidth: millimetersInputToMetersString(e.target.value) })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Height (mm)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="e.g. 1800"
+                    className="w-full border border-gray-300 rounded-lg px-4 py-3 disabled:bg-gray-100 disabled:text-gray-500"
+                    disabled={!formData.measurementEnabled}
+                    value={
+                      formData.measurementEnabled
+                        ? metersToMillimetersDisplay(formData.customHeight)
+                        : formatMillimeters(Number(product.height || 0))
+                    }
+                    onChange={(e) =>
+                      setFormData({ ...formData, customHeight: millimetersInputToMetersString(e.target.value) })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={formData.colorCustomization}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        colorCustomization: e.target.checked,
+                      })
+                    }
+                  />
+                  <span className="text-sm">Color Customization (+₱2,500 per unit)</span>
+                </label>
+                {formData.colorCustomization && (
+                  <input
+                    placeholder="Enter desired color"
+                    className="mt-2 w-full border border-gray-300 rounded-lg px-4 py-3"
+                    value={formData.colorText}
+                    onChange={(e) =>
+                      setFormData({ ...formData, colorText: e.target.value })
+                    }
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-3">Payment Method</h2>
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-[#8B1C1C] transition">
+                  <input
+                    type="radio"
+                    name="pmethod"
+                    checked={paymentMethod === "paymongo"}
+                    className="w-4 h-4"
+                    onChange={() => setPaymentMethod("paymongo")}
+                  />
+                  <div className="flex-1">
+                    <div className="font-semibold text-gray-900">PayMongo</div>
+                    <div className="text-sm text-gray-500">QRPh</div>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-[#8B1C1C] transition">
+                  <input
+                    type="radio"
+                    name="pmethod"
+                    checked={paymentMethod === "paypal"}
+                    className="w-4 h-4"
+                    onChange={() => setPaymentMethod("paypal")}
+                  />
+                  <div className="flex-1">
+                    <div className="font-semibold text-gray-900">PayPal</div>
+                    <div className="text-sm text-gray-500">Pay with your PayPal wallet or linked card</div>
+                  </div>
+                </label>
+              </div>
+              <div className="text-xs text-gray-500 mt-3">
+                Contact details (phone/email) will be collected inside the selected checkout provider.
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-3">Discount Code</h2>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 border border-gray-300 rounded-lg px-4 py-3"
+                  placeholder="Enter voucher code"
+                  value={voucherCode}
+                  onChange={(e) => setVoucherCode(e.target.value)}
+                />
+                <button
+                  onClick={applyVoucher}
+                  disabled={applyingVoucher}
+                  className="px-6 py-3 bg-[#8B1C1C] text-white rounded-lg font-semibold disabled:opacity-60"
+                >
+                  {applyingVoucher ? "Applying..." : "Apply"}
+                </button>
+              </div>
+              {voucherInfo && (
+                <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm font-medium">
+                  Applied {voucherInfo.code} ({voucherInfo.type === "percent" ? `${voucherInfo.value}%` : `₱${voucherInfo.value.toLocaleString()}`} off)
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="lg:col-span-1">
+            <div className="sticky top-6 bg-white rounded-lg shadow-md p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-3">Reservation Summary</h2>
+
+              <div className="flex gap-3 pb-4 border-b">
+                <img
+                  src={(product?.images && product.images[0]) || product?.image1 || "/no-orders.png"}
+                  alt={product?.name || "Product"}
+                  className="w-16 h-16 object-cover rounded"
+                />
+                <div className="flex-1">
+                  <div className="font-medium text-gray-900 text-sm">{product?.name || "Product"}</div>
+                  <div className="text-xs text-gray-500">Qty: {qty}</div>
+                  <div className="text-sm font-semibold text-gray-900">₱{(discountedTotal + reservationFee).toLocaleString()}</div>
+                </div>
+              </div>
+
+              <div className="space-y-2 my-4">
+                <div className="flex justify-between text-sm text-gray-700">
+                  <span>Original Price</span>
+                  <span>₱{originalPrice.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm text-gray-700">
+                  <span>Computed Unit Price</span>
+                  <span>₱{computedUnitPrice.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm text-gray-700">
+                  <span>Product Subtotal</span>
+                  <span>₱{productSubtotal.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm text-gray-700">
+                  <span>Add-ons</span>
+                  <span>₱{addonsTotal.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm text-green-700 font-semibold">
+                  <span>Discount</span>
+                  <span>-₱{Number(discountValue).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm text-gray-700">
+                  <span>Total Product Value</span>
+                  <span>₱{discountedTotal.toLocaleString()}</span>
+                </div>
+                {fulfillmentMethod === "delivery" ? (
+                  <div className="flex justify-between text-sm text-gray-700">
+                    <span>Delivery Fee (Pay now)</span>
+                    <span>₱{reservationFee.toLocaleString()}</span>
+                  </div>
+                ) : null}
+                <hr className="my-3" />
+                <div className="flex justify-between text-lg font-bold text-gray-900">
+                  <span>Total Amount</span>
+                  <span className="text-[#8B1C1C]">₱{(discountedTotal + reservationFee).toLocaleString()}</span>
+                </div>
+              </div>
+
+              <button
+                onClick={handleReservation}
+                disabled={submitting || (fulfillmentMethod === "delivery" && !selectedAddressId)}
+                className="w-full bg-gradient-to-r from-[#8B1C1C] to-[#a83232] text-white rounded-lg px-6 py-4 font-bold text-lg disabled:opacity-50"
+              >
+                {submitting
+                  ? "Processing..."
+                  : fulfillmentMethod === "delivery"
+                    ? "Pay Delivery Fee & Reserve"
+                    : "Reserve (Pickup)"}
+              </button>
+
+              <button
+                onClick={addToCartInstead}
+                className="w-full mt-2 bg-gray-200 text-black rounded-lg px-4 py-2 hover:bg-gray-300"
+              >
+                Add to Cart Instead
+              </button>
+            </div>
+        </div>
+      </div>
+
+      {showAddressPopup && (
+        <div className="fixed inset-0 z-[10000] bg-black/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-white rounded-xl shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h3 className="text-lg font-bold text-gray-900">
+                {addressFormMode ? (addressFormMode === "edit" ? "Edit Address" : "Add New Address") : "Select Delivery Address"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddressPopup(false);
+                  setAddressFormMode(null);
+                  setEditingAddressId(null);
+                  resetAddressForm();
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            {addressFormMode ? (
+              <form onSubmit={saveAddressFromPopup} className="p-5 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                    <input
+                      value={addressForm.full_name}
+                      onChange={(e) => setAddressForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                      className="w-full border rounded px-3 py-2 text-gray-900"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Gmail *</label>
+                    <input
+                      type="email"
+                      value={addressForm.email}
+                      onChange={(e) => setAddressForm((prev) => ({ ...prev, email: e.target.value }))}
+                      className="w-full border rounded px-3 py-2 text-gray-900"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number *</label>
+                  <input
+                    value={addressForm.phone}
+                    onChange={(e) => setAddressForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    className="w-full border rounded px-3 py-2 text-gray-900"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Province / Region *</label>
+                    <input
+                      value={addressForm.province}
+                      onChange={(e) => setAddressForm((prev) => ({ ...prev, province: e.target.value }))}
+                      list="reservation-province-options"
+                      placeholder="Type or pick a province/region"
+                      className="w-full border rounded px-3 py-2 text-gray-900"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
+                    <input
+                      value={addressForm.city}
+                      onChange={(e) => setAddressForm((prev) => ({ ...prev, city: e.target.value }))}
+                      list="reservation-city-options"
+                      placeholder="Type or pick a city"
+                      className="w-full border rounded px-3 py-2 text-gray-900"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <datalist id="reservation-province-options">
+                  {mergedLocationOptions.provinceOptions.map((option) => (
+                    <option key={option} value={option} />
+                  ))}
+                </datalist>
+                <datalist id="reservation-city-options">
+                  {mergedLocationOptions.cityOptions.map((option) => (
+                    <option key={option} value={option} />
+                  ))}
+                </datalist>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Barangay *</label>
+                    <input
+                      value={addressForm.barangay}
+                      onChange={(e) => setAddressForm((prev) => ({ ...prev, barangay: e.target.value }))}
+                      list="reservation-barangay-options"
+                      placeholder="Type or pick a barangay"
+                      className="w-full border rounded px-3 py-2 text-gray-900"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code *</label>
+                    <input
+                      value={addressForm.postal_code}
+                      onChange={(e) => setAddressForm((prev) => ({ ...prev, postal_code: e.target.value }))}
+                      className="w-full border rounded px-3 py-2 text-gray-900"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <datalist id="reservation-barangay-options">
+                  {mergedLocationOptions.barangayOptions.map((option) => (
+                    <option key={option} value={option} />
+                  ))}
+                </datalist>
+
+                <p className="text-xs text-gray-500 -mt-1">
+                  {barangayOptionsLoading && addressForm.city.trim()
+                    ? "Loading PSGC barangay suggestions for the selected city..."
+                    : "Type your barangay or choose from the suggestions for the selected city."}
+                </p>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Street *</label>
+                  <textarea
+                    value={addressForm.street}
+                    onChange={(e) => setAddressForm((prev) => ({ ...prev, street: e.target.value }))}
+                    className="w-full border rounded px-3 py-2 text-gray-900"
+                    rows={3}
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Full Address Preview</label>
+                  <input
+                    value={`${addressForm.street}${addressForm.barangay ? `, ${addressForm.barangay}` : ""}${addressForm.city ? `, ${addressForm.city}` : ""}${addressForm.province ? `, ${addressForm.province}` : ""}${addressForm.postal_code ? `, ${addressForm.postal_code}` : ""}`}
+                    className="w-full border rounded px-3 py-2 text-gray-900"
+                    readOnly
+                  />
+                </div>
+
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={addressForm.is_default}
+                    onChange={(e) => setAddressForm((prev) => ({ ...prev, is_default: e.target.checked }))}
+                  />
+                  Set as default address
+                </label>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddressFormMode(null);
+                      setEditingAddressId(null);
+                      resetAddressForm();
+                    }}
+                    className="px-4 py-2 border border-gray-300 rounded text-gray-700 hover:bg-gray-100"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={addressSaving}
+                    className="px-4 py-2 bg-[#8B1C1C] text-white rounded hover:bg-[#7a1919] disabled:opacity-60"
+                  >
+                    {addressSaving ? "Saving..." : "Save Address"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="p-5">
+                <div className="flex justify-end mb-3">
+                  <button
+                    type="button"
+                    onClick={openAddAddressForm}
+                    className="px-3 py-2 rounded bg-[#8B1C1C] text-white text-sm hover:bg-[#7a1919]"
+                  >
+                    + Add New Address
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {addresses.map((addr) => {
+                    const isSelected = selectedAddressId === addr.id;
+                    return (
+                      <div
+                        key={addr.id}
+                        className={`rounded-lg border p-3 ${isSelected ? "border-[#8B1C1C] bg-[#fff8f8]" : "border-gray-200 bg-white"}`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <div className="font-semibold text-gray-900">
+                              {addr.full_name}
+                              {addr.is_default ? (
+                                <span className="ml-2 text-xs font-medium text-green-700">Default</span>
+                              ) : null}
+                            </div>
+                            <div className="text-sm text-gray-700">{addr.phone}</div>
+                            <div className="text-sm text-gray-700">{formatAddressLineFromRecord(addr)}</div>
+                            {addr.email ? <div className="text-xs text-gray-600">{addr.email}</div> : null}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedAddressId(addr.id);
+                                setShowAddressPopup(false);
+                              }}
+                              className="px-3 py-1.5 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-100"
+                            >
+                              Select
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openEditAddressForm(addr)}
+                              className="px-3 py-1.5 rounded border border-[#8B1C1C] text-sm text-[#8B1C1C] hover:bg-[#fff1f1]"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {addresses.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-600 text-center">
+                      No saved addresses yet.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
           </div>
         </div>
+      )}
+
       </div>
     </div>
   );

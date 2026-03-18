@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { logActivity, detectChanges, formatChangesForDisplay } from "@/app/lib/activity";
 import { notifyProductUpdated, notifyInventoryChange } from "@/app/lib/notifications";
@@ -57,7 +57,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
       if (authHeader) {
         currentAdmin = JSON.parse(authHeader);
       }
-    } catch (e) {
+    } catch {
       console.log("No admin auth found in header");
     }
 
@@ -106,6 +106,10 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
         delete fallbackData.skyboxes;
         changed = true;
       }
+      if (msg.includes('house_model_url')) {
+        delete fallbackData.house_model_url;
+        changed = true;
+      }
 
       if (changed) {
         try {
@@ -117,7 +121,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
             .single();
           updatedProduct = data;
           updateError = error;
-        } catch (e) {
+        } catch {
           // keep original error
         }
       }
@@ -178,7 +182,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
               updatedProduct.name,
               updatedProduct.id,
               newInventory,
-              currentAdmin.username
+              currentAdmin.username,
+              req.url
             );
             console.log("🔔 Stock update notifications sent to users");
           } catch (notificationError) {
@@ -219,7 +224,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       if (authHeader) {
         currentAdmin = JSON.parse(authHeader);
       }
-    } catch (e) {
+    } catch {
       console.log("No admin auth found in header");
     }
 

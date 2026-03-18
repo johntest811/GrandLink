@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import nodemailer from "nodemailer";
+import { resendInvoiceEmailForUserItem } from "@/app/lib/invoiceService";
+import { getMailFrom, getMailTransporter } from "@/app/lib/mailer";
 
 // CORS headers (makes cross-origin safe if ever called from browser)
 const corsHeaders = {
@@ -21,22 +22,49 @@ const supabase = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
-// Email transporter (Gmail SMTP). Use an App Password for best results.
-let mailTransporter: nodemailer.Transporter | null = null;
-if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
-  mailTransporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465,
-    secure: true,
-    auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_PASS },
-  });
-} else {
-  console.warn("GMAIL_USER / GMAIL_PASS not configured - email sending disabled.");
-}
+// NOTE: email sending is handled via the shared mailer (SendGrid-first, Gmail fallback).
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+function normalizeEmail(value: unknown) {
+  if (typeof value !== "string") return null;
+  const email = value.trim().toLowerCase();
+  if (!email) return null;
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailPattern.test(email) ? email : null;
+}
+
+async function resolveOrderRecipientEmail(orderData: any) {
+  let addressEmail: string | null = null;
+  if (orderData?.delivery_address_id) {
+    const { data: address } = await supabase
+      .from("addresses")
+      .select("email")
+      .eq("id", orderData.delivery_address_id)
+      .maybeSingle();
+
+    addressEmail = normalizeEmail(address?.email ?? null);
+  }
+
+  const billingEmail = normalizeEmail(
+    orderData?.meta?.billing_email ||
+      orderData?.customer_email ||
+      orderData?.meta?.customer_email ||
+      null
+  );
+
+  const { data: userWrap } = await supabase.auth.admin.getUserById(orderData.user_id);
+  const authEmail = normalizeEmail(userWrap?.user?.email || null);
+
+  return {
+    addressEmail,
+    billingEmail,
+    authEmail,
+    recipientEmail: addressEmail || billingEmail || authEmail,
+  };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -74,7 +102,7 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    // Progress label map (for order_progress display)
+    // Progress label map (legacy)
     const progressMap: Record<string, string> = {
       pending_payment: "awaiting_payment",
       reserved: "payment_confirmed",
@@ -92,7 +120,6 @@ export async function POST(request: NextRequest) {
     };
 
     const dbStatus = mapStatusForDB(newStatus);
-    const progress = progressMap[newStatus] || newStatus;
     const now = new Date().toISOString();
 
     // Only update DB if skipUpdate !== true (admin app already wrote the change)
@@ -105,7 +132,6 @@ export async function POST(request: NextRequest) {
       const updatePayload: any = {
         status: dbStatus,
         order_status: newStatus,
-        order_progress: progress,
         progress_history: nextHistory,
         updated_at: now,
       };
@@ -123,9 +149,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Get user email (for email sending)
-    const { data: userWrap } = await supabase.auth.admin.getUserById(orderData.user_id);
-    const userEmail = userWrap?.user?.email || null;
+    const recipientInfo = await resolveOrderRecipientEmail(orderData);
+    const userEmail = recipientInfo.recipientEmail;
 
     const { data: preferences } = await supabase
       .from("user_notification_preferences")
@@ -181,31 +206,72 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (shouldSendEmail && mailTransporter && userEmail) {
+    let invoiceEmailSent = false;
+    let invoiceRecipientEmail = userEmail;
+    if (newStatus === "approved") {
       try {
-        await mailTransporter.sendMail({
-          from: process.env.GMAIL_FROM || process.env.GMAIL_USER!,
-          to: userEmail,
-          subject: `Order Status: ${statusDisplay}`,
-          html: `<p>${message}</p><p>Order ID: ${userItemId}</p>`,
-        });
+        const invoiceResult = await resendInvoiceEmailForUserItem(userItemId);
+        invoiceEmailSent = Boolean(invoiceResult?.emailSent);
+        invoiceRecipientEmail = invoiceResult?.recipientEmails?.[0] || userEmail;
+      } catch (invoiceErr) {
+        console.error("Invoice email send failed:", invoiceErr);
+      }
+    }
+
+    let statusEmailSent = false;
+    if (newStatus !== "approved" && shouldSendEmail && userEmail) {
+      try {
+        const transporter = getMailTransporter();
+        if (transporter) {
+          await transporter.sendMail({
+            from: getMailFrom(),
+            to: userEmail,
+            subject: `Order Status: ${statusDisplay} - ${productName}`,
+            html: `<p>${message}</p><p>Product: ${productName}</p><p>Order ID: ${userItemId}</p>`,
+          });
+          statusEmailSent = true;
+        } else {
+          console.warn("No mail transporter configured; skipping status email.");
+        }
       } catch (mailErr) {
         console.error("Email send failed:", mailErr);
       }
     }
 
     await supabase.from("email_notifications").insert({
-      recipient_email: userEmail,
-      subject: `Order Status: ${statusDisplay}`,
-      message: `${productName} - ${message}`,
+      recipient_email: newStatus === "approved" ? invoiceRecipientEmail : userEmail,
+      subject: newStatus === "approved" ? `Invoice for approved order ${userItemId}` : `Order Status: ${statusDisplay}`,
+      message:
+        newStatus === "approved"
+          ? `${productName} - Invoice email sent after admin approval.`
+          : `${productName} - ${message}`,
       notification_type: "order_status",
       related_entity_type: "user_items",
       related_entity_id: userItemId,
-      status: shouldSendEmail && userEmail ? "sent" : "pending",
+      status:
+        newStatus === "approved"
+          ? invoiceEmailSent
+            ? "sent"
+            : invoiceRecipientEmail
+            ? "pending"
+            : "skipped"
+          : shouldSendEmail && userEmail
+          ? statusEmailSent
+            ? "sent"
+            : "pending"
+          : "skipped",
       created_at: now,
     });
 
-    return NextResponse.json({ success: true, message: "Notification processed" }, { headers: corsHeaders });
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Notification processed",
+        invoiceEmailSent,
+        statusEmailSent,
+      },
+      { headers: corsHeaders }
+    );
   } catch (error) {
     console.error("Order status update error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500, headers: corsHeaders });

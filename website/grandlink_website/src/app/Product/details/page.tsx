@@ -16,6 +16,74 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function stripFeatureMarkup(value: string): string {
+  return decodeHtmlEntities(
+    String(value || "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<\/div>/gi, "\n")
+      .replace(/<\/li>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "• ")
+      .replace(/<\/ul>/gi, "\n")
+      .replace(/<\/ol>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+  )
+    .replace(/\r/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function escapeHtml(value: string): string {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function extractFeatureItems(value: string): string[] {
+  const seen = new Set<string>();
+  const plainText = stripFeatureMarkup(value);
+  if (!plainText) return [];
+
+  return plainText
+    .split(/\n+/)
+    .map((item) => item.replace(/^[•\-\*\s]+/, "").trim())
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function normalizeAdditionalFeaturesHtml(value: unknown): string {
+  const source = Array.isArray(value)
+    ? value.map((item) => String(item || "")).join("\n")
+    : typeof value === "string"
+    ? value
+    : "";
+
+  const items = extractFeatureItems(source);
+  if (!items.length) return "";
+
+  return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+}
+
 function ProductDetailsPageContent() {
   const searchParams = useSearchParams();
   const productId = searchParams.get("id");
@@ -23,6 +91,7 @@ function ProductDetailsPageContent() {
   const [carouselIdx, setCarouselIdx] = useState(0);
   const [show3D, setShow3D] = useState(false);
   const [weather, setWeather] = useState<"sunny" | "rainy" | "night" | "foggy">("sunny");
+  const [frameFinish, setFrameFinish] = useState<"default" | "matteBlack" | "matteGray" | "narra" | "walnut">("default");
   const [quantity, setQuantity] = useState(1);
   const [adding, setAdding] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
@@ -51,9 +120,9 @@ function ProductDetailsPageContent() {
       const res = await fetch(`/api/products?id=${productId}`);
       const data = await res.json();
 
-      const additionalfeatures = Array.isArray(data?.additionalfeatures)
-        ? data.additionalfeatures.join("\n")
-        : (data?.additionalfeatures ?? (data?.features?.length ? data.features.join("\n") : ""));
+      const additionalfeatures = normalizeAdditionalFeaturesHtml(
+        data?.additionalfeatures ?? (data?.features?.length ? data.features : "")
+      );
 
       setProduct({ ...data, additionalfeatures });
     };
@@ -74,10 +143,33 @@ function ProductDetailsPageContent() {
     ? product.images
     : [product.image1, product.image2, product.image3, product.image4, product.image5].filter(Boolean);
 
-  // Get 3D model URLs (stored in fbx_url(s) for backward compatibility)
-  const fbxUrls: string[] = product.fbx_urls && Array.isArray(product.fbx_urls) && product.fbx_urls.length > 0
-    ? product.fbx_urls.filter((url: string) => url && url.trim() !== '')
-    : product.fbx_url ? [product.fbx_url] : [];
+  // Get 3D model URLs (FBX + GLB/GLTF, with backward-compatible field names)
+  const modelUrls: string[] = (() => {
+    const urls: string[] = [];
+
+    const push = (v: any) => {
+      if (Array.isArray(v)) {
+        v.forEach((x) => {
+          if (typeof x === "string" && x.trim()) urls.push(x.trim());
+        });
+      } else if (typeof v === "string" && v.trim()) {
+        urls.push(v.trim());
+      }
+    };
+
+    // Legacy + current fields
+    push(product.fbx_urls);
+    push(product.fbx_url);
+    push((product as any).model_urls);
+    push((product as any).model_url);
+    push((product as any).glb_urls);
+    push((product as any).glb_url);
+    push((product as any).gltf_urls);
+    push((product as any).gltf_url);
+
+    // Dedupe while preserving order
+    return Array.from(new Set(urls));
+  })();
 
   const handlePrev = () => setCarouselIdx((idx) => (idx === 0 ? images.length - 1 : idx - 1));
   const handleNext = () => setCarouselIdx((idx) => (idx === images.length - 1 ? 0 : idx + 1));
@@ -163,7 +255,7 @@ function ProductDetailsPageContent() {
   };
 
   const isOutOfStock = product.inventory <= 0;
-  const has3DModels = fbxUrls.length > 0;
+  const has3DModels = modelUrls.length > 0;
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -200,6 +292,7 @@ function ProductDetailsPageContent() {
                 alt={product.name || "Product image"}
                 fill
                 priority
+                unoptimized
                 quality={95}
                 sizes="(max-width: 768px) 100vw, 1200px"
                 className="object-contain"
@@ -242,6 +335,7 @@ function ProductDetailsPageContent() {
                       src={img || "https://placehold.co/200x200/png?text=No+Image"}
                       alt={`Thumbnail ${idx + 1}`}
                       fill
+                      unoptimized
                       quality={90}
                       sizes="96px"
                       className="object-cover"
@@ -287,7 +381,7 @@ function ProductDetailsPageContent() {
             {has3DModels && (
               <div className="mt-3">
                 <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
-                  {fbxUrls.length} 3D Model{fbxUrls.length > 1 ? 's' : ''} Available
+                  {modelUrls.length} 3D Model{modelUrls.length > 1 ? 's' : ''} Available
                 </span>
               </div>
             )}
@@ -304,13 +398,13 @@ function ProductDetailsPageContent() {
                   ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:scale-105 active:scale-95"
                   : "bg-gray-300 text-gray-500 cursor-not-allowed shadow-md"
               }`}
-              title={has3DModels ? `View ${fbxUrls.length} 3D Model${fbxUrls.length > 1 ? 's' : ''}` : "No 3D models available"}
+              title={has3DModels ? `View ${modelUrls.length} 3D Model${modelUrls.length > 1 ? 's' : ''}` : "No 3D models available"}
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
               </svg>
               <span>
-                3D View {has3DModels && fbxUrls.length > 1 ? `(${fbxUrls.length})` : ''}
+                3D View {has3DModels && modelUrls.length > 1 ? `(${modelUrls.length})` : ''}
               </span>
             </button>
             
@@ -338,7 +432,7 @@ function ProductDetailsPageContent() {
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
               </svg>
-              <span>{isOutOfStock ? 'Out of Stock' : 'Reserve Now (₱500)'}</span>
+              <span>{isOutOfStock ? 'Out of Stock' : 'Reserve Now'}</span>
             </button>
           </div>
 
@@ -386,44 +480,44 @@ function ProductDetailsPageContent() {
           <div className="mt-12 border-t pt-8">
             <div className="mb-6">
               <label className="block text-lg font-semibold text-gray-700 mb-2">Product Description</label>
-              <p className="text-gray-800 text-sm md:text-base leading-relaxed">
-                {product.description}
-              </p>
+              <div
+                className="blog-content text-gray-800 text-sm md:text-base leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: product.description || "" }}
+              />
             </div>
 
             <h4 className="text-red-700 font-bold mb-4 text-xl">Key Features</h4>
 
-            {/* Dimensions & Material summary */}
+            {/* Dimensions summary */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
               <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
                 <div className="text-sm text-gray-500">Height</div>
-                <div className="text-lg font-semibold text-gray-500">{product.height ?? "—"}</div>
+                <div className="text-lg font-semibold text-gray-500">
+                  {product.height != null ? `${product.height} mm` : "—"}
+                </div>
               </div>
               <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
                 <div className="text-sm text-gray-500">Width</div>
-                <div className="text-lg font-semibold text-gray-500">{product.width ?? "—"}</div>
+                <div className="text-lg font-semibold text-gray-500">
+                  {product.width != null ? `${product.width} mm` : "—"}
+                </div>
               </div>
               <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
                 <div className="text-sm text-gray-500">Thickness</div>
-                <div className="text-lg font-semibold text-gray-500">{product.thickness ?? "—"}</div>
-              </div>
-              <div className="bg-gray-50 p-3 rounded border flex flex-col items-center justify-center text-center">
-                <div className="text-sm text-gray-500">Material</div>
-                <div className="text-lg font-semibold text-gray-500">{product.material ?? "Wood"}</div>
-              </div>
-              <div className="bg-gray-50 p-3 rounded border col-span-2 sm:col-span-1 flex flex-col items-center justify-center text-center">
-                <div className="text-sm text-gray-500">Type</div>
-                <div className="text-lg font-semibold text-gray-500">{product.type ?? "Clear"}</div>
+                <div className="text-lg font-semibold text-gray-500">
+                  {product.thickness != null ? `${product.thickness} mm` : "—"}
+                </div>
               </div>
             </div>
 
             <div className="mt-2">
               <h5 className="text-lg font-semibold text-red-700 mb-2">Additional Features</h5>
-              <div className="text-lg text-gray-700 whitespace-pre-line">
-                {product.additionalfeatures
-                  ?? (product.features?.length ? product.features.join("\n") : "")
-                }
-              </div>
+              <div
+                className="blog-content text-lg text-gray-700"
+                dangerouslySetInnerHTML={{
+                  __html: product.additionalfeatures || "",
+                }}
+              />
             </div>
           </div>
         </div>
@@ -477,10 +571,55 @@ function ProductDetailsPageContent() {
               ))}
             </div>
 
+            {/* Frame Color Controls - Fixed to modal frame (non-moving) */}
+            <div className="absolute top-20 right-6 z-20 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+              <div className="text-xs font-semibold text-gray-700 mb-2">Frame</div>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  title="Default"
+                  aria-label="Default"
+                  onClick={() => setFrameFinish("default")}
+                  className={
+                    "px-3 py-2 rounded-md text-xs font-medium border transition-all text-left text-black " +
+                    (frameFinish === "default" ? "border-black bg-white" : "border-gray-300 bg-white hover:border-gray-400")
+                  }
+                >
+                  Default
+                </button>
+                {(
+                  [
+                    { key: "matteBlack", label: "Matte Black", swatchClass: "bg-black" },
+                    { key: "matteGray", label: "Matte Gray", swatchClass: "bg-gray-500" },
+                    { key: "narra", label: "Narra", swatchClass: "bg-amber-800" },
+                    { key: "walnut", label: "Walnut", swatchClass: "bg-stone-700" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    title={opt.label}
+                    aria-label={opt.label}
+                    onClick={() => setFrameFinish(opt.key)}
+                    className={
+                      "flex items-center gap-2 px-2 py-2 rounded-md border transition-all " +
+                      (frameFinish === opt.key ? "border-black bg-white" : "border-gray-300 bg-white hover:border-gray-400")
+                    }
+                  >
+                    <span className={`w-5 h-5 rounded-full border border-black/10 ${opt.swatchClass}`} />
+                    <span className="text-xs font-medium text-gray-800">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+
+            </div>
+
             <div className="flex-1 w-full min-h-0 relative overflow-hidden">
               <ThreeDFBXViewer
-                fbxUrls={fbxUrls}
+                modelUrls={modelUrls}
                 weather={weather}
+                frameFinish={frameFinish}
+                productCategory={product?.category ?? product?.type ?? null}
                 skyboxes={product?.skyboxes || null}
                 productDimensions={{
                   width: product.width,

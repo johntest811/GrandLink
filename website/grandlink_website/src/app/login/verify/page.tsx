@@ -1,8 +1,11 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../Clients/Supabase/SupabaseClients";
 import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
+import { supabase } from "../../Clients/Supabase/SupabaseClients";
+
+const PENDING_VERIFICATION_KEY = "gl_pending_email_verification";
 
 export default function VerifyPage() {
   const [code, setCode] = useState(["", "", "", "", "", ""]);
@@ -10,41 +13,43 @@ export default function VerifyPage() {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [email, setEmail] = useState("");
+
   const router = useRouter();
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
-    // Get email from session storage
-    const storedEmail = sessionStorage.getItem("login_email");
-    if (storedEmail) {
-      setEmail(storedEmail);
-    } else {
-      // Fallback for OAuth sessions: try to read the signed-in user's email
-      supabase.auth.getUser().then(({ data }) => {
-        const e = data.user?.email || "";
-        if (!e) {
-          router.push("/login");
+    const init = async () => {
+      const storedEmail = sessionStorage.getItem("login_email");
+      if (storedEmail) {
+        setEmail(storedEmail);
+      } else {
+        // OAuth flow fallback: if session exists, recover email from user.
+        const { data } = await supabase.auth.getUser();
+        const userEmail = data.user?.email || "";
+        if (userEmail) {
+          sessionStorage.setItem("login_email", userEmail);
+          sessionStorage.setItem("login_flow", "oauth");
+          setEmail(userEmail);
+        } else {
+          router.replace("/login");
           return;
         }
-        sessionStorage.setItem("login_email", e);
-        sessionStorage.setItem("login_flow", "oauth");
-        setEmail(e);
-      });
-    }
-    
-    // Focus first input
-    inputRefs.current[0]?.focus();
+      }
+
+      inputRefs.current[0]?.focus();
+    };
+
+    void init();
   }, [router]);
 
   const handleChange = (index: number, value: string) => {
-    if (!/^\d*$/.test(value)) return; // Only allow digits
+    if (!/^\d*$/.test(value)) return;
 
-    const newCode = [...code];
-    newCode[index] = value.slice(-1); // Only take last character
-    setCode(newCode);
+    const next = [...code];
+    next[index] = value.slice(-1);
+    setCode(next);
     setError("");
 
-    // Auto-focus next input
     if (value && index < 5) {
       inputRefs.current[index + 1]?.focus();
     }
@@ -58,25 +63,17 @@ export default function VerifyPage() {
 
   const handlePaste = (e: React.ClipboardEvent) => {
     e.preventDefault();
-    const pastedData = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
-    const newCode = [...code];
-    
-    for (let i = 0; i < pastedData.length; i++) {
-      newCode[i] = pastedData[i];
-    }
-    
-    setCode(newCode);
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    const next = [...code];
+    for (let i = 0; i < pasted.length; i++) next[i] = pasted[i];
+    setCode(next);
     setError("");
-    
-    // Focus last filled input or next empty
-    const nextIndex = Math.min(pastedData.length, 5);
-    inputRefs.current[nextIndex]?.focus();
+    inputRefs.current[Math.min(pasted.length, 5)]?.focus();
   };
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     const verificationCode = code.join("");
-    
     if (verificationCode.length !== 6) {
       setError("Please enter all 6 digits");
       return;
@@ -86,23 +83,21 @@ export default function VerifyPage() {
     setError("");
 
     try {
-      // Verify the code
       const verifyResponse = await fetch("/api/auth/send-verification-code", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, code: verificationCode }),
       });
 
-      const verifyData = await verifyResponse.json();
-
+      const verifyData = await verifyResponse.json().catch(() => ({}));
       if (!verifyResponse.ok) {
-        setError(verifyData.error || "Invalid verification code");
+        setError((verifyData as { error?: string })?.error || "Invalid verification code");
         setLoading(false);
         return;
       }
 
-      // Code is valid, now sign in the user
       const password = sessionStorage.getItem("login_password");
+      const loginFlow = sessionStorage.getItem("login_flow");
 
       if (password) {
         const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -115,24 +110,28 @@ export default function VerifyPage() {
           setLoading(false);
           return;
         }
-      } else {
-        // OAuth flow: the user should already have an active Supabase session.
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (!sessionData.session) {
+      } else if (loginFlow === "oauth") {
+        // OAuth flow: session should already exist from /login/confirm.
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData.user) {
           setError("Session expired. Please login again.");
-          router.push("/login");
+          setLoading(false);
           return;
         }
+      } else {
+        setError("Please login again.");
+        setLoading(false);
+        return;
       }
 
-      // Clear session storage
       sessionStorage.removeItem("login_email");
       sessionStorage.removeItem("login_password");
       sessionStorage.removeItem("login_flow");
+      localStorage.removeItem(PENDING_VERIFICATION_KEY);
+      window.dispatchEvent(new Event("gl:pendingVerificationChanged"));
 
-      // Redirect to home
       router.push("/home");
-    } catch (err: any) {
+    } catch (err) {
       console.error("Verification error:", err);
       setError("An error occurred. Please try again.");
       setLoading(false);
@@ -150,18 +149,15 @@ export default function VerifyPage() {
         body: JSON.stringify({ email, resend: true }),
       });
 
-  const data = await response.json();
-
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setError(data.error || "Failed to resend code");
+        setError((data as { error?: string })?.error || "Failed to resend code");
       } else {
         setCode(["", "", "", "", "", ""]);
         inputRefs.current[0]?.focus();
-        // Show success message from server (may indicate rate limit wait)
-        setError("");
-        alert(data?.message || "Verification code sent to your email!");
+        alert((data as { message?: string })?.message || "Verification code sent to your email!");
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Resend error:", err);
       setError("Failed to resend code");
     } finally {
@@ -175,12 +171,8 @@ export default function VerifyPage() {
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
           <div className="text-center">
-            <h2 className="text-3xl font-extrabold text-black">
-              Enter Verification Code
-            </h2>
-            <p className="mt-2 text-sm text-black">
-              We sent a 6-digit code to
-            </p>
+            <h2 className="text-3xl font-extrabold text-black">Enter Verification Code</h2>
+            <p className="mt-2 text-sm text-black">We sent a 6-digit code to</p>
             <p className="text-sm font-medium text-[#8B1C1C]">{email}</p>
           </div>
 
@@ -205,9 +197,7 @@ export default function VerifyPage() {
                     />
                   ))}
                 </div>
-                {error && (
-                  <p className="mt-3 text-sm text-red-600 text-center">{error}</p>
-                )}
+                {error && <p className="mt-3 text-sm text-red-600 text-center">{error}</p>}
               </div>
 
               <button
@@ -223,14 +213,7 @@ export default function VerifyPage() {
                       fill="none"
                       viewBox="0 0 24 24"
                     >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path
                         className="opacity-75"
                         fill="currentColor"
@@ -245,7 +228,7 @@ export default function VerifyPage() {
               </button>
 
               <div className="text-center space-y-2">
-                <p className="text-sm text-black">Didn't receive the code?</p>
+                <p className="text-sm text-black">Didn&apos;t receive the code?</p>
                 <button
                   type="button"
                   onClick={handleResend}
@@ -262,6 +245,8 @@ export default function VerifyPage() {
                   onClick={() => {
                     sessionStorage.removeItem("login_email");
                     sessionStorage.removeItem("login_password");
+                    sessionStorage.removeItem("login_flow");
+                    localStorage.removeItem(PENDING_VERIFICATION_KEY);
                     router.push("/login");
                   }}
                   className="text-sm text-black hover:text-black"

@@ -1,7 +1,24 @@
 # Workspace-level ignores
 
+# Node / Next.js build artifacts (workspace-wide)
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/build/
+**/.vercel/
+
+# Logs
+**/*.log
+
+# Env files (keep secrets out of git)
+**/.env*
+
 # Local backups / exports (avoid accidentally committing huge binaries)
 /Backup 1/
+
+# Large archives
+*.rar
 
 # Temp marker files
 **/Temp.txt

@@ -4,12 +4,15 @@ import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { useState } from "react";
 import UnifiedTopNavBar from "@/components/UnifiedTopNavBar";
 import { ReactNode } from "react";
+import CheckboxCaptcha from "@/components/CheckboxCaptcha";
 
 export default function RegisterPage() {
-  const [name, setName] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [captchaVerified, setCaptchaVerified] = useState(false);
   const [popup, setPopup] = useState<{ success: boolean; message: ReactNode } | null>(null);
   const baseUrl =
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -19,13 +22,28 @@ export default function RegisterPage() {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${baseUrl}/home`,
+        // After Google OAuth completes, we still require a verification code.
+        redirectTo: `${baseUrl}/login/confirm`,
       },
     });
   };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!captchaVerified) {
+      setPopup({ success: false, message: "Please complete the captcha verification." });
+      return;
+    }
+
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    const fullName = `${cleanFirstName} ${cleanLastName}`.trim();
+
+    if (!cleanFirstName || !cleanLastName) {
+      setPopup({ success: false, message: "Please enter both first name and last name." });
+      return;
+    }
 
     const passwordChecks = {
       length: password.length >= 8,
@@ -76,7 +94,12 @@ export default function RegisterPage() {
       password,
       options: {
         emailRedirectTo: `${baseUrl}/register/success`,
-        data: { name }
+        data: {
+          first_name: cleanFirstName,
+          last_name: cleanLastName,
+          full_name: fullName,
+          name: fullName,
+        },
       }
     });
     if (error) {
@@ -102,7 +125,8 @@ export default function RegisterPage() {
           </div>
         )
       });
-      setName("");
+      setFirstName("");
+      setLastName("");
       setEmail("");
       setPassword("");
       setConfirmPassword("");
@@ -130,6 +154,11 @@ export default function RegisterPage() {
   const strengthColorClass =
     strengthLabel === "Strong" ? "text-green-600" : strengthLabel === "Medium" ? "text-yellow-600" : "text-red-600";
 
+  const strengthBarClass =
+    strengthLabel === "Strong" ? "bg-green-600" : strengthLabel === "Medium" ? "bg-yellow-500" : "bg-red-600";
+
+  const strengthPercent = Math.max(0, Math.min(100, Math.round((strengthScore / 5) * 100)));
+
   const meetsMinimumStrength =
     passwordChecks.length && passwordChecks.lower && passwordChecks.upper && passwordChecks.number;
 
@@ -147,21 +176,42 @@ export default function RegisterPage() {
         <div className="bg-white/95 rounded-xl shadow-lg px-8 py-10 w-full max-w-md flex flex-col items-center relative z-10 mt-12 mb-12">
           <h1 className="text-3xl font-bold text-center mb-6 text-[#8B1C1C]">Register</h1>
           <form className="w-full flex flex-col gap-4" onSubmit={handleRegister}>
-            <div>
-              <label className="font-semibold text-sm mb-1 block text-black" htmlFor="name">
-                Full Name
-              </label>
-              <div className="flex items-center border border-gray-400 rounded-lg px-3 py-2 bg-gray-100">
-                <FaUser className="text-gray-500 mr-2" />
-                <input
-                  id="name"
-                  type="text"
-                  placeholder="Please Enter your Full Name"
-                  className="bg-transparent outline-none flex-1 text-gray-700 placeholder-gray-400"
-                  autoComplete="name"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="font-semibold text-sm mb-1 block text-black" htmlFor="first-name">
+                  First Name
+                </label>
+                <div className="flex items-center border border-gray-400 rounded-lg px-3 py-2 bg-gray-100">
+                  <FaUser className="text-gray-500 mr-2" />
+                  <input
+                    id="first-name"
+                    type="text"
+                    placeholder="First name"
+                    className="bg-transparent outline-none flex-1 text-gray-700 placeholder-gray-400"
+                    autoComplete="given-name"
+                    value={firstName}
+                    onChange={e => setFirstName(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="font-semibold text-sm mb-1 block text-black" htmlFor="last-name">
+                  Last Name
+                </label>
+                <div className="flex items-center border border-gray-400 rounded-lg px-3 py-2 bg-gray-100">
+                  <FaUser className="text-gray-500 mr-2" />
+                  <input
+                    id="last-name"
+                    type="text"
+                    placeholder="Last name"
+                    className="bg-transparent outline-none flex-1 text-gray-700 placeholder-gray-400"
+                    autoComplete="family-name"
+                    value={lastName}
+                    onChange={e => setLastName(e.target.value)}
+                    required
+                  />
+                </div>
               </div>
             </div>
             <div>
@@ -178,6 +228,7 @@ export default function RegisterPage() {
                   autoComplete="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
+                  required
                 />
               </div>
             </div>
@@ -195,12 +246,20 @@ export default function RegisterPage() {
                   autoComplete="new-password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
+                  required
                 />
               </div>
               <div className="mt-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-black">Password strength:</span>
                   <span className={`font-semibold ${strengthColorClass}`}>{strengthLabel}</span>
+                </div>
+
+                <div className="mt-2 h-2 w-full rounded-full bg-gray-200 overflow-hidden" aria-label="Password strength meter">
+                  <div
+                    className={`h-full ${strengthBarClass} transition-all`}
+                    style={{ width: `${strengthPercent}%` }}
+                  />
                 </div>
 
                 <div className="mt-2 grid grid-cols-1 gap-1 text-black">
@@ -236,17 +295,19 @@ export default function RegisterPage() {
                   autoComplete="new-password"
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
+                  required
                 />
               </div>
               {!passwordsMatch ? (
                 <div className="mt-2 text-xs text-red-600">Passwords do not match.</div>
               ) : null}
             </div>
+            <CheckboxCaptcha onVerifiedChange={setCaptchaVerified} />
             <button
               type="submit"
-              disabled={!meetsMinimumStrength || !passwordsMatch}
+              disabled={!meetsMinimumStrength || !passwordsMatch || !captchaVerified}
               className={`bg-[#232d3b] text-white font-semibold rounded w-full py-2 mt-2 transition ${
-                !meetsMinimumStrength || !passwordsMatch ? "opacity-60 cursor-not-allowed" : "hover:bg-[#1a222e]"
+                !meetsMinimumStrength || !passwordsMatch || !captchaVerified ? "opacity-60 cursor-not-allowed" : "hover:bg-[#1a222e]"
               }`}
             >
               REGISTER
@@ -260,6 +321,7 @@ export default function RegisterPage() {
             <FaGoogle className="text-[#4285F4] text-xl" />
             <span className="font-medium text-gray-700">Sign up with Google</span>
           </button>
+
           <div className="text-xs text-center mt-4 text-gray-600">
             Already have an account?{" "}
             <a href="login" className="text-blue-600 hover:underline">
@@ -269,7 +331,7 @@ export default function RegisterPage() {
           {/* Popup for success or failure */}
           {popup && (
             <div className={`fixed inset-0 flex items-center justify-center z-50 bg-transparent`}>
-              <div className={`bg-white rounded-lg shadow-lg p-8 min-w-[350px] text-center flex flex-col items-center`}>
+              <div className={`bg-white rounded-lg shadow-lg p-6 sm:p-8 w-[92vw] max-w-md text-center flex flex-col items-center`}>
                 {popup.success ? popup.message : (
                   <>
                     <h2 className="text-xl font-bold mb-2 text-red-600">Error</h2>

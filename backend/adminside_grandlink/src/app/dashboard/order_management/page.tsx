@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { adminNotificationService } from "@/utils/notificationHelper";
 
 type UserItem = {
@@ -38,21 +39,14 @@ type UserItem = {
   customer?: { name?: string|null; email?: string|null; phone?: string|null };
 };
 
-type PaymentModalData = {
-  item: UserItem;
-  type: 'approve_balance' | 'request_balance' | 'refund';
-};
-
 export default function OrdersPage() {
   const [reservations, setReservations] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('pending_payment');
+  const [statusFilter, setStatusFilter] = useState('');
   // NEW: search
   const [searchQuery, setSearchQuery] = useState('');
   const [currentAdmin, setCurrentAdmin] = useState<any>(null);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
-  const [showPaymentModal, setShowPaymentModal] = useState<PaymentModalData | null>(null);
-  const [paymentNotes, setPaymentNotes] = useState('');
   // removed inline edit id in favor of modal
   // New: edit payment modal state
   const [editPaymentItem, setEditPaymentItem] = useState<UserItem | null>(null);
@@ -133,24 +127,6 @@ export default function OrdersPage() {
       const previousStage = String(item?.meta?.cancel_prev_stage || item?.order_status || item?.order_progress || item?.status || 'approved');
       const normalized = newStatus === 'reject_cancellation' ? mapStatusForDB(previousStage) : mapStatusForDB(newStatus);
 
-      const progressMap: Record<string, string> = {
-        pending_payment: "awaiting_payment",
-        reserved: "payment_confirmed",
-        approved: "in_production",
-        in_production: "in_production",
-        quality_check: "quality_check",
-        start_packaging: "packaging",
-        packaging: "packaging",
-        ready_for_delivery: "ready_for_delivery",
-        out_for_delivery: "out_for_delivery",
-        completed: "delivered",
-        cancelled: "cancelled",
-        pending_cancellation: "pending_cancellation",
-        pending_balance_payment: "balance_due",
-        // NEW
-        approve_cancellation: "cancelled",
-      };
-
       const computedOrderStatus =
         newStatus === 'approve_cancellation'
           ? 'cancelled'
@@ -161,7 +137,6 @@ export default function OrdersPage() {
       const updates: any = {
         status: normalized,
         order_status: computedOrderStatus,
-        order_progress: progressMap[computedOrderStatus] || computedOrderStatus,
         admin_notes:
           newStatus === 'approved' ? `Order approved by ${by}` :
           newStatus === 'approve_cancellation' ? `Order cancellation approved by ${by}` :
@@ -218,106 +193,6 @@ export default function OrdersPage() {
     }
   };
 
-  // ONLY update user_items for payment actions
-  const handlePaymentAction = async (action: 'approve_balance' | 'request_balance' | 'refund') => {
-    if (!showPaymentModal || !currentAdmin) return;
-    const { item } = showPaymentModal;
-    setUpdatingStatus(item.id);
-
-    try {
-      const unitPrice = item.price ?? item.meta?.price ?? 0;
-      const totalPrice = unitPrice * item.quantity;
-      const reservationFee = item.reservation_fee ?? item.meta?.reservation_fee ?? 500;
-      const balanceDue = Math.max(totalPrice - reservationFee, 0);
-      const baseNoteBy = currentAdmin.username || currentAdmin.name || 'admin';
-
-      let updates: any = { updated_at: new Date().toISOString() };
-      let notifyStatus = item.status;
-
-      if (action === 'approve_balance') {
-        updates = {
-          ...updates,
-          balance_payment_status: 'completed',
-          total_paid: totalPrice,
-          status: 'approved',                  // allowed
-          order_status: 'approved',
-          meta: {
-            ...item.meta,
-            payment_stage: 'fully_paid',
-            admin_payment_notes: paymentNotes,
-            balance_amount_received: balanceDue,
-            balance_payment_approved_by: baseNoteBy,
-            balance_payment_approved_at: new Date().toISOString(),
-            payment_history: [
-              ...(item.meta?.payment_history || []),
-              {
-                type: 'balance_payment',
-                amount: balanceDue,
-                approved_by: baseNoteBy,
-                approved_at: new Date().toISOString(),
-                notes: paymentNotes,
-              },
-            ],
-          },
-        };
-        notifyStatus = 'approved';
-      } else if (action === 'request_balance') {
-        updates = {
-          ...updates,
-          status: 'reserved',                   // keep valid status
-          order_status: 'pending_balance_payment', // fine-grained for UI/email
-          balance_payment_status: 'pending',
-          meta: {
-            ...item.meta,
-            payment_stage: 'balance_due',
-            admin_payment_notes: paymentNotes,
-            balance_amount_due: balanceDue,
-            balance_payment_requested_by: baseNoteBy,
-            balance_payment_requested_at: new Date().toISOString(),
-            balance_payment_link: `${process.env.NEXT_PUBLIC_USER_WEBSITE_URL}/payment/balance?order_id=${item.id}`,
-          },
-        };
-        notifyStatus = 'pending_balance_payment';
-      } else if (action === 'refund') {
-        const refundAmount = item.total_paid ?? reservationFee;
-        updates = {
-          ...updates,
-          status: 'cancelled',                  // allowed
-          order_status: 'cancelled',
-          payment_status: 'refunded',
-          meta: {
-            ...item.meta,
-            refund_status: 'processing',
-            refund_amount: refundAmount,
-            refund_reason: paymentNotes,
-            refund_processed_by: baseNoteBy,
-            refund_processed_at: new Date().toISOString(),
-          },
-        };
-        notifyStatus = 'cancelled';
-      }
-
-      const updatedItem = await updateOrderViaApi({ itemId: item.id, updates });
-
-      await adminNotificationService.notifyOrderStatusUpdate(
-        item.id,
-        item.user_id,
-        notifyStatus,
-        baseNoteBy,
-        item.meta?.product_name || ''
-      );
-
-      setReservations(prev => prev.map(r => (r.id === item.id ? { ...r, ...updatedItem } : r)));
-      setShowPaymentModal(null);
-      setPaymentNotes('');
-      await fetchReservations();
-    } catch (err: any) {
-      console.error('Error processing payment action:', err);
-      alert(`Error: ${err.message}`);
-    } finally {
-      setUpdatingStatus(null);
-    }
-  };
 
   const getStatusColor = (status: string) =>
     ({
@@ -333,22 +208,6 @@ export default function OrdersPage() {
       pending_cancellation: 'bg-orange-100 text-orange-800',
       cancelled: 'bg-red-100 text-red-800',
     }[status] || 'bg-gray-100 text-gray-800');
-
-  const getPaymentInfo = (item: UserItem) => {
-    const unitPrice = item.price ?? item.meta?.price ?? 0;
-    const totalPrice = unitPrice * item.quantity;
-    const reservationFee = item.reservation_fee ?? item.meta?.reservation_fee ?? 500;
-    const balance = Math.max(totalPrice - reservationFee, 0);
-    const totalPaid = item.total_paid ?? (item.payment_status === 'completed' ? reservationFee : 0);
-    return {
-      totalPrice,
-      reservationFee,
-      balance,
-      totalPaid,
-      isFullyPaid: totalPaid >= totalPrice,
-      hasReservationFee: item.payment_status === 'completed',
-    };
-  };
 
   // Current UI stage (prefers order_status/order_progress)
   const getStage = (r: UserItem) => r.order_status || r.order_progress || r.status;
@@ -542,6 +401,7 @@ export default function OrdersPage() {
               <th className="px-4 py-2 text-left text-xs font-medium text-black">Order</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-black">Delivery Address</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-black">Payment</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-black">Production Progress</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-black">Status</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-black">Actions</th>
             </tr>
@@ -579,6 +439,10 @@ export default function OrdersPage() {
               
               const stage = getStage(r);
               // inline payment editing removed; we now use a modal
+
+              const rawPct = (r as any)?.meta?.production_percent;
+              const pctNum = Number(rawPct);
+              const pct = Number.isFinite(pctNum) ? Math.max(0, Math.min(100, pctNum)) : null;
               
               return (
                 <tr key={r.id} className="hover:bg-gray-50">
@@ -640,6 +504,26 @@ export default function OrdersPage() {
                       Edit Payment
                     </button>
                   </td>
+
+                  <td className="px-4 py-3 align-top">
+                    {pct === null ? (
+                      <span className="text-xs text-gray-500">—</span>
+                    ) : (
+                      <div className="min-w-[160px]">
+                        <div className="flex items-center justify-between text-xs text-black mb-1">
+                          <span>{pct}%</span>
+                          <span className="text-[11px] text-gray-600">{pct >= 100 ? "Complete" : "In progress"}</span>
+                        </div>
+                        <div className="h-2 w-full bg-gray-200 rounded">
+                          <div
+                            className="h-2 bg-green-600 rounded"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </td>
+
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${getStatusColor(stage)}`}>
                       {(stage || "").replace(/_/g, " ").toUpperCase()}
@@ -669,6 +553,22 @@ export default function OrdersPage() {
                         })
                       )}
                     </div>
+                    {['approved', 'in_production', 'quality_check', 'packaging'].includes(String(stage || '')) ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Link
+                          href={`/dashboard/task/assigntask?orderId=${encodeURIComponent(r.id)}`}
+                          className="text-xs font-semibold bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                        >
+                          Setup Workflow
+                        </Link>
+                        <Link
+                          href={`/dashboard/task/employeetask?orderId=${encodeURIComponent(r.id)}`}
+                          className="text-xs font-semibold bg-white text-emerald-700 border border-emerald-200 px-2 py-1 rounded hover:bg-emerald-50 transition-colors"
+                        >
+                          Review Stages
+                        </Link>
+                      </div>
+                    ) : null}
                   </td>
                 </tr>
               );

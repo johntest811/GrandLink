@@ -1,8 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { logActivity } from "@/app/lib/activity";
-import { notifyProductCreated, notifyInventoryChange } from "@/app/lib/notifications";
+import { notifyProductCreated } from "@/app/lib/notifications";
 import { adminNotificationService } from "@/utils/notificationHelper";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,7 +13,7 @@ const supabaseAdmin = createClient(
 );
 
 // GET all products
-export async function GET(req: Request) {
+export async function GET() {
   try {
     const { data: products, error } = await supabaseAdmin
       .from("products")
@@ -42,7 +45,7 @@ export async function POST(req: Request) {
       if (authHeader) {
         currentAdmin = JSON.parse(authHeader);
       }
-    } catch (e) {
+    } catch {
       console.log("No admin auth found in header");
     }
 
@@ -73,6 +76,10 @@ export async function POST(req: Request) {
         delete fallbackBody.skyboxes;
         changed = true;
       }
+      if (msg.includes("house_model_url")) {
+        delete fallbackBody.house_model_url;
+        changed = true;
+      }
       if (changed) {
         const retry = await supabaseAdmin
           .from("products")
@@ -91,44 +98,50 @@ export async function POST(req: Request) {
 
     console.log("✅ Product created successfully:", product.id);
 
-    // Log activity for admin dashboard
+    const sideEffects: Promise<unknown>[] = [];
+    let userNotifyResult: any = null;
+
     if (currentAdmin) {
-      await logActivity({
-        admin_id: currentAdmin.id,
-        admin_name: currentAdmin.username,
-        action: "create",
-        entity_type: "products",
-        entity_id: product.id,
-        details: `Created new product: ${product.name}`,
-        metadata: {
-          product_name: product.name,
-          price: product.price,
-          inventory: product.inventory
-        }
-      });
+      sideEffects.push(
+        logActivity({
+          admin_id: currentAdmin.id,
+          admin_name: currentAdmin.username,
+          action: "create",
+          entity_type: "products",
+          entity_id: product.id,
+          details: `Created new product: ${product.name}`,
+          metadata: {
+            product_name: product.name,
+            price: product.price,
+            inventory: product.inventory,
+          },
+        })
+      );
 
-      // Create admin notification about product creation
-      await notifyProductCreated(
-        product.name, 
-        currentAdmin.username, 
-        product.type || 'General'
+      sideEffects.push(
+        notifyProductCreated(
+          product.name,
+          currentAdmin.username,
+          product.type || "General"
+        )
       );
     }
 
-    // Send notification to users about new product
-    try {
-      await adminNotificationService.notifyNewProduct(
-        product.name,
-        product.id,
-        currentAdmin?.username || 'Admin'
-      );
-      console.log("🔔 User notifications sent for new product");
-    } catch (notificationError) {
-      console.error("❌ Failed to send user notifications:", notificationError);
-      // Don't fail the request if user notification fails
-    }
+    sideEffects.push(
+      adminNotificationService
+        .notifyNewProduct(product.name, product.id, currentAdmin?.username || "Admin", req.url)
+        .then((result) => {
+          userNotifyResult = result;
+        })
+        .catch((error) => {
+          console.error("❌ Failed to send user notifications:", error);
+          userNotifyResult = { success: false, error: error?.message || String(error) };
+        })
+    );
 
-    return NextResponse.json({ product }, { status: 201 });
+    await Promise.allSettled(sideEffects);
+
+    return NextResponse.json({ product, userNotifyResult }, { status: 201 });
   } catch (err: any) {
     console.error("POST /api/products error", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

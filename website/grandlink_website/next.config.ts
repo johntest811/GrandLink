@@ -6,10 +6,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const nextConfig: NextConfig = {
-  // Windows can sometimes throw EPERM on `.next/trace` when file tracing
-  // collides with locked files or multiple lockfiles.
-  outputFileTracing: false,
-  outputFileTracingRoot: __dirname,
   images: {
     domains: [
       "gijnybivawnsilzqegik.supabase.co",

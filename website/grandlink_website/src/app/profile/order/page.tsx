@@ -1,9 +1,12 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
+import { ensureProductionWorkflow, PRODUCTION_STAGES } from "@/app/lib/productionWorkflow";
+import { formatAddressLineFromRecord } from "@/utils/addressFields";
+import InvoicePreviewModal from "@/components/InvoicePreviewModal";
+import { getMetaFulfillmentMethod, PICKUP_ADDRESS } from "@/utils/fulfillment";
 
 type UserItem = {
   id: string;
@@ -12,7 +15,7 @@ type UserItem = {
   item_type: string;
   status: string;
   order_status: string;
-  order_progress: string;
+  order_progress?: string;
   quantity: number;
   meta: any;
   created_at: string;
@@ -47,10 +50,16 @@ type PaymentSession = {
 };
 
 type Address = {
-  id: string;
-  full_name: string;
-  address: string;
-  phone?: string;
+  id?: string;
+  full_name?: string | null;
+  address?: string | null;
+  full_address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  province?: string | null;
+  city?: string | null;
+  postal_code?: string | null;
+  label?: string | null;
   is_default?: boolean;
 };
 
@@ -81,7 +90,12 @@ export default function ProfileOrderPage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<{ item: UserItem; product: Product } | null>(null);
   const [receiptSessions, setReceiptSessions] = useState<PaymentSession[]>([]);
+  const [receiptAddress, setReceiptAddress] = useState<Address | null>(null);
   const [progressModal, setProgressModal] = useState<{ item: UserItem; product?: Product } | null>(null);
+  const [invoicePreviewId, setInvoicePreviewId] = useState<string | null>(null);
+
+  const [imagePreview, setImagePreview] = useState<{ urls: string[]; index: number; title?: string } | null>(null);
+  const [imagePreviewZoom, setImagePreviewZoom] = useState(1);
 
   const [changeModal, setChangeModal] = useState<{ item: UserItem; product?: Product } | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -89,6 +103,35 @@ export default function ProfileOrderPage() {
   const [changeAddressId, setChangeAddressId] = useState<string>("");
   const [changeBranch, setChangeBranch] = useState<string>("");
   const [changing, setChanging] = useState(false);
+
+  useEffect(() => {
+    if (!imagePreview) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setImagePreview(null);
+      if (e.key === "ArrowLeft") setImagePreview((p) => (p ? { ...p, index: Math.max(0, p.index - 1) } : p));
+      if (e.key === "ArrowRight")
+        setImagePreview((p) => (p ? { ...p, index: Math.min(p.urls.length - 1, p.index + 1) } : p));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [imagePreview]);
+
+  // Deep-link: /profile/order?openProgress=<user_item_id>
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const target = new URLSearchParams(window.location.search).get("openProgress") || "";
+    if (!target) return;
+    if (loading) return;
+    if (progressModal) return;
+
+    const item = items.find((it) => it.id === target);
+    if (!item) return;
+
+    const product = productsById[item.product_id];
+    setProgressModal({ item, product });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, items, productsById, progressModal]);
 
   // Load orders + related products
   const load = async (uid: string) => {
@@ -196,6 +239,11 @@ export default function ProfileOrderPage() {
   const stageLabel = (k: string) =>
     ({
       approved: "Approved",
+      material_preparation: "Material Preparation Stage",
+      frame_fabrication_welding: "Frame Fabrication & Welding",
+      glass_installation: "Glass Installation",
+      sealant_application: "Sealant Application",
+      quality_checking: "Quality Checking",
       in_production: "In Production",
       quality_check: "Quality Check",
       packaging: "Packaging",
@@ -205,18 +253,37 @@ export default function ProfileOrderPage() {
       completed: "Delivered",
     }[k] || k.replace(/_/g, " "));
 
-  const steps = ["approved", "in_production", "quality_check", "packaging", "ready_for_delivery", "out_for_delivery", "completed"];
+  const timelineSteps = ["approved", "in_production", "quality_check", "packaging", "ready_for_delivery", "out_for_delivery", "completed"];
+
+  const normalizeTimelineStatus = (value: string) => {
+    const normalized = String(value || "approved").trim().toLowerCase();
+    if (!normalized || normalized === "accepted" || normalized === "pending_acceptance") return "approved";
+    if (normalized === "start_packaging") return "packaging";
+    return normalized;
+  };
 
   const reachedIndex = (it: UserItem) => {
-    const cur = it.order_status || it.order_progress || it.status || "approved";
-    const normalize = (s: string) => (s === "start_packaging" ? "packaging" : s);
-    const idx = steps.indexOf(normalize(cur));
-    return idx < 0 ? 0 : idx;
+    const cur = normalizeTimelineStatus(it.order_status || it.order_progress || it.status || "approved");
+    const idx = timelineSteps.indexOf(cur);
+    return idx >= 0 ? idx : 0;
   };
 
   const openReceipt = async (item: UserItem) => {
     const product = productsById[item.product_id];
     setSelectedOrder({ item, product });
+    setReceiptAddress(null);
+
+    if (item.delivery_address_id) {
+      const { data: addrData } = await supabase
+        .from("addresses")
+        .select("id,full_name,address,phone,email,is_default,full_address,province,city,postal_code,label")
+        .eq("id", item.delivery_address_id)
+        .maybeSingle();
+      if (addrData) setReceiptAddress(addrData as Address);
+    } else if (item.meta?.delivery_address) {
+      setReceiptAddress(item.meta.delivery_address as Address);
+    }
+
     // fetch sessions for this item
     const { data, error } = await supabase
       .from("payment_sessions")
@@ -245,7 +312,6 @@ export default function ProfileOrderPage() {
         .update({
           order_status: "pending_cancellation",
           status: "pending_cancellation",
-          order_progress: "pending_cancellation",
           meta: {
             ...(item.meta || {}),
             cancel_requested: true,
@@ -397,7 +463,12 @@ export default function ProfileOrderPage() {
                     <p className="text-sm text-black">Quantity: {item.quantity}</p>
                     <p className="text-lg font-semibold text-black mt-2">Total Paid: ₱{(totalPrice).toLocaleString()}</p>
                     {item.payment_method && (
-                      <p className="text-xs text-black mt-1">via {item.payment_method.toUpperCase()}</p>
+                      <p className="text-xs text-black mt-1">
+                        via {item.payment_method.toUpperCase()}
+                        {item.payment_method === "paymongo" && item.meta?.paymongo_channel
+                          ? ` (${String(item.meta.paymongo_channel).toUpperCase()})`
+                          : ""}
+                      </p>
                     )}
 
                     <div className="mt-3 flex gap-2">
@@ -407,12 +478,13 @@ export default function ProfileOrderPage() {
                       >
                         View Receipt
                       </button>
-                      <Link
-                        href={`/profile/invoice/${item.id}`}
+                      <button
+                        type="button"
+                        onClick={() => setInvoicePreviewId(item.id)}
                         className="px-4 py-2 bg-[#8B1C1C] text-white rounded hover:bg-[#701313] text-sm inline-flex items-center"
                       >
-                        View Invoice
-                      </Link>
+                        Display Invoice
+                      </button>
                       {canChangeOrder(item) && (
                         <button
                           onClick={() => openChange(item)}
@@ -427,7 +499,8 @@ export default function ProfileOrderPage() {
                       >
                         View Progress
                       </button>
-                      {item.order_progress !== "delivered" && (
+                      {String(item.order_status || item.status || item.order_progress || "") !== "completed" &&
+                        String(item.order_status || item.status || item.order_progress || "") !== "cancelled" && (
                         <button
                           onClick={() => requestCancellation(item)}
                           className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
@@ -558,7 +631,7 @@ export default function ProfileOrderPage() {
       {/* Progress Modal - NEW vertical aligned stepper */}
       {progressModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
             <div className="flex items-center justify-between border-b pb-3 mb-6">
               <h2 className="text-xl font-bold text-black">
                 Order Progress • {progressModal.item.id.slice(0, 8)}…
@@ -573,123 +646,243 @@ export default function ProfileOrderPage() {
                 ? (progressModal.item.meta.production_updates as any[])
                 : [];
               const finalQc = progressModal.item?.meta?.final_qc;
+              const workflow = ensureProductionWorkflow(progressModal.item?.meta?.production_workflow);
+              const status = String(
+                progressModal.item?.order_status || progressModal.item?.order_progress || progressModal.item?.status || ""
+              );
+              const estimatedCompletionDate =
+                workflow.estimated_completion_date || progressModal.item?.meta?.production_estimated_completion_date || null;
+              const finalProductImages =
+                workflow.final_product_images.length > 0
+                  ? workflow.final_product_images
+                  : Array.isArray(progressModal.item?.meta?.production_final_images)
+                    ? (progressModal.item.meta.production_final_images as string[])
+                    : [];
+              const finalProductNote =
+                workflow.final_product_note || progressModal.item?.meta?.production_final_note || null;
+              const normalizedUpdates = updates
+                .slice()
+                .sort((a, b) => String(b.approved_at || "").localeCompare(String(a.approved_at || "")));
+              const qcFromUpdates = normalizedUpdates.find((u) => !!u?.is_final_qc);
+              const qcPayload = finalQc && typeof finalQc === "object" ? finalQc : qcFromUpdates;
+              const timelineDoneIdx = reachedIndex(progressModal.item);
+              const productionStartedAt = workflow.started_at
+                ? new Date(workflow.started_at)
+                : findTime(progressModal.item, ["in_production"]);
+
+              const openPreview = (urls: string[], index: number, title?: string) => {
+                if (!urls.length) return;
+                setImagePreviewZoom(1);
+                setImagePreview({ urls, index, title });
+              };
 
               return (
                 <>
-                  {/* Production progress bar */}
-                  <div className="mb-6">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-black">Production Progress</div>
+                  {progressModal.product && (
+                    <div className="mb-6 flex items-center gap-3 rounded border p-3">
+                      <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded border bg-white">
+                        {(() => {
+                          const p = progressModal.product;
+                          const img = (Array.isArray(p.images) && p.images[0]) || p.image1 || p.image2 || "";
+                          return img ? (
+                            <img src={img} alt={p.name || "Product"} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="text-xs text-black/60">No image</div>
+                          );
+                        })()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-black">{progressModal.product.name || "Product"}</div>
+                        <div className="text-xs text-black/70">Status: {stageLabel(status || "approved")}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mb-6 rounded-xl border border-black/10 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-black">Production Progress</div>
+                        <div className="mt-1 text-xs text-black/70">Approved stage evidence is reflected here.</div>
+                      </div>
                       <div className="text-sm font-semibold text-black">{pct}%</div>
                     </div>
-                    <div className="mt-2 h-3 w-full rounded bg-gray-200 overflow-hidden">
+                    <div className="mt-3 h-3 w-full overflow-hidden rounded bg-gray-200">
                       <div className="h-3 bg-[#8B1C1C]" style={{ width: `${pct}%` }} />
                     </div>
-                    <div className="mt-1 text-xs text-black/70">Only team-leader approved updates appear here.</div>
+                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-black/70">
+                      <span>Estimated completion: {estimatedCompletionDate ? new Date(estimatedCompletionDate).toLocaleString() : "Not set"}</span>
+                      <span>Team members: {workflow.team_members.length}</span>
+                    </div>
                   </div>
 
-                  {/* Approved updates */}
-                  <div className="mb-8">
-                    <div className="text-sm font-semibold text-black mb-2">Production Updates</div>
-                    {updates.length === 0 ? (
-                      <div className="text-sm text-black/70">No approved updates yet.</div>
-                    ) : (
-                      <div className="space-y-3">
-                        {updates
-                          .slice()
-                          .sort((a, b) => String(b.approved_at || "").localeCompare(String(a.approved_at || "")))
-                          .map((u) => {
-                            const imgs = Array.isArray(u.image_urls) ? u.image_urls : [];
-                            return (
-                              <div key={u.task_update_id || u.approved_at || Math.random()} className="border rounded-lg p-3">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="text-xs text-black/70">
-                                    {u.is_final_qc ? "FINAL QC" : "UPDATE"}
-                                    {u.submitted_by_name ? ` • by ${u.submitted_by_name}` : ""}
-                                  </div>
-                                  <div className="text-xs text-black/60">
-                                    {u.approved_at ? new Date(u.approved_at).toLocaleString() : ""}
-                                  </div>
-                                </div>
-                                {u.description && (
-                                  <div className="mt-2 text-sm text-black whitespace-pre-wrap">{u.description}</div>
-                                )}
-                                {imgs.length > 0 && (
-                                  <div className="mt-2 grid grid-cols-3 gap-2">
-                                    {imgs.map((url: string, idx: number) => (
-                                      <img key={idx} src={url} alt="" className="h-24 w-full object-cover rounded border" />
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
+                  {finalProductImages.length > 0 ? (
+                    <div className="mb-8 rounded-xl border border-black/10 p-4">
+                      <div className="text-sm font-semibold text-black">Final Product Preview</div>
+                      {finalProductNote ? <div className="mt-2 text-sm text-black whitespace-pre-wrap">{finalProductNote}</div> : null}
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {finalProductImages.map((url, idx) => (
+                          <button key={url + idx} type="button" onClick={() => openPreview(finalProductImages, idx, "Final Product")}> 
+                            <img src={url} alt="Final product" className="h-24 w-full rounded border object-cover" />
+                          </button>
+                        ))}
                       </div>
-                    )}
-                  </div>
-
-                  {/* Final QC snapshot (optional) */}
-                  {finalQc && (finalQc.description || (Array.isArray(finalQc.image_urls) && finalQc.image_urls.length)) ? (
-                    <div className="mb-8">
-                      <div className="text-sm font-semibold text-black mb-2">Quality Check</div>
-                      {finalQc.description && (
-                        <div className="text-sm text-black whitespace-pre-wrap">{finalQc.description}</div>
-                      )}
-                      {Array.isArray(finalQc.image_urls) && finalQc.image_urls.length > 0 && (
-                        <div className="mt-2 grid grid-cols-3 gap-2">
-                          {finalQc.image_urls.map((url: string, idx: number) => (
-                            <img key={idx} src={url} alt="" className="h-24 w-full object-cover rounded border" />
-                          ))}
-                        </div>
-                      )}
                     </div>
                   ) : null}
-                </>
-              );
-            })()}
 
-            {(() => {
-              const doneIdx = reachedIndex(progressModal.item);
-              return (
-                <div className="pl-8">
-                  <div className="relative space-y-6">
-                    {/* Vertical guide line */}
-                    <div className="absolute left-3 top-0 bottom-0 w-px bg-gray-200" />
-                    {steps.map((s, i) => {
-                      const done = i <= doneIdx;
-                      const dt =
-                        findTime(progressModal.item, [s]) ||
-                        (s === "packaging" ? findTime(progressModal.item, ["start_packaging"]) : undefined);
+                  <div className="pl-8">
+                    <div className="relative space-y-6">
+                      <div className="absolute bottom-0 left-3 top-0 w-px bg-gray-200" />
+                      {timelineSteps.map((step, index, all) => {
+                        const done = step === "approved" ? true : timelineDoneIdx >= index;
+                        const dt =
+                          step === "approved"
+                            ? findTime(progressModal.item, ["approved"]) || findTime(progressModal.item, ["accepted"])
+                            : step === "in_production"
+                              ? productionStartedAt || undefined
+                            : findTime(progressModal.item, [step]) ||
+                              (step === "packaging" ? findTime(progressModal.item, ["start_packaging"]) : undefined);
 
-                      return (
-                        <div key={s} className="relative">
-                          {/* Connector to next node */}
-                          {i < steps.length - 1 && (
-                            <div
-                              className={`absolute left-3 top-7 h-10 w-px ${i < doneIdx ? "bg-[#8B1C1C]" : "bg-gray-200"}`}
-                            />
-                          )}
+                        return (
+                          <div key={step} className="relative">
+                            {index < all.length - 1 ? (
+                              <div className={`absolute left-3 top-7 h-10 w-px ${done ? "bg-[#8B1C1C]" : "bg-gray-200"}`} />
+                            ) : null}
+                            <div className="flex items-start gap-3">
+                              <div
+                                className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-semibold ${
+                                  done
+                                    ? "border-[#8B1C1C] bg-[#8B1C1C] text-white"
+                                    : "border-gray-300 bg-white text-gray-600"
+                                }`}
+                              >
+                                {done ? "✓" : index + 1}
+                              </div>
+                              <div className="flex-1">
+                                <div className="font-semibold text-black">{stageLabel(step)}</div>
+                                <div className="text-sm text-black/80">{dt ? dt.toLocaleString() : "Pending"}</div>
 
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={`mt-0.5 w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold border-2 ${
-                                done
-                                  ? "bg-[#8B1C1C] text-white border-[#8B1C1C]"
-                                  : "bg-white text-gray-600 border-gray-300"
-                              }`}
-                            >
-                              {done ? "✓" : i + 1}
-                            </div>
-                            <div className="flex-1">
-                              <div className="font-semibold text-black">{stageLabel(s)}</div>
-                              <div className="text-sm text-black/80">{dt ? dt.toLocaleString() : "Pending"}</div>
+                                {step === "in_production" ? (
+                                  <div className="mt-4 rounded-xl border border-black/10 bg-gray-50 p-4">
+                                    <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-black/60">
+                                      In Production
+                                    </div>
+                                    <div className="mb-3 text-xs text-black/60">
+                                      Stages of how the product is constructed.
+                                    </div>
+                                    <div className="relative space-y-4">
+                                      <div className="absolute bottom-0 left-3 top-0 w-px bg-gray-200" />
+                                      {PRODUCTION_STAGES.map((stage, stageIndex, stageList) => {
+                                        const stagePlan = workflow.stage_plans.find((entry) => entry.key === stage.key);
+                                        const stageUpdates = normalizedUpdates.filter((update) => {
+                                          const updateStageKey = String(update?.stage_key || "");
+                                          if (updateStageKey) return updateStageKey === stage.key;
+                                          return stageIndex === 0 && !update?.is_final_qc;
+                                        });
+                                        const stageDone = stagePlan?.status === "approved";
+                                        const stageInProgress = stagePlan?.status === "in_progress";
+
+                                        return (
+                                          <div key={stage.key} className="relative">
+                                            {stageIndex < stageList.length - 1 ? (
+                                              <div
+                                                className={`absolute left-3 top-7 h-full w-px ${
+                                                  stageDone ? "bg-[#8B1C1C]" : stageInProgress ? "bg-amber-300" : "bg-gray-200"
+                                                }`}
+                                              />
+                                            ) : null}
+                                            <div className="flex items-start gap-3">
+                                              <div
+                                                className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-semibold ${
+                                                  stageDone
+                                                    ? "border-[#8B1C1C] bg-[#8B1C1C] text-white"
+                                                    : stageInProgress
+                                                      ? "border-amber-300 bg-amber-100 text-amber-800"
+                                                      : "border-gray-300 bg-white text-gray-600"
+                                                }`}
+                                              >
+                                                {stageDone ? "✓" : stageIndex + 1}
+                                              </div>
+                                              <div className="flex-1 pb-2">
+                                                <div className="font-semibold text-black">{stage.label}</div>
+                                                <div className="text-sm text-black/70">
+                                                  {stageDone
+                                                    ? `Completed${stagePlan?.approved_at ? ` • ${new Date(stagePlan.approved_at).toLocaleString()}` : ""}`
+                                                    : stageInProgress
+                                                      ? "In Progress"
+                                                      : "Pending"}
+                                                </div>
+
+                                                <div className="mt-3 space-y-3">
+                                                  {stageUpdates.length === 0 ? (
+                                                    <div className="text-sm text-black/60">No approved evidence yet.</div>
+                                                  ) : (
+                                                    stageUpdates.slice(0, 2).map((update, updateIndex) => {
+                                                      const imgs = Array.isArray(update.image_urls) ? update.image_urls : [];
+                                                      return (
+                                                        <div
+                                                          key={String(update.task_update_id || update.id || updateIndex)}
+                                                          className="rounded-lg border border-black/10 bg-white p-3"
+                                                        >
+                                                          <div className="flex items-center justify-between gap-3 text-xs text-black/60">
+                                                            <span>{update.submitted_by_name || update.employee_name || "Production team"}</span>
+                                                            <span>{update.approved_at ? new Date(update.approved_at).toLocaleString() : ""}</span>
+                                                          </div>
+                                                          {update.description ? (
+                                                            <div className="mt-2 whitespace-pre-wrap text-sm text-black">{update.description}</div>
+                                                          ) : null}
+                                                          {imgs.length > 0 ? (
+                                                            <div className="mt-3 grid grid-cols-3 gap-2">
+                                                              {imgs.map((url: string, imgIndex: number) => (
+                                                                <button
+                                                                  key={url + imgIndex}
+                                                                  type="button"
+                                                                  onClick={() => openPreview(imgs, imgIndex, stage.label)}
+                                                                >
+                                                                  <img
+                                                                    src={url}
+                                                                    alt="Stage evidence"
+                                                                    className="h-20 w-full rounded border object-cover"
+                                                                  />
+                                                                </button>
+                                                              ))}
+                                                            </div>
+                                                          ) : null}
+                                                        </div>
+                                                      );
+                                                    })
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {step === "quality_check" && qcPayload && (qcPayload.description || (Array.isArray(qcPayload.image_urls) && qcPayload.image_urls.length > 0)) ? (
+                                  <div className="mt-3 rounded-lg border p-3">
+                                    {qcPayload.description ? <div className="text-sm text-black whitespace-pre-wrap">{qcPayload.description}</div> : null}
+                                    {Array.isArray(qcPayload.image_urls) && qcPayload.image_urls.length > 0 ? (
+                                      <div className="mt-3 grid grid-cols-3 gap-2">
+                                        {qcPayload.image_urls.map((url: string, idx: number) => (
+                                          <button key={url + idx} type="button" onClick={() => openPreview(qcPayload.image_urls, idx, "Quality Check")}> 
+                                            <img src={url} alt="Quality check" className="h-20 w-full rounded border object-cover" />
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                </>
               );
             })()}
 
@@ -701,103 +894,291 @@ export default function ProfileOrderPage() {
           </div>
         </div>
       )}
-      {/* Receipt Modal (unchanged structure) */}
-      {selectedOrder && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-xl p-6">
-            <div className="text-center border-b pb-4 mb-4">
-              <h2 className="text-2xl font-extrabold tracking-widest text-black">GRAND LINK</h2>
-              <p className="text-sm text-black">Official Receipt</p>
+
+      <InvoicePreviewModal
+        userItemId={invoicePreviewId}
+        onClose={() => setInvoicePreviewId(null)}
+      />
+
+      {/* Image preview overlay (used from Order Progress) */}
+      {imagePreview && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/70 p-4 flex items-center justify-center"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setImagePreview(null);
+          }}
+        >
+          <div className="w-full max-w-4xl bg-white rounded-lg shadow-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div className="text-sm font-semibold text-black truncate">
+                {imagePreview.title || "Image"} ({imagePreview.index + 1}/{imagePreview.urls.length})
+              </div>
+              <button
+                type="button"
+                className="text-black text-xl"
+                onClick={() => setImagePreview(null)}
+                aria-label="Close image preview"
+              >
+                ×
+              </button>
             </div>
 
-            <div className="space-y-4 text-sm text-black">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-black">Order ID</div>
-                  <div className="font-mono text-xs">{selectedOrder.item.id}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-black">Date</div>
-                  <div>{new Date(selectedOrder.item.created_at).toLocaleString()}</div>
-                </div>
-                <div>
-                  <div className="text-black">Product</div>
-                  <div className="font-medium">{selectedOrder.product.name}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-black">Unit Price</div>
-                  <div>{currency(selectedOrder.product.price || 0)}</div>
-                </div>
-              </div>
-
-              <div className="border-t border-black pt-3">
-                <div className="flex justify-between">
-                  <span>Quantity</span>
-                  <span>{selectedOrder.item.quantity}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Subtotal</span>
-                  <span>{currency((selectedOrder.product.price || 0) * selectedOrder.item.quantity)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Reservation Fee</span>
-                  <span>- {currency(500)}</span>
-                </div>
-                <div className="flex justify-between font-semibold text-lg border-t border-black pt-2">
-                  <span>Balance Due</span>
-                  <span className="text-black">
-                    {currency((selectedOrder.product.price || 0) * selectedOrder.item.quantity - 500)}
-                  </span>
-                </div>
-              </div>
-
-              {/* NEW: Payment / ship / completed details */}
-              <div className="border-t border-black pt-3 space-y-1">
-                {(() => {
-                  const paid = receiptSessions.find((s) => s.status === "completed") || receiptSessions[0];
-                  const payMethod = paid?.payment_provider ? paid.payment_provider.toUpperCase() : "N/A";
-                  const payTime = paid?.completed_at || paid?.created_at;
-                  const shipTime =
-                    findTime(selectedOrder.item, ["out_for_delivery"])?.toISOString() ||
-                    findTime(selectedOrder.item, ["ready_for_delivery"])?.toISOString();
-                const doneTime =
-                    findTime(selectedOrder.item, ["completed"])?.toISOString() ||
-                    selectedOrder.item.updated_at;
-
-                  return (
-                    <>
-                      <div className="flex justify-between">
-                        <span>Payment Method</span>
-                        <span className="font-medium">{payMethod}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Payment Time</span>
-                        <span>{payTime ? new Date(payTime).toLocaleString() : "N/A"}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Ship Time</span>
-                        <span>{shipTime ? new Date(shipTime).toLocaleString() : "Pending"}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Completed Time</span>
-                        <span>{doneTime ? new Date(doneTime).toLocaleString() : "Pending"}</span>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
+            <div className="bg-black flex items-center justify-center" style={{ height: "70vh" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imagePreview.urls[imagePreview.index]}
+                alt=""
+                className="max-h-full max-w-full"
+                style={{ transform: `scale(${imagePreviewZoom})`, transformOrigin: "center" }}
+              />
             </div>
 
-            <div className="pt-3 flex gap-2">
-              <button onClick={() => window.print()} className="flex-1 py-2 bg-black text-white rounded hover:opacity-90">
-                Print
-              </button>
-              <button onClick={() => setSelectedOrder(null)} className="flex-1 py-2 bg-black text-white rounded hover:opacity-90">
-                Close
-              </button>
+            <div className="px-4 py-3 border-t flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-1 rounded border text-sm"
+                  onClick={() => setImagePreview((p) => (p ? { ...p, index: Math.max(0, p.index - 1) } : p))}
+                  disabled={imagePreview.index <= 0}
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1 rounded border text-sm"
+                  onClick={() =>
+                    setImagePreview((p) => (p ? { ...p, index: Math.min(p.urls.length - 1, p.index + 1) } : p))
+                  }
+                  disabled={imagePreview.index >= imagePreview.urls.length - 1}
+                >
+                  Next
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-1 rounded border text-sm"
+                  onClick={() => setImagePreviewZoom((z) => Math.max(1, Math.round((z - 0.25) * 100) / 100))}
+                  disabled={imagePreviewZoom <= 1}
+                >
+                  Zoom −
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1 rounded border text-sm"
+                  onClick={() => setImagePreviewZoom(1)}
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1 rounded border text-sm"
+                  onClick={() => setImagePreviewZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}
+                >
+                  Zoom +
+                </button>
+              </div>
+
+              <a
+                className="px-3 py-1 rounded bg-black text-white text-sm"
+                href={imagePreview.urls[imagePreview.index]}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open in new tab
+              </a>
             </div>
           </div>
         </div>
+      )}
+      {selectedOrder && (
+        <>
+          <style jsx global>{`
+            @media print {
+              @page {
+                size: A4;
+                margin: 15mm;
+              }
+
+              body * {
+                visibility: hidden;
+              }
+
+              #order-receipt-print-area,
+              #order-receipt-print-area * {
+                visibility: visible;
+              }
+
+              #order-receipt-print-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                page-break-after: avoid;
+                page-break-inside: avoid;
+              }
+
+              .no-print {
+                display: none !important;
+              }
+            }
+          `}</style>
+
+          <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+            <div className="bg-white bg-opacity-95 backdrop-blur-sm rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-gray-200">
+              <div className="no-print flex justify-between items-center p-4 border-b bg-white bg-opacity-80">
+                <h2 className="text-lg font-semibold text-gray-800">Order Receipt</h2>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+                  >
+                    Print
+                  </button>
+                  <button
+                    onClick={() => setSelectedOrder(null)}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                  >
+                    ✕ Close
+                  </button>
+                </div>
+              </div>
+
+              <div
+                id="order-receipt-print-area"
+                className="p-8 bg-white bg-opacity-90"
+                style={{ maxWidth: "210mm", margin: "0 auto" }}
+              >
+                <div className="text-center mb-8 border-b-2 border-gray-300 pb-6">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">GRAND EAST</h1>
+                  <p className="text-sm text-gray-600">Order Receipt</p>
+                  <p className="text-xs text-gray-500 mt-1">Thank you for ordering with us</p>
+                </div>
+
+                <div className="mb-6">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-gray-500 font-medium mb-1">Order ID</p>
+                      <p className="text-gray-900 font-mono text-xs break-all">{selectedOrder.item.id}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500 font-medium mb-1">Status</p>
+                      <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold bg-gray-900 text-white">
+                        {stageLabel(String(selectedOrder.item.order_status || selectedOrder.item.order_progress || selectedOrder.item.status || "pending"))}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-gray-500 font-medium mb-1">Date Created</p>
+                      <p className="text-gray-900">
+                        {new Date(selectedOrder.item.created_at).toLocaleDateString("en-US", {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500 font-medium mb-1">Quantity</p>
+                      <p className="text-gray-900 font-semibold">{selectedOrder.item.quantity} unit(s)</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mb-6 border-t border-b border-gray-200 py-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Product Details</h3>
+                  <div className="flex items-start gap-4">
+                    <div className="w-20 h-20 bg-gray-100 rounded flex-shrink-0 overflow-hidden">
+                      <Image
+                        src={selectedOrder.product.images?.[0] || selectedOrder.product.image1 || "/no-image.png"}
+                        alt={selectedOrder.product.name || "Product"}
+                        width={80}
+                        height={80}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-gray-900 text-lg">{selectedOrder.product.name}</p>
+                      {(selectedOrder.item.meta?.selected_branch || selectedOrder.item.meta?.branch) ? (
+                        <p className="text-sm text-gray-600 mt-1">
+                          <span className="font-medium">Branch:</span> {selectedOrder.item.meta?.selected_branch || selectedOrder.item.meta?.branch}
+                        </p>
+                      ) : null}
+                      {getMetaFulfillmentMethod(selectedOrder.item.meta) === "pickup" ? (
+                        <p className="text-sm text-gray-600 mt-1">
+                          <span className="font-medium">Pickup Address:</span> {String(selectedOrder.item.meta?.pickup_address || PICKUP_ADDRESS)}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">Payment Summary</h3>
+                  <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Unit Price</span>
+                      <span className="text-gray-900 font-medium">{currency(Number(selectedOrder.item.meta?.product_price ?? selectedOrder.product.price ?? 0))}</span>
+                    </div>
+                    {selectedOrder.item.meta?.reservation_fee ? (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Delivery Fee</span>
+                        <span className="text-gray-900 font-medium">{currency(Number(selectedOrder.item.meta.reservation_fee))}</span>
+                      </div>
+                    ) : null}
+                    {selectedOrder.item.meta?.discount_value ? (
+                      <div className="flex justify-between text-sm text-green-600">
+                        <span>Discount</span>
+                        <span className="font-medium">-{currency(Number(selectedOrder.item.meta.discount_value))}</span>
+                      </div>
+                    ) : null}
+                    <div className="border-t border-gray-300 pt-2 mt-2">
+                      <div className="flex justify-between">
+                        <span className="text-gray-900 font-bold text-lg">Total Amount</span>
+                        <span className="text-gray-900 font-bold text-xl">
+                          {currency(Number(selectedOrder.item.total_amount ?? selectedOrder.item.total_paid ?? ((selectedOrder.product.price || 0) * selectedOrder.item.quantity)))}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {(() => {
+                  const addr = receiptAddress || (selectedOrder.item.meta?.delivery_address as Address | undefined);
+                  if (!addr) return null;
+                  return (
+                    <div className="mb-6">
+                      <h3 className="text-lg font-semibold text-gray-900 mb-3">Delivery Information</h3>
+                      <div className="bg-gray-50 rounded-lg p-4 text-sm">
+                        {addr.full_name ? <p className="text-gray-900 font-medium">{addr.full_name}</p> : null}
+                        <p className="text-gray-600 mt-1">{formatAddressLineFromRecord(addr)}</p>
+                        {addr.phone ? <p className="text-gray-600">{addr.phone}</p> : null}
+                        {addr.email ? <p className="text-gray-600">{addr.email}</p> : null}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="mt-8 pt-6 border-t border-gray-200 text-center">
+                  <p className="text-xs text-gray-500 mb-2">
+                    This is an official receipt from Grand East. For inquiries, please contact our customer service.
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    Generated on {new Date().toLocaleDateString("en-US", {
+                      year: "numeric",
+                      month: "long",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </section>
   );

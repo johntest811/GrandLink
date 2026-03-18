@@ -7,14 +7,56 @@ import { Ionicons, MaterialIcons, FontAwesome5, Entypo, Feather } from '@expo/ve
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<User | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
   const router = useRouter();
 
   useEffect(() => {
+    let isMounted = true;
+
+    const loadUnreadCount = async (userId: string) => {
+      const { count, error } = await supabase
+        .from('user_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('is_read', false);
+
+      if (!error && isMounted) {
+        setUnreadCount(count || 0);
+      }
+    };
+
     const fetchUser = async () => {
       const { data } = await supabase.auth.getUser();
+      if (!isMounted) return;
       setUser(data.user);
+
+      if (data.user?.id) {
+        await loadUnreadCount(data.user.id);
+      } else {
+        setUnreadCount(0);
+      }
     };
+
     fetchUser();
+
+    const channel = supabase
+      .channel('mobile-profile-notifications')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'user_notifications' },
+        async () => {
+          const { data } = await supabase.auth.getUser();
+          if (data.user?.id) {
+            await loadUnreadCount(data.user.id);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleLogout = async () => {
@@ -72,9 +114,14 @@ export default function ProfileScreen() {
             <FontAwesome5 name="address-book" size={22} color="#a81d1d" />
             <Text style={[styles.menuText, { color: '#a81d1d', fontWeight: 'bold' }]}>My Address</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={() => router.push('/notifications')}>
             <Ionicons name="notifications" size={22} color="#2c3848" />
             <Text style={[styles.menuText, { color: '#2c3848', fontWeight: 'bold' }]}>Notification Settings</Text>
+            {unreadCount > 0 ? (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+              </View>
+            ) : null}
           </TouchableOpacity>
           <TouchableOpacity style={styles.menuItem}>
             <Ionicons name="settings" size={22} color="#222" />
@@ -204,6 +251,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginLeft: 16,
     color: '#222',
+  },
+  notificationBadge: {
+    marginLeft: 'auto',
+    minWidth: 28,
+    height: 28,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    backgroundColor: '#a81d1d',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notificationBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   logoutButton: {
     backgroundColor: '#a81d1d',

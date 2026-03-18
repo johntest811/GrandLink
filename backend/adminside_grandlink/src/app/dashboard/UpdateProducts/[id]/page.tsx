@@ -1,17 +1,46 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/app/Clients/Supabase/SupabaseClients";
 import { logActivity } from "@/app/lib/activity";
 import { notifyProductUpdated, notifyProductFileUploaded } from "@/app/lib/notifications";
-import * as THREE from "three";
-import { FBXLoader, GLTFLoader, OrbitControls } from "three-stdlib";
+import {
+  createEmptyGlobalSkyboxDefaults,
+  mergeEffectiveSkyboxes,
+  WEATHER_KEYS,
+  type GlobalSkyboxDefaults,
+  type SkyboxKey,
+  type WeatherKey,
+} from "@/app/lib/skyboxDefaults";
+import ThreeDModelViewer from "@/components/ThreeDModelViewer";
+import RichTextEditor from "@/components/RichTextEditor";
+import ToastPopup, { type ToastPopupState } from "@/components/ToastPopup";
+import {
+  buildAdditionalFeaturesHtml,
+  createFeatureOptionsByCategory,
+  getCategoryFeatureOptions,
+  mergeFeatureOptions,
+  parseFeatureItems,
+  PRODUCT_CATEGORY_OPTIONS,
+  PRODUCT_FORM_TABS,
+  type ProductFormTabKey,
+  stripRichText,
+} from "../../products/productFormConfig";
 
 const ALLOWED_3D_EXTENSIONS = ["fbx", "glb", "gltf"] as const;
+const IMAGE_MAX_FILE_SIZE_BYTES = 6 * 1024 * 1024;
+const MODEL_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+type FrameFinish = "default" | "matteBlack" | "matteGray" | "narra" | "walnut";
 
-type WeatherKey = "sunny" | "rainy" | "night" | "foggy";
-const WEATHER_KEYS: WeatherKey[] = ["sunny", "rainy", "night", "foggy"];
+function materialToFrameFinish(material?: string | null): FrameFinish {
+  const key = String(material || "").toLowerCase();
+  if (key.includes("walnut")) return "walnut";
+  if (key.includes("narra") || key.includes("wood")) return "narra";
+  if (key.includes("aluminum") || key.includes("steel") || key.includes("metal")) return "matteGray";
+  if (key.includes("black")) return "matteBlack";
+  return "default";
+}
 
 function getFileExtension(name: string): string {
   const clean = (name || "").split("?")[0].split("#")[0];
@@ -44,7 +73,8 @@ type Product = {
   thickness?: number;
   fbx_url?: string;
   fbx_urls?: string[];
-  skyboxes?: Partial<Record<WeatherKey, string | null>>;
+  house_model_url?: string | null;
+  skyboxes?: Partial<Record<SkyboxKey, string | null>>;
   fullproductname?: string;
   additionalfeatures?: string;
   inventory?: number;
@@ -59,13 +89,34 @@ export default function EditProductPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [message, setMessage] = useState("");
+  const [toast, setToast] = useState<ToastPopupState>({ open: false, type: "info", title: "", message: "" });
   const [currentAdmin, setCurrentAdmin] = useState<any>(null);
   const [show3DViewer, setShow3DViewer] = useState(false);
   const [currentFbxIndex, setCurrentFbxIndex] = useState(0);
   const [uploadingFbx, setUploadingFbx] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadingSkyboxes, setUploadingSkyboxes] = useState(false);
+  const [savingGlobalSkybox, setSavingGlobalSkybox] = useState<WeatherKey | null>(null);
   const [previewWeather, setPreviewWeather] = useState<WeatherKey>("sunny");
+  const [globalSkyboxDefaults, setGlobalSkyboxDefaults] = useState<GlobalSkyboxDefaults>(() => createEmptyGlobalSkyboxDefaults());
+  const [activeTab, setActiveTab] = useState<ProductFormTabKey>("identity");
+  const [selectedFeatureOptions, setSelectedFeatureOptions] = useState<string[]>([]);
+  const [featureOptionsByCategory, setFeatureOptionsByCategory] = useState<Record<string, string[]>>(() => createFeatureOptionsByCategory());
+  const [newFeatureOption, setNewFeatureOption] = useState("");
+
+  useEffect(() => {
+    if (!message) return;
+    const lower = message.toLowerCase();
+    if (lower.includes("error") || lower.includes("failed")) {
+      setToast({ open: true, type: "error", title: "Error", message });
+      return;
+    }
+    if (lower.includes("success") || lower.includes("saved") || lower.includes("updated")) {
+      setToast({ open: true, type: "success", title: "Saved", message });
+      return;
+    }
+    setToast({ open: true, type: "info", title: "Notice", message });
+  }, [message]);
 
   // Persist images (already exists)
   const persistImages = async (imgs: string[]) => {
@@ -129,7 +180,7 @@ export default function EditProductPage() {
     }
   };
 
-  const persistSkyboxes = async (skyboxes: Partial<Record<WeatherKey, string | null>> | null) => {
+  const persistSkyboxes = async (skyboxes: Partial<Record<SkyboxKey, string | null>> | null) => {
     try {
       const res = await fetch(`/api/products/${productId}`, {
         method: 'PUT',
@@ -170,6 +221,21 @@ export default function EditProductPage() {
       }
     };
     loadAdmin();
+  }, []);
+
+  useEffect(() => {
+    const loadGlobalSkyboxDefaults = async () => {
+      try {
+        const res = await fetch("/api/product-skybox-defaults", { cache: "no-store" });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error || "Failed to load default skyboxes");
+        setGlobalSkyboxDefaults(json?.defaults || createEmptyGlobalSkyboxDefaults());
+      } catch (error) {
+        console.error("Failed to load global skybox defaults", error);
+      }
+    };
+
+    void loadGlobalSkyboxDefaults();
   }, []);
 
   useEffect(() => {
@@ -226,6 +292,18 @@ export default function EditProductPage() {
     if (productId && currentAdmin) fetchProduct();
   }, [productId, currentAdmin]);
 
+  useEffect(() => {
+    if (!originalProduct) return;
+    const existingFeatures = parseFeatureItems(originalProduct.additionalfeatures || "");
+    const nextMap = createFeatureOptionsByCategory();
+    if (originalProduct.category) {
+      nextMap[originalProduct.category] = mergeFeatureOptions(nextMap[originalProduct.category], existingFeatures);
+    }
+    setFeatureOptionsByCategory(nextMap);
+    setSelectedFeatureOptions(existingFeatures);
+    setNewFeatureOption("");
+  }, [originalProduct]);
+
   // Enhanced change handler with logging
   const handleChange = async (field: keyof Product, value: any) => {
     if (!product || !currentAdmin) return;
@@ -259,10 +337,93 @@ export default function EditProductPage() {
     }
   };
 
+  const selectedCategoryFeatures = product?.category
+    ? featureOptionsByCategory[product.category] ?? getCategoryFeatureOptions(product.category)
+    : [];
+
+  const syncAdditionalFeatures = (nextSelected: string[]) => {
+    setSelectedFeatureOptions(nextSelected);
+    const nextHtml = buildAdditionalFeaturesHtml(nextSelected);
+    setProduct((prev) => (prev ? { ...prev, additionalfeatures: nextHtml } : prev));
+  };
+
+  const handleCategorySelection = async (nextCategory: string) => {
+    if (!product) return;
+    await handleChange("category", nextCategory);
+    setNewFeatureOption("");
+    const nextOptions = featureOptionsByCategory[nextCategory] ?? getCategoryFeatureOptions(nextCategory);
+    const filteredSelected = selectedFeatureOptions.filter((item) => nextOptions.includes(item));
+    syncAdditionalFeatures(filteredSelected);
+  };
+
+  const handleFeatureToggle = (feature: string) => {
+    const exists = selectedFeatureOptions.includes(feature);
+    const nextSelected = exists
+      ? selectedFeatureOptions.filter((item) => item !== feature)
+      : [...selectedFeatureOptions, feature];
+    syncAdditionalFeatures(nextSelected);
+  };
+
+  const handleAddFeatureOption = () => {
+    if (!product?.category) return;
+    const nextFeature = newFeatureOption.trim();
+    if (!nextFeature) return;
+
+    const nextOptions = mergeFeatureOptions(selectedCategoryFeatures, [nextFeature]);
+    setFeatureOptionsByCategory((prev) => ({
+      ...prev,
+      [product.category!]: nextOptions,
+    }));
+    setNewFeatureOption("");
+
+    if (!selectedFeatureOptions.includes(nextFeature)) {
+      syncAdditionalFeatures([...selectedFeatureOptions, nextFeature]);
+    }
+  };
+
+  const handleRemoveFeatureOption = (feature: string) => {
+    if (!product?.category) return;
+    setFeatureOptionsByCategory((prev) => ({
+      ...prev,
+      [product.category!]: (prev[product.category!] ?? []).filter((item) => item !== feature),
+    }));
+    syncAdditionalFeatures(selectedFeatureOptions.filter((item) => item !== feature));
+  };
+
+  const getUpdateValidation = (): { tab: ProductFormTabKey; message: string } | null => {
+    if (!product) return { tab: "identity", message: "Product data not loaded. Please try again." };
+    if (!String(product.name || "").trim()) {
+      return { tab: "identity", message: "Product code is required before saving the product." };
+    }
+    if (!String(product.fullproductname || "").trim()) {
+      return { tab: "identity", message: "Product name is required before saving the product." };
+    }
+    if (!stripRichText(product.description || "").trim()) {
+      return { tab: "identity", message: "Product description is required before saving the product." };
+    }
+    if (!String(product.category || "").trim()) {
+      return { tab: "classification", message: "Product category is required before saving the product." };
+    }
+    if (product.price === undefined || product.price === null || Number.isNaN(Number(product.price))) {
+      return { tab: "details", message: "Price (PHP) is required before saving the product." };
+    }
+    if (product.inventory === undefined || product.inventory === null || Number.isNaN(Number(product.inventory))) {
+      return { tab: "details", message: "Inventory is required before saving the product." };
+    }
+    return null;
+  };
+
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!product || !originalProduct || !currentAdmin) {
       setMessage("Product data not loaded. Please try again.");
+      return;
+    }
+
+    const validation = getUpdateValidation();
+    if (validation) {
+      setActiveTab(validation.tab);
+      setMessage(validation.message);
       return;
     }
 
@@ -445,128 +606,6 @@ export default function EditProductPage() {
     }
   };
 
-  const handleFileUpload = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-    field: keyof Product
-  ) => {
-    if (!e.target.files || !product || !currentAdmin) return;
-    const file = e.target.files[0];
-
-    const safeFileName = file.name.replace(/[^a-z0-9.\-_]/gi, "_");
-    const objectPath = `${field}/${product.id}_${safeFileName}`;
-
-    try {
-      const { data, error } = await supabase.storage
-        .from("products")
-        .upload(objectPath, file, { upsert: true });
-
-      if (error) {
-        console.error("upload error", error);
-        setMessage(`Error uploading file: ${error.message}`);
-        
-        // Log upload error
-        await logActivity({
-          admin_id: currentAdmin.id,
-          admin_name: currentAdmin.username,
-          action: "upload",
-          entity_type: "file_error",
-          entity_id: product.id,
-          page: "UpdateProducts",
-          details: `Admin ${currentAdmin.username} failed to upload ${field} for "${product.name}": ${error.message}`,
-          metadata: {
-            productName: product.name,
-            productId: product.id,
-            fieldType: field,
-            fileName: file.name,
-            fileSize: file.size,
-            error: error.message,
-            adminAccount: currentAdmin.username,
-            adminId: currentAdmin.id
-          }
-        });
-        return;
-      }
-
-      const { data: urlData } = await supabase.storage
-        .from("products")
-        .getPublicUrl(data.path);
-
-      const url = urlData.publicUrl;
-      const oldUrl = product[field];
-      
-      await handleChange(field, url);
-      setMessage(`${field} uploaded successfully!`);
-
-      // Log successful file upload
-      await logActivity({
-        admin_id: currentAdmin.id,
-        admin_name: currentAdmin.username,
-        action: "upload",
-        entity_type: "product_file",
-        entity_id: product.id,
-        page: "UpdateProducts",
-        details: `Admin ${currentAdmin.username} uploaded ${field} for product "${product.name}": ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`,
-        metadata: {
-          productName: product.name,
-          productId: product.id,
-          fieldType: field,
-          fileName: file.name,
-          fileSize: file.size,
-          fileSizeMB: (file.size / 1024 / 1024).toFixed(2),
-          fileType: file.type,
-          oldUrl: oldUrl,
-          newUrl: url,
-          adminAccount: currentAdmin.username,
-          adminId: currentAdmin.id,
-          uploadPath: data.path,
-          timestamp: new Date().toISOString()
-        }
-      });
-
-      // CREATE NOTIFICATION FOR FILE UPLOAD
-      try {
-        const fileType = field.toString().includes('image') ? 'image' : field.toString().includes('fbx') ? 'fbx' : 'file';
-        await notifyProductFileUploaded(
-          product.name, 
-          currentAdmin.username, 
-          fileType, 
-          file.name
-        );
-      } catch (notifyError) {
-        console.warn("Failed to create file upload notification:", notifyError);
-      }
-
-      // Clear success message after 3 seconds
-      setTimeout(() => setMessage(""), 3000);
-    } catch (err: any) {
-      console.error("upload threw", err);
-      setMessage("Error uploading file: " + (err?.message || String(err)));
-      
-      // Log upload exception
-      if (currentAdmin) {
-        await logActivity({
-          admin_id: currentAdmin.id,
-          admin_name: currentAdmin.username,
-          action: "upload",
-          entity_type: "file_exception",
-          entity_id: product.id,
-          page: "UpdateProducts",
-          details: `Admin ${currentAdmin.username} encountered exception uploading ${field} for "${product.name}": ${err?.message || String(err)}`,
-          metadata: {
-            productName: product.name,
-            productId: product.id,
-            fieldType: field,
-            fileName: file.name,
-            error: err?.message || String(err),
-            adminAccount: currentAdmin.username,
-            adminId: currentAdmin.id,
-            timestamp: new Date().toISOString()
-          }
-        });
-      }
-    }
-  };
-
   // Images management (unlimited)
   const syncLegacyImages = async (imgs: string[]) => {
     // Keep legacy fields in sync for backward compatibility
@@ -589,12 +628,21 @@ export default function EditProductPage() {
     const files = Array.from(e.target.files || []);
     if (!files.length || !currentAdmin || !product) return;
 
+    const oversizedFiles = files.filter((file) => file.size > IMAGE_MAX_FILE_SIZE_BYTES);
+    const acceptedFiles = files.filter((file) => file.size <= IMAGE_MAX_FILE_SIZE_BYTES);
+
+    if (oversizedFiles.length > 0) {
+      setMessage(`Skipped ${oversizedFiles.length} image(s) above 6MB. Max image size is 6MB per file.`);
+    }
+
+    if (acceptedFiles.length === 0) return;
+
     setUploadingImages(true);
     setMessage("Uploading images...");
 
     try {
       const uploadedUrls: string[] = [];
-      for (const file of files) {
+      for (const file of acceptedFiles) {
         const url = await uploadFile(file, 'images', productId);
         uploadedUrls.push(url);
 
@@ -626,7 +674,7 @@ export default function EditProductPage() {
   // Persist immediately so images don't disappear on re-fetch
   await persistImages(next);
 
-      setMessage(`${files.length} image(s) uploaded successfully!`);
+      setMessage(`${acceptedFiles.length} image(s) uploaded successfully!`);
       setTimeout(() => setMessage(""), 3000);
     } catch (error) {
       console.error('Images upload error:', error);
@@ -666,6 +714,11 @@ export default function EditProductPage() {
 
   const handleReplaceImage = async (idx: number, file: File) => {
     if (!currentAdmin || !product) return;
+    if (file.size > IMAGE_MAX_FILE_SIZE_BYTES) {
+      setMessage(`"${file.name}" exceeds 6MB. Max image size is 6MB per file.`);
+      return;
+    }
+
     setUploadingImages(true);
     setMessage('Replacing image...');
     try {
@@ -705,21 +758,21 @@ export default function EditProductPage() {
     }
   };
 
-  const getCurrentSkyboxes = (): Partial<Record<WeatherKey, string | null>> => {
+  const getCurrentSkyboxes = (): Partial<Record<SkyboxKey, string | null>> => {
     const raw = (product as any)?.skyboxes;
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as any;
     return {};
   };
 
-  const handleUploadSkybox = async (weather: WeatherKey, file: File) => {
+  const handleUploadSkybox = async (skyboxKey: WeatherKey, file: File) => {
     if (!currentAdmin || !product) return;
     setUploadingSkyboxes(true);
-    setMessage(`Uploading ${weather} skybox...`);
+    setMessage(`Uploading ${skyboxKey} skybox...`);
 
     try {
-      const url = await uploadFile(file, `skyboxes/${weather}`, productId);
+      const url = await uploadFile(file, `skyboxes/${skyboxKey}`, productId);
       const current = getCurrentSkyboxes();
-      const next = { ...current, [weather]: url };
+      const next = { ...current, [skyboxKey]: url };
 
       await handleChange('skyboxes', next);
       await persistSkyboxes(next);
@@ -731,9 +784,9 @@ export default function EditProductPage() {
         entity_type: 'product_skybox',
         entity_id: product.id,
         page: 'UpdateProducts',
-        details: `Uploaded ${weather} skybox for "${product.name}": ${file.name}`,
+        details: `Uploaded ${skyboxKey} skybox for "${product.name}": ${file.name}`,
         metadata: {
-          weather,
+          skyboxKey,
           fileName: file.name,
           fileSize: file.size,
           skyboxUrl: url,
@@ -754,12 +807,12 @@ export default function EditProductPage() {
     }
   };
 
-  const handleRemoveSkybox = async (weather: WeatherKey) => {
+  const handleRemoveSkybox = async (skyboxKey: WeatherKey) => {
     if (!currentAdmin || !product) return;
     const current = getCurrentSkyboxes();
-    if (!current[weather]) return;
+    if (!current[skyboxKey]) return;
 
-    const next = { ...current, [weather]: null };
+    const next = { ...current, [skyboxKey]: null };
     await handleChange('skyboxes', next);
     await persistSkyboxes(next);
 
@@ -770,10 +823,10 @@ export default function EditProductPage() {
       entity_type: 'product_skybox',
       entity_id: product.id,
       page: 'UpdateProducts',
-      details: `Removed ${weather} skybox from "${product.name}"`,
+      details: `Removed ${skyboxKey} skybox from "${product.name}"`,
       metadata: {
-        weather,
-        removedUrl: current[weather],
+        skyboxKey,
+        removedUrl: current[skyboxKey],
         productName: product.name,
         productId: product.id,
         adminAccount: currentAdmin.username,
@@ -782,18 +835,65 @@ export default function EditProductPage() {
     });
   };
 
+  const persistGlobalSkyboxDefaults = async (nextDefaults: GlobalSkyboxDefaults) => {
+    const res = await fetch("/api/product-skybox-defaults", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ defaults: nextDefaults }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json?.error || "Failed to save global skybox defaults");
+    }
+    setGlobalSkyboxDefaults(json?.defaults || nextDefaults);
+  };
+
+  const handleGlobalSkyboxUpload = async (weatherKey: WeatherKey, file: File | null) => {
+    setSavingGlobalSkybox(weatherKey);
+    try {
+      const nextDefaults = { ...globalSkyboxDefaults };
+      if (file) {
+        nextDefaults[weatherKey] = await uploadGlobalSkyboxFile(file, weatherKey);
+      } else {
+        nextDefaults[weatherKey] = null;
+      }
+
+      await persistGlobalSkyboxDefaults(nextDefaults);
+      setMessage(file ? `${weatherKey} default skybox saved successfully.` : `${weatherKey} default skybox removed successfully.`);
+    } catch (error) {
+      console.error('Global skybox upload error:', error);
+      setMessage(error instanceof Error ? error.message : 'Error saving global skybox default');
+    } finally {
+      setSavingGlobalSkybox(null);
+    }
+  };
+
   // Enhanced FBX file upload handler
   const handleFbxUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (!files.length || !currentAdmin || !product) return;
 
-    const accepted = files.filter(isAllowed3DFile);
-    const rejected = files.filter((f) => !isAllowed3DFile(f));
-    if (rejected.length > 0) {
-      setMessage(
-        `Ignored ${rejected.length} unsupported file(s). Allowed: ${ALLOWED_3D_EXTENSIONS.map((x) => `.${x}`).join(", ")}`
+    const rejectedType = files.filter((f) => !isAllowed3DFile(f));
+    const oversizedFiles = files.filter(
+      (f) => isAllowed3DFile(f) && f.size > MODEL_MAX_FILE_SIZE_BYTES
+    );
+    const accepted = files.filter(
+      (f) => isAllowed3DFile(f) && f.size <= MODEL_MAX_FILE_SIZE_BYTES
+    );
+
+    const notices: string[] = [];
+    if (rejectedType.length > 0) {
+      notices.push(
+        `Ignored ${rejectedType.length} unsupported file(s). Allowed: ${ALLOWED_3D_EXTENSIONS.map((x) => `.${x}`).join(", ")}`
       );
     }
+    if (oversizedFiles.length > 0) {
+      notices.push(`Skipped ${oversizedFiles.length} 3D file(s) above 10MB. Max 3D file size is 10MB per file.`);
+    }
+    if (notices.length > 0) {
+      setMessage(notices.join(" "));
+    }
+
     if (accepted.length === 0) return;
 
     setUploadingFbx(true);
@@ -872,7 +972,7 @@ export default function EditProductPage() {
           metadata: {
             error: String(error),
             filesCount: accepted.length,
-            rejectedFileNames: rejected.map((f) => f.name),
+            rejectedFileNames: [...rejectedType, ...oversizedFiles].map((f) => f.name),
             productName: product.name,
             productId: product.id,
             adminAccount: currentAdmin.username,
@@ -937,7 +1037,13 @@ export default function EditProductPage() {
   };
 
   const currentFbxUrls = getCurrentFbxUrls();
-  const previewSkyboxUrl = (product?.skyboxes && (product.skyboxes as any)[previewWeather]) ? (product.skyboxes as any)[previewWeather] : null;
+  const currentSkyboxes = getCurrentSkyboxes();
+  const effectiveCurrentSkyboxes = mergeEffectiveSkyboxes(currentSkyboxes, globalSkyboxDefaults);
+  const previewSkyboxSource = currentSkyboxes[previewWeather]
+    ? `${previewWeather} custom skybox`
+    : globalSkyboxDefaults[previewWeather]
+    ? `${previewWeather} default skybox`
+    : null;
 
   if (loading) {
     return (
@@ -957,6 +1063,7 @@ export default function EditProductPage() {
 
   return (
     <div className="min-h-screen p-8 bg-gray-50">
+      <ToastPopup state={toast} onClose={() => setToast((prev) => ({ ...prev, open: false }))} />
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold text-black">Edit Product: {product.name}</h1>
         <div className="text-sm text-gray-600">
@@ -966,450 +1073,579 @@ export default function EditProductPage() {
       
       {/* 3D Viewer Modal */}
       {show3DViewer && currentFbxUrls.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.8)" }}>
-          <div className="bg-white rounded-lg p-6 shadow-lg relative max-w-4xl w-full mx-4">
+        <div className="fixed inset-0 flex items-center justify-center z-50 bg-transparent">
+          <div className="bg-white/95 backdrop-blur-md rounded-xl p-6 shadow-2xl relative w-[98vw] max-w-[1600px] h-[90vh] mx-2 flex flex-col">
             <button
               onClick={() => setShow3DViewer(false)}
-              className="absolute top-3 right-3 text-gray-600 hover:text-gray-900 text-2xl z-20"
+              className="absolute top-3 right-3 text-gray-700 hover:text-black text-2xl font-bold z-10 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-md"
             >
               ×
             </button>
 
-            <div className="mb-4">
+            <div className="mb-4 flex-none">
               <h2 className="text-lg font-bold text-gray-900 mb-2">3D Model Viewer</h2>
               <div className="text-sm text-gray-600 mb-2">
                 Viewing {currentFbxIndex + 1} of {currentFbxUrls.length}
               </div>
 
-              {currentFbxUrls.length > 1 && (
-                <div className="flex gap-2 mb-2">
-                  <button
-                    onClick={() => setCurrentFbxIndex((i) => (i > 0 ? i - 1 : currentFbxUrls.length - 1))}
-                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setCurrentFbxIndex((i) => (i < currentFbxUrls.length - 1 ? i + 1 : 0))}
-                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
 
-              <div className="text-xs text-gray-500 mb-2">
-                Use mouse to rotate, zoom, and pan. Background is transparent for clean previews.
-              </div>
+              <div className="text-xs text-gray-500 mb-2">Use mouse to rotate, zoom, and pan.</div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <label className="text-xs font-medium text-gray-700">Preview skybox:</label>
-                <select
-                  value={previewWeather}
-                  onChange={(e) => setPreviewWeather(e.target.value as WeatherKey)}
-                  className="border border-gray-300 rounded px-2 py-1 text-xs text-black bg-white"
-                >
-                  <option value="sunny">Sunny</option>
-                  <option value="rainy">Rainy</option>
-                  <option value="night">Night</option>
-                  <option value="foggy">Foggy</option>
-                </select>
-                {!previewSkyboxUrl && (
-                  <span className="text-[11px] text-gray-500">No skybox set for this weather.</span>
-                )}
+                <span className="text-xs font-medium text-gray-700">Weather:</span>
+                {WEATHER_KEYS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setPreviewWeather(k)}
+                    className={`px-3 py-1 rounded text-xs border transition-colors ${
+                      previewWeather === k
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {k.charAt(0).toUpperCase() + k.slice(1)}
+                  </button>
+                ))}
+                <span className="text-[11px] text-gray-500">
+                  {previewSkyboxSource ? `Using ${previewSkyboxSource}.` : "No skybox set for this weather."}
+                </span>
               </div>
             </div>
 
-            <div className="h-96 w-full">
-              <FBXViewer fbxUrl={currentFbxUrls[currentFbxIndex]} skyboxUrl={previewSkyboxUrl} />
+            <div className="flex-1 min-h-0 w-full">
+              <ThreeDModelViewer
+                modelUrls={currentFbxUrls}
+                initialIndex={currentFbxIndex}
+                weather={previewWeather}
+                frameFinish={materialToFrameFinish(product.material)}
+                productCategory={product?.category ?? product?.type ?? null}
+                skyboxes={effectiveCurrentSkyboxes}
+                productDimensions={{
+                  width: product.width ?? null,
+                  height: product.height ?? null,
+                  thickness: product.thickness ?? null,
+                  units: "cm",
+                }}
+              />
             </div>
           </div>
         </div>
       )}
       
-      <form onSubmit={handleUpdate} className="bg-white shadow rounded-lg p-6 space-y-6 max-w-4xl mx-auto text-black">
-        {/* Basic Information */}
-        <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Basic Information</h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block font-medium mb-1 text-black">Product Name *</label>
-              <input
-                type="text"
-                value={product.name}
-                onChange={e => handleChange("name", e.target.value)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium mb-1 text-black">Full Product Name</label>
-              <input
-                type="text"
-                value={product.fullproductname || ""}
-                onChange={e => handleChange("fullproductname", e.target.value)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium mb-1 text-black">Price (₱) *</label>
-              <input
-                type="number"
-                step="0.01"
-                value={product.price}
-                onChange={e => handleChange("price", Number(e.target.value))}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-                required
-              />
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <label className="block font-medium mb-1 text-black">Description</label>
-            <textarea
-              value={product.description}
-              onChange={e => handleChange("description", e.target.value)}
-              className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              rows={3}
-            />
-          </div>
-
-          <div className="mt-4">
-            <label className="block font-medium mb-1 text-black">Additional Features</label>
-            <textarea
-              value={product.additionalfeatures || ""}
-              onChange={e => handleChange("additionalfeatures", e.target.value)}
-              className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              rows={4}
-              placeholder="Enter additional features (one per line or free text)"
-            />
-          </div>
-        </div>
-
-        {/* Categories and Types */}
-        <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Categories & Specifications</h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block font-medium mb-1 text-black">Category *</label>
-              <select
-                value={product.category ?? ""}
-                onChange={e => handleChange("category", e.target.value)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-                required
-              >
-                <option value="">Select Category</option>
-                <option value="Doors">Doors</option>
-                <option value="Windows">Windows</option>
-                <option value="Enclosures">Enclosures</option>
-                <option value="Casement">Casement</option>
-                <option value="Sliding">Sliding</option>
-                <option value="Railings">Railings</option>
-                <option value="Canopy">Canopy</option>
-                <option value="Curtain Wall">Curtain Wall</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-medium mb-1 text-black">Type</label>
-              <select
-                value={product.type || ""}
-                onChange={e => handleChange("type", e.target.value)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">Select Type</option>
-                <option value="Tinted">Tinted</option>
-                <option value="Clear">Clear</option>
-                <option value="Frosted">Frosted</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-medium mb-1 text-black">Material</label>
-              <select
-                value={product.material || ""}
-                onChange={e => handleChange("material", e.target.value)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">Select Material</option>
-                <option value="Glass">Glass</option>
-                <option value="Wood">Wood</option>
-                <option value="Metal">Metal</option>
-                <option value="Aluminum">Aluminum</option>
-                <option value="Steel">Steel</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Dimensions */}
-        <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Dimensions</h2>
-          
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block font-medium mb-1 text-black">Height (cm)</label>
-              <input
-                type="number"
-                step="0.01"
-                value={product.height || ""}
-                onChange={e => handleChange("height", Number(e.target.value) || undefined)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block font-medium mb-1 text-black">Width (cm)</label>
-              <input
-                type="number"
-                step="0.01"
-                value={product.width || ""}
-                onChange={e => handleChange("width", Number(e.target.value) || undefined)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block font-medium mb-1 text-black">Thickness (cm)</label>
-              <input
-                type="number"
-                step="0.01"
-                value={product.thickness || ""}
-                onChange={e => handleChange("thickness", Number(e.target.value) || undefined)}
-                className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 3D Models Management - NOW INSIDE FORM */}
-        <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            3D Models Management ({currentFbxUrls.length} files)
-          </h2>
-          
-          <div className="mb-4">
-            <label className="block font-medium mb-1 text-black">Upload New 3D Model Files (.fbx, .glb, .gltf)</label>
-            <input
-              type="file"
-              accept=".fbx,.glb,.gltf"
-              multiple
-              onChange={handleFbxUpload}
-              disabled={uploadingFbx}
-              className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            />
-            <div className="text-sm text-gray-500 mt-1">
-              Select multiple 3D model files to upload. Files will be automatically saved to the product.
-            </div>
-          </div>
-
-          {uploadingFbx && (
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
-              <div className="flex items-center">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                Uploading 3D model files...
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            {currentFbxUrls.map((url, index) => (
-              <div key={index} className="flex items-center justify-between p-3 bg-gray-100 rounded-lg border">
-                <div className="flex-1">
-                  <div className="font-medium text-sm">3D Model {index + 1}</div>
-                  <a 
-                    href={url} 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="text-blue-600 underline text-xs break-all"
-                  >
-                    {url.split('/').pop() || url}
-                  </a>
-                </div>
-                <div className="flex items-center space-x-2 ml-4">
-                  <button
-                    type="button"
-                    onClick={() => handleOpen3DViewer(index)}
-                    className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition-colors"
-                  >
-                    View 3D
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveFbx(url, index)}
-                    className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {currentFbxUrls.length > 0 && (
-            <div className="mt-4">
+      <form onSubmit={handleUpdate} className="bg-white shadow rounded-lg p-6 space-y-6 max-w-5xl mx-auto text-black">
+        <div className="grid gap-3 md:grid-cols-4">
+          {PRODUCT_FORM_TABS.map((tab, index) => {
+            const isActive = tab.key === activeTab;
+            return (
               <button
+                key={tab.key}
                 type="button"
-                onClick={() => handleOpen3DViewer(0)}
-                className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                onClick={() => setActiveTab(tab.key)}
+                className={`rounded-xl border px-4 py-3 text-left transition-all ${
+                  isActive
+                    ? "border-indigo-600 bg-indigo-600 text-white shadow-md"
+                    : "border-gray-200 bg-white text-gray-800 hover:border-indigo-300"
+                }`}
               >
-                View All 3D Models ({currentFbxUrls.length})
+                <div className="text-xs font-semibold uppercase tracking-[0.2em]">Step {index + 1}</div>
+                <div className="mt-1 text-base font-bold">{tab.label}</div>
+                <div className={`mt-1 text-xs ${isActive ? "text-indigo-100" : "text-gray-500"}`}>
+                  {tab.description}
+                </div>
               </button>
-            </div>
-          )}
+            );
+          })}
         </div>
 
-        {/* Images Management (unlimited) */}
-        <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Images Management ({getCurrentImages().length} files)
-          </h2>
+        {activeTab === "identity" && (
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6">
+            <h2 className="mb-4 text-xl font-semibold text-gray-900">Product Code, Name, and Description</h2>
 
-          <div className="mb-4">
-            <label className="block font-medium mb-1 text-black">Upload Images</label>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={handleImagesUpload}
-              disabled={uploadingImages}
-              className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            />
-            <div className="text-sm text-gray-500 mt-1">
-              You can upload any number of images. They will be added to this product.
-            </div>
-          </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block font-medium text-black">Product Code *</label>
+                <input
+                  type="text"
+                  value={product.name}
+                  onChange={(e) => handleChange("name", e.target.value)}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
 
-          {uploadingImages && (
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
-              <div className="flex items-center">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                Uploading images...
+              <div>
+                <label className="mb-1 block font-medium text-black">Product Name *</label>
+                <input
+                  type="text"
+                  value={product.fullproductname || ""}
+                  onChange={(e) => handleChange("fullproductname", e.target.value)}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
               </div>
             </div>
-          )}
 
-          <div className="space-y-2">
-            {getCurrentImages().map((url, index) => (
-              <div key={index} className="flex items-center justify-between p-3 bg-gray-100 rounded-lg border">
-                <div className="flex items-center gap-3 flex-1">
-                  <img src={url} alt={`Image ${index + 1}`} className="w-20 h-20 object-cover rounded border" />
-                  <div className="flex-1">
-                    <div className="font-medium text-sm">Image {index + 1}</div>
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 underline text-xs break-all"
-                    >
-                      {url.split('/').pop() || url}
-                    </a>
+            <div className="mt-4">
+              <label className="mb-1 block font-medium text-black">Product Description *</label>
+              <RichTextEditor
+                value={String(product.description || "")}
+                onChange={(next) => handleChange("description", next)}
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab === "classification" && (
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6">
+            <h2 className="mb-4 text-xl font-semibold text-gray-900">Product Category and Additional Features</h2>
+
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.2fr)]">
+              <div className="rounded-xl border border-gray-200 bg-white p-5">
+                <label className="mb-2 block font-medium text-black">Product Category *</label>
+                <select
+                  value={product.category ?? ""}
+                  onChange={(e) => handleCategorySelection(e.target.value)}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">Select Category</option>
+                  {PRODUCT_CATEGORY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-white p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">Preloaded Additional Features</h3>
+                    <p className="mt-1 text-xs text-gray-500">Checked items will appear as bullet points on the website product page.</p>
+                  </div>
+                  <div className="rounded-full bg-gray-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-gray-200">
+                    {selectedFeatureOptions.length} selected
                   </div>
                 </div>
-                <div className="flex items-center space-x-2 ml-4">
-                  <label className="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 transition-colors cursor-pointer">
-                    Replace
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) handleReplaceImage(index, f);
-                      }}
-                    />
-                  </label>
+
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                  <input
+                    type="text"
+                    value={newFeatureOption}
+                    onChange={(e) => setNewFeatureOption(e.target.value)}
+                    placeholder={product.category ? "Create a new feature checkbox for this category" : "Select a category first"}
+                    disabled={!product.category}
+                    className="flex-1 rounded border px-3 py-2 text-sm text-black bg-white focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 disabled:text-gray-400"
+                  />
                   <button
                     type="button"
-                    onClick={() => handleRemoveImage(url, index)}
-                    className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors"
+                    onClick={handleAddFeatureOption}
+                    disabled={!product.category || !newFeatureOption.trim()}
+                    className="rounded bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Remove
+                    Add Feature
                   </button>
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        {/* Skyboxes Management */}
-        <div className="border-b border-gray-200 pb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Skyboxes by Weather</h2>
-          <div className="text-sm text-gray-500 mb-4">
-            Upload one equirectangular image (JPG/PNG) per weather. This will be used as the 3D background on the website and in the admin preview.
-          </div>
+                {product.category ? (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {selectedCategoryFeatures.map((feature) => {
+                      const checked = selectedFeatureOptions.includes(feature);
+                      return (
+                        <div
+                          key={feature}
+                          className={`flex items-start gap-3 rounded-lg border p-3 text-sm transition ${
+                            checked
+                              ? "border-indigo-600 bg-indigo-50"
+                              : "border-gray-200 bg-gray-50 hover:border-indigo-300"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleFeatureToggle(feature)}
+                            className="mt-1 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                            <span className="text-gray-700">{feature}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveFeatureOption(feature)}
+                              className="shrink-0 rounded px-2 py-1 text-[11px] font-semibold text-red-600 transition hover:bg-red-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-500">
+                    Select a category first to load the matching feature checkboxes.
+                  </div>
+                )}
 
-          {uploadingSkyboxes && (
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
-              <div className="flex items-center">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                Uploading skybox...
+                <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-gray-900">Website Preview</div>
+                  {product.additionalfeatures ? (
+                    <div
+                      className="blog-content text-sm text-gray-700"
+                      dangerouslySetInnerHTML={{ __html: product.additionalfeatures }}
+                    />
+                  ) : (
+                    <div className="text-sm text-gray-500">No additional features selected yet.</div>
+                  )}
+                </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          <div className="space-y-2">
-            {WEATHER_KEYS.map((weatherKey) => {
-              const sky = getCurrentSkyboxes();
-              const url = sky?.[weatherKey] || null;
-              return (
-                <div key={weatherKey} className="flex items-center justify-between p-3 bg-gray-100 rounded-lg border">
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className="w-28 h-16 bg-white border rounded overflow-hidden flex items-center justify-center">
-                      {url ? (
-                        <img src={url} alt={`${weatherKey} skybox`} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-xs text-gray-400">No skybox</span>
-                      )}
-                    </div>
+        {activeTab === "details" && (
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6">
+            <h2 className="mb-4 text-xl font-semibold text-gray-900">Product Details</h2>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <div className="xl:col-span-2">
+                <label className="mb-1 block font-medium text-black">Price (PHP) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={product.price}
+                  onChange={(e) => handleChange("price", Number(e.target.value))}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div className="xl:col-span-2">
+                <label className="mb-1 block font-medium text-black">Inventory *</label>
+                <input
+                  type="number"
+                  value={product.inventory ?? ""}
+                  onChange={(e) => handleChange("inventory", Number(e.target.value))}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div className="rounded-xl border border-dashed border-gray-300 bg-white px-4 py-3 text-sm text-gray-500 xl:col-span-1">
+                Height, width, and thickness are optional but useful for 3D scaling.
+              </div>
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block font-medium text-black">Height</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={product.height || ""}
+                  onChange={(e) => handleChange("height", Number(e.target.value) || undefined)}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block font-medium text-black">Width</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={product.width || ""}
+                  onChange={(e) => handleChange("width", Number(e.target.value) || undefined)}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block font-medium text-black">Thickness</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={product.thickness || ""}
+                  onChange={(e) => handleChange("thickness", Number(e.target.value) || undefined)}
+                  className="w-full rounded border px-3 py-2 text-black bg-white focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "files" && (
+          <div className="space-y-6 rounded-2xl border border-gray-200 bg-gray-50 p-6">
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <h2 className="mb-4 text-xl font-semibold text-gray-900">
+                3D Models Management ({currentFbxUrls.length} files)
+              </h2>
+
+              <div className="mb-4">
+                <label className="block font-medium mb-1 text-black">Upload New 3D Model Files (.fbx, .glb, .gltf)</label>
+                <input
+                  type="file"
+                  accept=".fbx,.glb,.gltf"
+                  multiple
+                  onChange={handleFbxUpload}
+                  disabled={uploadingFbx}
+                  className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                />
+                <div className="text-sm text-gray-500 mt-1">
+                  Select multiple 3D model files to upload. Maximum 10MB per file.
+                </div>
+              </div>
+
+              {uploadingFbx && (
+                <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800">
+                  <div className="flex items-center">
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600"></div>
+                    Uploading 3D model files...
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {currentFbxUrls.map((url, index) => (
+                  <div key={index} className="flex items-center justify-between rounded-lg border bg-gray-50 p-3">
                     <div className="flex-1">
-                      <div className="font-medium text-sm capitalize">{weatherKey}</div>
-                      {url ? (
+                      <div className="text-sm font-medium">3D Model {index + 1}</div>
+                      <a 
+                        href={url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-xs break-all text-blue-600 underline"
+                      >
+                        {url.split('/').pop() || url}
+                      </a>
+                    </div>
+                    <div className="ml-4 flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => handleOpen3DViewer(index)}
+                        className="rounded bg-blue-600 px-3 py-1 text-sm text-white transition-colors hover:bg-blue-700"
+                      >
+                        View 3D
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFbx(url, index)}
+                        className="rounded bg-red-600 px-3 py-1 text-sm text-white transition-colors hover:bg-red-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {currentFbxUrls.length > 0 && (
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => handleOpen3DViewer(0)}
+                    className="rounded-lg bg-blue-600 px-6 py-2 font-medium text-white transition-colors hover:bg-blue-700"
+                  >
+                    View All 3D Models ({currentFbxUrls.length})
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <h2 className="mb-4 text-xl font-semibold text-gray-900">
+                Images Management ({getCurrentImages().length} files)
+              </h2>
+
+              <div className="mb-4">
+                <label className="block font-medium mb-1 text-black">Upload Images</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImagesUpload}
+                  disabled={uploadingImages}
+                  className="border px-3 py-2 rounded w-full text-black bg-white focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                />
+                <div className="text-sm text-gray-500 mt-1">
+                  You can upload any number of images. Maximum 6MB per file.
+                </div>
+              </div>
+
+              {uploadingImages && (
+                <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800">
+                  <div className="flex items-center">
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600"></div>
+                    Uploading images...
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {getCurrentImages().map((url, index) => (
+                  <div key={index} className="flex items-center justify-between rounded-lg border bg-gray-50 p-3">
+                    <div className="flex flex-1 items-center gap-3">
+                      <img src={url} alt={`Image ${index + 1}`} className="h-20 w-20 rounded border object-cover" />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium">Image {index + 1}</div>
                         <a
                           href={url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-blue-600 underline text-xs break-all"
+                          className="text-xs break-all text-blue-600 underline"
                         >
                           {url.split('/').pop() || url}
                         </a>
-                      ) : (
-                        <div className="text-xs text-gray-500">Upload an image to enable this weather skybox.</div>
-                      )}
+                      </div>
+                    </div>
+                    <div className="ml-4 flex items-center space-x-2">
+                      <label className="cursor-pointer rounded bg-indigo-600 px-3 py-1 text-sm text-white transition-colors hover:bg-indigo-700">
+                        Replace
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleReplaceImage(index, f);
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveImage(url, index)}
+                        className="rounded bg-red-600 px-3 py-1 text-sm text-white transition-colors hover:bg-red-700"
+                      >
+                        Remove
+                      </button>
                     </div>
                   </div>
+                ))}
+              </div>
+            </div>
 
-                  <div className="flex items-center space-x-2 ml-4">
-                    <label className="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 transition-colors cursor-pointer">
-                      {url ? 'Replace' : 'Upload'}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) handleUploadSkybox(weatherKey, f);
-                        }}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveSkybox(weatherKey)}
-                      disabled={!url}
-                      className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 transition-colors disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <h2 className="mb-2 text-xl font-semibold text-gray-900">Default & Custom Skyboxes</h2>
+              <div className="mb-4 text-sm text-gray-500">
+                Manage shared weather defaults for every product, then add product-specific overrides only when this item needs a custom skybox. Product custom skyboxes always take priority.
+              </div>
+
+              {uploadingSkyboxes && (
+                <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800">
+                  <div className="flex items-center">
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600"></div>
+                    Uploading skybox...
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              )}
 
-        {/* Action Buttons */}
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Global Default Skyboxes</div>
+              <div className="space-y-2 mb-5">
+                {WEATHER_KEYS.map((weatherKey) => {
+                  const url = globalSkyboxDefaults[weatherKey] || null;
+                  return (
+                    <div key={`global-${weatherKey}`} className="flex items-center justify-between rounded-lg border bg-gray-50 p-3">
+                      <div className="flex flex-1 items-center gap-3">
+                        <div className="flex h-16 w-28 items-center justify-center overflow-hidden rounded border bg-white">
+                          {url ? (
+                            <img src={url} alt={`${weatherKey} default skybox`} className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="text-xs text-gray-400">No skybox</span>
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-sm font-medium capitalize">{weatherKey} default</div>
+                          {url ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs break-all text-blue-600 underline"
+                            >
+                              {url.split('/').pop() || url}
+                            </a>
+                          ) : (
+                            <div className="text-xs text-gray-500">Used by every product that does not have a custom {weatherKey} skybox.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="ml-4 flex items-center space-x-2">
+                        <label className="cursor-pointer rounded bg-indigo-600 px-3 py-1 text-sm text-white transition-colors hover:bg-indigo-700">
+                          {url ? 'Replace' : 'Upload'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0] || null;
+                              void handleGlobalSkyboxUpload(weatherKey, f);
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void handleGlobalSkyboxUpload(weatherKey, null)}
+                          disabled={!url || savingGlobalSkybox === weatherKey}
+                          className="rounded bg-red-600 px-3 py-1 text-sm text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                        >
+                          {savingGlobalSkybox === weatherKey ? 'Saving…' : 'Remove'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Custom Product Skyboxes by Weather</div>
+              <div className="space-y-2">
+                {WEATHER_KEYS.map((weatherKey) => {
+                  const url = currentSkyboxes?.[weatherKey] || null;
+                  return (
+                    <div key={weatherKey} className="flex items-center justify-between rounded-lg border bg-gray-50 p-3">
+                      <div className="flex flex-1 items-center gap-3">
+                        <div className="flex h-16 w-28 items-center justify-center overflow-hidden rounded border bg-white">
+                          {url ? (
+                            <img src={url} alt={`${weatherKey} skybox`} className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="text-xs text-gray-400">No skybox</span>
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-sm font-medium capitalize">{weatherKey}</div>
+                          {url ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs break-all text-blue-600 underline"
+                            >
+                              {url.split('/').pop() || url}
+                            </a>
+                          ) : (
+                            <div className="text-xs text-gray-500">Upload an image to override the shared {weatherKey} default for this product.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="ml-4 flex items-center space-x-2">
+                        <label className="cursor-pointer rounded bg-indigo-600 px-3 py-1 text-sm text-white transition-colors hover:bg-indigo-700">
+                          {url ? 'Replace' : 'Upload'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleUploadSkybox(weatherKey, f);
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSkybox(weatherKey)}
+                          disabled={!url}
+                          className="rounded bg-red-600 px-3 py-1 text-sm text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-4 pt-4">
           <button
             type="submit"
@@ -1448,16 +1684,6 @@ export default function EditProductPage() {
           </button>
         </div>
         
-        {/* Status Message */}
-        {message && (
-          <div className={`text-center mt-4 p-3 rounded-lg ${
-            message.includes("Error") || message.includes("Failed") 
-              ? "bg-red-50 text-red-600 border border-red-200" 
-              : "bg-green-50 text-green-600 border border-green-200"
-          }`}>
-            {message}
-          </div>
-        )}
       </form>
     </div>
   );
@@ -1480,364 +1706,19 @@ async function uploadFile(file: File, field: string, productId: string): Promise
   return urlData.publicUrl;
 }
 
-// FBX Viewer Component (adapted from products page for consistency)
-function FBXViewer({ fbxUrl, skyboxUrl }: { fbxUrl: string; skyboxUrl?: string | null }) {
-  const mountRef = useRef<HTMLDivElement | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+async function uploadGlobalSkyboxFile(file: File, weatherKey: WeatherKey): Promise<string> {
+  const safeFileName = file.name.replace(/[^a-z0-9.\-_]/gi, "_");
+  const objectPath = `skyboxes/defaults/${weatherKey}_${Date.now()}_${safeFileName}`;
 
-  useEffect(() => {
-    const container = mountRef.current;
-    if (!container || !fbxUrl) return;
+  const { data, error } = await supabase.storage
+    .from("products")
+    .upload(objectPath, file, { upsert: true });
 
-    setIsLoading(true);
-    setLoadError(null);
+  if (error) throw error;
 
-    let disposed = false;
-    let frameId = 0;
-    let objectURLToRevoke: string | null = null;
+  const { data: urlData } = await supabase.storage
+    .from("products")
+    .getPublicUrl(data.path);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      45,
-      (container.clientWidth || 800) / (container.clientHeight || 480),
-      0.1,
-      4000
-    );
-    camera.position.set(0, 160, 260);
-
-    // Color management (r152+ and <=r151)
-    const setOutputCS = (r: any) => {
-      const anyTHREE: any = THREE;
-      if ("outputColorSpace" in r && anyTHREE.SRGBColorSpace !== undefined) {
-        r.outputColorSpace = anyTHREE.SRGBColorSpace;
-      } else if ("outputEncoding" in r && anyTHREE.sRGBEncoding !== undefined) {
-        r.outputEncoding = anyTHREE.sRGBEncoding;
-      }
-    };
-    setOutputCS(renderer);
-
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(container.clientWidth || 800, container.clientHeight || 480);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
-
-  // Mount canvas safely without disturbing React's DOM tracking
-  const canvasEl = renderer.domElement;
-  container.appendChild(canvasEl);
-
-  // Lights (no platform/grid)
-  // Default to transparent background; if a skybox is provided, we'll render it.
-  scene.background = null;
-
-    let skyTex: THREE.Texture | null = null;
-
-    const setTexColorSpace = (tex: any) => {
-      const anyTHREE: any = THREE;
-      if (!tex) return;
-      if ("colorSpace" in tex && anyTHREE.SRGBColorSpace !== undefined) {
-        tex.colorSpace = anyTHREE.SRGBColorSpace;
-      } else if ("encoding" in tex && anyTHREE.sRGBEncoding !== undefined) {
-        tex.encoding = anyTHREE.sRGBEncoding;
-      }
-    };
-
-    if (skyboxUrl) {
-      const texLoader = new THREE.TextureLoader();
-      texLoader.setCrossOrigin("anonymous");
-      texLoader.load(
-        skyboxUrl,
-        (tex) => {
-          if (disposed) {
-            try { tex.dispose(); } catch {}
-            return;
-          }
-          skyTex = tex;
-          setTexColorSpace(skyTex);
-          skyTex.mapping = THREE.EquirectangularReflectionMapping;
-          scene.background = skyTex;
-        },
-        undefined,
-        () => {
-          if (!disposed) setLoadError("Failed to load skybox image");
-        }
-      );
-    }
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.15);
-    hemi.position.set(0, 400, 0);
-    scene.add(hemi);
-
-    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(180, 240, 200);
-    dir.castShadow = true;
-    scene.add(dir);
-
-    const fill = new THREE.DirectionalLight(0xffffff, 0.6);
-    fill.position.set(-160, 160, -180);
-    scene.add(fill);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.minDistance = 20;
-    controls.maxDistance = 800;
-    controls.target.set(0, 0, 0);
-    controls.update();
-
-    const manager = new THREE.LoadingManager();
-    manager.onError = (url) => !disposed && setLoadError(`Failed to load: ${url}`);
-    const fbxLoader = new FBXLoader(manager);
-    fbxLoader.setCrossOrigin("anonymous");
-    const gltfLoader = new GLTFLoader(manager);
-    (gltfLoader as any).setCrossOrigin?.("anonymous");
-
-    const urlExt = getFileExtension(fbxUrl);
-
-    // Try to fetch the file as a Blob first to avoid any CORS/content-type hiccups,
-    // then fall back to direct URL if needed.
-    const tryLoad = async () => {
-      const tryUrls: string[] = [fbxUrl];
-      // If the URL might contain spaces, also try an encoded version
-      if (fbxUrl.includes(" ")) tryUrls.push(encodeURI(fbxUrl));
-
-      for (const url of tryUrls) {
-        try {
-          const res = await fetch(url, { mode: "cors" });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const blob = await res.blob();
-          objectURLToRevoke = URL.createObjectURL(blob);
-
-          return new Promise<void>((resolve, reject) => {
-            const onLoadedObject = (object: THREE.Object3D) => {
-                if (disposed) return;
-                // attach object to scene with centering, scaling, and camera fit
-                object.traverse((child: any) => {
-                  if (child.isMesh) {
-                    child.castShadow = true;
-                    child.receiveShadow = true;
-                    if (Array.isArray(child.material)) {
-                      child.material.forEach((m: any) => {
-                        m.side = THREE.DoubleSide;
-                        m.needsUpdate = true;
-                      });
-                    } else if (child.material) {
-                      child.material.side = THREE.DoubleSide;
-                      child.material.needsUpdate = true;
-                    }
-                  }
-                });
-
-                // Center and scale
-                const box1 = new THREE.Box3().setFromObject(object);
-                const center1 = box1.getCenter(new THREE.Vector3());
-                object.position.sub(center1);
-                const size1 = box1.getSize(new THREE.Vector3());
-                const maxAxis1 = Math.max(size1.x, size1.y, size1.z) || 1;
-                const targetSize = 200;
-                object.scale.setScalar(targetSize / maxAxis1);
-
-                // Fit camera
-                const box2 = new THREE.Box3().setFromObject(object);
-                const size2 = box2.getSize(new THREE.Vector3());
-                const maxDim = Math.max(size2.x, size2.y, size2.z) || 1;
-                const center2 = box2.getCenter(new THREE.Vector3());
-                const fov = THREE.MathUtils.degToRad(camera.fov);
-                const fitHeightDistance = maxDim / (2 * Math.tan(fov / 2));
-                const fitWidthDistance = fitHeightDistance / camera.aspect;
-                const distance = 1.15 * Math.max(fitHeightDistance, fitWidthDistance);
-
-                camera.near = Math.max(0.1, maxDim / 100);
-                camera.far = Math.max(1000, maxDim * 100);
-                camera.updateProjectionMatrix();
-                camera.position.set(center2.x + distance, center2.y + distance * 0.2, center2.z + distance);
-                controls.target.copy(center2);
-                controls.minDistance = distance * 0.1;
-                controls.maxDistance = distance * 8;
-                controls.update();
-
-                scene.add(object);
-                setIsLoading(false);
-                resolve();
-            };
-
-            const onError = (err: unknown) => reject(err);
-
-            if (urlExt === "fbx") {
-              fbxLoader.load(objectURLToRevoke as string, (object) => onLoadedObject(object), undefined, onError);
-              return;
-            }
-
-            if (urlExt === "glb" || urlExt === "gltf") {
-              gltfLoader.load(
-                objectURLToRevoke as string,
-                (gltf: any) => {
-                  const object = gltf?.scene as THREE.Object3D | undefined;
-                  if (!object) return onError(new Error("Missing gltf.scene"));
-                  onLoadedObject(object);
-                },
-                undefined,
-                onError
-              );
-              return;
-            }
-
-            onError(new Error(`Unsupported 3D model type: .${urlExt || "?"}`));
-          });
-        } catch (e) {
-          // Try next variant
-          continue;
-        }
-      }
-      // If all blob attempts failed, try direct URL once
-      return new Promise<void>((resolve, reject) => {
-        const onError = (err: unknown) => reject(err);
-        const onLoadedDirect = (object: THREE.Object3D) => {
-          if (disposed) return;
-            object.traverse((child: any) => {
-              if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
-                if (Array.isArray(child.material)) {
-                  child.material.forEach((m: any) => {
-                    m.side = THREE.DoubleSide;
-                    m.needsUpdate = true;
-                  });
-                } else if (child.material) {
-                  child.material.side = THREE.DoubleSide;
-                  child.material.needsUpdate = true;
-                }
-              }
-            });
-
-            const box1 = new THREE.Box3().setFromObject(object);
-            const center1 = box1.getCenter(new THREE.Vector3());
-            object.position.sub(center1);
-            const size1 = box1.getSize(new THREE.Vector3());
-            const maxAxis1 = Math.max(size1.x, size1.y, size1.z) || 1;
-            const targetSize = 200;
-            object.scale.setScalar(targetSize / maxAxis1);
-
-            const box2 = new THREE.Box3().setFromObject(object);
-            const size2 = box2.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size2.x, size2.y, size2.z) || 1;
-            const center2 = box2.getCenter(new THREE.Vector3());
-            const fov = THREE.MathUtils.degToRad(camera.fov);
-            const fitHeightDistance = maxDim / (2 * Math.tan(fov / 2));
-            const fitWidthDistance = fitHeightDistance / camera.aspect;
-            const distance = 1.15 * Math.max(fitHeightDistance, fitWidthDistance);
-
-            camera.near = Math.max(0.1, maxDim / 100);
-            camera.far = Math.max(1000, maxDim * 100);
-            camera.updateProjectionMatrix();
-            camera.position.set(center2.x + distance, center2.y + distance * 0.2, center2.z + distance);
-            controls.target.copy(center2);
-            controls.minDistance = distance * 0.1;
-            controls.maxDistance = distance * 8;
-            controls.update();
-
-            scene.add(object);
-            setIsLoading(false);
-            resolve();
-        };
-
-        if (urlExt === "fbx") {
-          fbxLoader.load(fbxUrl, (object) => onLoadedDirect(object), undefined, onError);
-          return;
-        }
-
-        if (urlExt === "glb" || urlExt === "gltf") {
-          gltfLoader.load(
-            fbxUrl,
-            (gltf: any) => {
-              const object = gltf?.scene as THREE.Object3D | undefined;
-              if (!object) return onError(new Error("Missing gltf.scene"));
-              onLoadedDirect(object);
-            },
-            undefined,
-            onError
-          );
-          return;
-        }
-
-        onError(new Error(`Unsupported 3D model type: .${urlExt || "?"}`));
-      });
-    };
-
-    tryLoad().catch((err) => {
-      if (disposed) return;
-      console.error("3D model load error:", err);
-      setLoadError("Unable to render 3D model. Re-upload the model if the issue persists.");
-      setIsLoading(false);
-    });
-
-    const handleResize = () => {
-      if (disposed) return;
-      const w = container.clientWidth || 800;
-      const h = container.clientHeight || 480;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    };
-
-    const ro = new ResizeObserver(handleResize);
-    ro.observe(container);
-
-    const animate = () => {
-      if (disposed) return;
-      frameId = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(frameId);
-      ro.disconnect();
-      controls.dispose();
-
-      // Safe DOM removal (no NotFoundError)
-      try {
-        if (canvasEl?.parentNode === container) container.removeChild(canvasEl);
-      } catch {}
-
-      if (objectURLToRevoke) {
-        try { URL.revokeObjectURL(objectURLToRevoke); } catch {}
-        objectURLToRevoke = null;
-      }
-
-      // Dispose WebGL resources
-      scene.traverse((child) => {
-        const m = child as any;
-        if (m.isMesh) {
-          m.geometry?.dispose();
-          const mat = m.material;
-          if (Array.isArray(mat)) mat.forEach((mm: any) => mm?.dispose?.());
-          else mat?.dispose?.();
-        }
-      });
-      renderer.dispose();
-      (renderer as any).forceContextLoss?.();
-
-      try { skyTex?.dispose(); } catch {}
-    };
-  }, [fbxUrl, skyboxUrl]);
-
-  return (
-    <div ref={mountRef} className="relative h-full w-full rounded-lg bg-transparent">
-      {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/80 text-sm text-gray-600">
-          Loading 3D model…
-        </div>
-      )}
-      {loadError && (
-        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/90 px-4 text-center text-sm text-red-600">
-          {loadError}
-        </div>
-      )}
-    </div>
-  );
+  return urlData.publicUrl;
 }

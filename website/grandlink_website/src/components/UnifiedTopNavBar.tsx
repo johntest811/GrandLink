@@ -20,26 +20,138 @@ type UserNotif = {
 
 export default function UnifiedTopNavBar() {
   const [user, setUser] = useState<any>(null);
+  const getPendingVerification = () => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("gl_pending_email_verification") === "1";
+    } catch {
+      return false;
+    }
+  };
+
+  const [pendingVerification, setPendingVerification] = useState<boolean>(() => getPendingVerification());
   const [notifications, setNotifications] = useState<UserNotif[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [cartCount, setCartCount] = useState<number>(0);
   const [toast, setToast] = useState<{ title: string; message: string } | null>(null);
   const [hoveredDropdown, setHoveredDropdown] = useState<string | null>(null);
+  const [mobileDropdown, setMobileDropdown] = useState<string | null>(null);
+  const [isMobileNav, setIsMobileNav] = useState(false);
   const [open, setOpen] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [chromeSettings, setChromeSettings] = useState({
+    topNavContactEmail: "grandeast.org@gmail.com",
+    topNavFacebookText: "Click here visit to our FB Page",
+    topNavPhoneText: "Smart | 09082810586 Globe (Viber) | 09277640475",
+    topNavInquireLabel: "INQUIRE NOW",
+    topNavInquireLink: "/Inquire",
+  });
+  const [isNavVisible, setIsNavVisible] = useState(true);
+  const lastScrollYRef = useRef(0);
   const navRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
   useEffect(() => {
+    const loadChromeSettings = async () => {
+      try {
+        const res = await fetch("/api/home", { cache: "no-store" });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+        const content = (payload?.content ?? payload ?? {}) as Record<string, any>;
+        setChromeSettings((prev) => ({
+          ...prev,
+          topNavContactEmail: String(content.topNavContactEmail || prev.topNavContactEmail),
+          topNavFacebookText: String(content.topNavFacebookText || prev.topNavFacebookText),
+          topNavPhoneText: String(content.topNavPhoneText || prev.topNavPhoneText),
+          topNavInquireLabel: String(content.topNavInquireLabel || prev.topNavInquireLabel),
+          topNavInquireLink: String(content.topNavInquireLink || prev.topNavInquireLink),
+        }));
+      } catch {
+        // keep defaults
+      }
+    };
+
+    loadChromeSettings();
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const syncMobileState = () => {
+      const mobile = media.matches;
+      setIsMobileNav(mobile);
+      if (!mobile) {
+        setMobileDropdown(null);
+        setMobileMenuOpen(false);
+      }
+    };
+
+    syncMobileState();
+    media.addEventListener("change", syncMobileState);
+    return () => media.removeEventListener("change", syncMobileState);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [mobileMenuOpen]);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const currentScrollY = window.scrollY;
+      const nearTop = currentScrollY < 80;
+      if (nearTop) {
+        setIsNavVisible(true);
+      } else {
+        setIsNavVisible(currentScrollY < lastScrollYRef.current);
+      }
+      lastScrollYRef.current = currentScrollY;
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      const nextPending = getPendingVerification();
+      setPendingVerification(nextPending);
+      if (nextPending) setUser(null);
+    };
+
+    // Keep state in sync for same-tab writes + cross-tab storage events
+    sync();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "gl_pending_email_verification") sync();
+    };
+    const onCustom = () => sync();
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("gl:pendingVerificationChanged", onCustom as EventListener);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("gl:pendingVerificationChanged", onCustom as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     const fetchUser = async () => {
+      if (pendingVerification) {
+        setUser(null);
+        return;
+      }
       const { data } = await supabase.auth.getUser();
       setUser(data?.user || null);
     };
     fetchUser();
-  }, []);
+  }, [pendingVerification]);
 
   useEffect(() => {
     if (user?.id) fetchNotifications();
@@ -194,6 +306,15 @@ export default function UnifiedTopNavBar() {
     return rect.bottom;
   };
 
+  const isDropdownOpen = (key: string) => {
+    return isMobileNav ? mobileDropdown === key : hoveredDropdown === key;
+  };
+
+  const toggleMobileDropdown = (key: string) => {
+    if (!isMobileNav) return;
+    setMobileDropdown((prev) => (prev === key ? null : key));
+  };
+
   const getNotificationIcon = (type: string) => {
     switch (type) {
       case 'new_product': return '🎉';
@@ -251,38 +372,69 @@ export default function UnifiedTopNavBar() {
 
   return (
     <>
+      <div
+        className={`sticky top-0 z-50 transition-transform duration-300 ease-out ${
+          isNavVisible ? "translate-y-0" : "-translate-y-full"
+        }`}
+      >
       {/* Main Navigation */}
       <header className="w-full bg-white flex flex-col sm:flex-row items-center justify-between px-4 py-2 shadow z-20 relative">
-        <div className="flex items-center gap-2 mb-3 mt-3">
+        <div className="flex items-center gap-2 my-1">
           <Link href={user ? "/home" : "/"}>
             <Image src="/ge-logo.avif" alt="Grand East Logo" width={170} height={170} />
           </Link>
         </div>
         
-        <nav ref={navRef} className="flex-1 flex justify-center items-center gap-8 ml-8 relative z-30">
+        <nav
+          ref={navRef}
+          className="hidden md:flex flex-1 items-center gap-8 relative z-30 max-w-full overflow-x-auto whitespace-nowrap py-2 sm:py-0 ml-0 sm:ml-8 justify-start sm:justify-center"
+        >
           <Link href="/home" className="text-gray-700 hover:text-[#8B1C1C] font-medium">Home</Link>
           
           {/* About Us Dropdown */}
           <div
             className="relative group"
-            onMouseEnter={() => setHoveredDropdown("about")}
-            onMouseLeave={() => setHoveredDropdown(null)}
+            onMouseEnter={() => {
+              if (!isMobileNav) setHoveredDropdown("about");
+            }}
+            onMouseLeave={() => {
+              if (!isMobileNav) setHoveredDropdown(null);
+            }}
           >
-            <Link
-              href="/about-us"
-              className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
-            >
-              About Us <FaChevronDown className="text-xs mt-1" />
-            </Link>
-            {hoveredDropdown === "about" && (
+            <div className="flex items-center gap-1">
+              <Link
+                href="/about-us"
+                className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
+              >
+                About Us
+              </Link>
+              <button
+                type="button"
+                className="p-1 text-gray-600 hover:text-[#8B1C1C]"
+                onClick={() => toggleMobileDropdown("about")}
+                aria-label="Toggle About Us menu"
+                aria-expanded={isDropdownOpen("about")}
+              >
+                <FaChevronDown className={`text-xs transition-transform ${isDropdownOpen("about") ? "rotate-180" : ""}`} />
+              </button>
+            </div>
+            {isDropdownOpen("about") && (
               <div
-                className="fixed left-auto bg-white shadow rounded z-50 min-w-[180px]"
-                style={{
-                  top: getNavBottom(),
-                  left: navRef.current
-                    ? navRef.current.querySelectorAll("a")[1]?.getBoundingClientRect().left
-                    : 200,
-                }}
+                className={`${
+                  isMobileNav
+                    ? "absolute left-0 top-full mt-2 bg-white shadow rounded border z-50 min-w-[180px]"
+                    : "fixed left-auto bg-white shadow rounded z-50 min-w-[180px]"
+                }`}
+                style={
+                  isMobileNav
+                    ? undefined
+                    : {
+                        top: getNavBottom(),
+                        left: navRef.current
+                          ? navRef.current.querySelectorAll("a")[1]?.getBoundingClientRect().left
+                          : 200,
+                      }
+                }
               >
                 <Link href="/showroom" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Showroom</Link>
               </div>
@@ -292,24 +444,47 @@ export default function UnifiedTopNavBar() {
           {/* Services We Offer Dropdown */}
           <div
             className="relative group"
-            onMouseEnter={() => setHoveredDropdown("services")}
-            onMouseLeave={() => setHoveredDropdown(null)}
+            onMouseEnter={() => {
+              if (!isMobileNav) setHoveredDropdown("services");
+            }}
+            onMouseLeave={() => {
+              if (!isMobileNav) setHoveredDropdown(null);
+            }}
           >
-            <Link
-              href="/services"
-              className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
-            >
-              Services We Offer <FaChevronDown className="text-xs mt-1" />
-            </Link>
-            {hoveredDropdown === "services" && (
+            <div className="flex items-center gap-1">
+              <Link
+                href="/services"
+                className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
+              >
+                Services We Offer
+              </Link>
+              <button
+                type="button"
+                className="p-1 text-gray-600 hover:text-[#8B1C1C]"
+                onClick={() => toggleMobileDropdown("services")}
+                aria-label="Toggle Services menu"
+                aria-expanded={isDropdownOpen("services")}
+              >
+                <FaChevronDown className={`text-xs transition-transform ${isDropdownOpen("services") ? "rotate-180" : ""}`} />
+              </button>
+            </div>
+            {isDropdownOpen("services") && (
               <div
-                className="fixed left-auto bg-white shadow rounded z-50 min-w-[220px]"
-                style={{
-                  top: getNavBottom(),
-                  left: navRef.current
-                    ? navRef.current.querySelectorAll("a")[2]?.getBoundingClientRect().left
-                    : 350,
-                }}
+                className={`${
+                  isMobileNav
+                    ? "absolute left-0 top-full mt-2 bg-white shadow rounded border z-50 min-w-[220px]"
+                    : "fixed left-auto bg-white shadow rounded z-50 min-w-[220px]"
+                }`}
+                style={
+                  isMobileNav
+                    ? undefined
+                    : {
+                        top: getNavBottom(),
+                        left: navRef.current
+                          ? navRef.current.querySelectorAll("a")[2]?.getBoundingClientRect().left
+                          : 350,
+                      }
+                }
               >
                 <Link href="/Featured" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Featured Projects</Link>
                 <Link href="/DeliveryProcess" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Delivery & Ordering Process</Link>
@@ -320,24 +495,47 @@ export default function UnifiedTopNavBar() {
           {/* Products Dropdown */}
           <div
             className="relative group"
-            onMouseEnter={() => setHoveredDropdown("products")}
-            onMouseLeave={() => setHoveredDropdown(null)}
+            onMouseEnter={() => {
+              if (!isMobileNav) setHoveredDropdown("products");
+            }}
+            onMouseLeave={() => {
+              if (!isMobileNav) setHoveredDropdown(null);
+            }}
           >
-            <Link
-              href="/Product"
-              className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
-            >
-              Products <FaChevronDown className="text-xs mt-1" />
-            </Link>
-            {hoveredDropdown === "products" && (
+            <div className="flex items-center gap-1">
+              <Link
+                href="/Product"
+                className="flex items-center gap-1 text-gray-700 hover:text-[#8B1C1C] font-medium"
+              >
+                Products
+              </Link>
+              <button
+                type="button"
+                className="p-1 text-gray-600 hover:text-[#8B1C1C]"
+                onClick={() => toggleMobileDropdown("products")}
+                aria-label="Toggle Products menu"
+                aria-expanded={isDropdownOpen("products")}
+              >
+                <FaChevronDown className={`text-xs transition-transform ${isDropdownOpen("products") ? "rotate-180" : ""}`} />
+              </button>
+            </div>
+            {isDropdownOpen("products") && (
               <div
-                className="fixed left-auto bg-white shadow rounded z-50 min-w-[200px]"
-                style={{
-                  top: getNavBottom(),
-                  left: navRef.current
-                    ? navRef.current.querySelectorAll("a")[3]?.getBoundingClientRect().left
-                    : 500,
-                }}
+                className={`${
+                  isMobileNav
+                    ? "absolute left-0 top-full mt-2 bg-white shadow rounded border z-50 min-w-[200px]"
+                    : "fixed left-auto bg-white shadow rounded z-50 min-w-[200px]"
+                }`}
+                style={
+                  isMobileNav
+                    ? undefined
+                    : {
+                        top: getNavBottom(),
+                        left: navRef.current
+                          ? navRef.current.querySelectorAll("a")[3]?.getBoundingClientRect().left
+                          : 500,
+                      }
+                }
               >
                 <Link href="/Product?category=Doors" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Doors</Link>
                 <Link href="/Product?category=Enclosure" className="block px-4 py-2 hover:bg-gray-100 text-gray-700">Enclosures</Link>
@@ -354,9 +552,29 @@ export default function UnifiedTopNavBar() {
         </nav>
         
         <div className="flex items-center gap-4">
-          <Link href="/Inquire">
+          {isMobileNav && (
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              className="p-2 rounded hover:bg-gray-100 transition"
+              aria-label="Toggle navigation menu"
+              aria-expanded={mobileMenuOpen}
+            >
+              {mobileMenuOpen ? (
+                <svg className="w-6 h-6 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              ) : (
+                <svg className="w-6 h-6 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              )}
+            </button>
+          )}
+
+          <Link href={chromeSettings.topNavInquireLink || "/Inquire"}>
             <button className="bg-[#8B1C1C] text-white px-4 py-2 rounded font-semibold hover:bg-[#a83232] transition">
-              INQUIRE NOW
+              {chromeSettings.topNavInquireLabel || "INQUIRE NOW"}
             </button>
           </Link>
 
@@ -394,7 +612,7 @@ export default function UnifiedTopNavBar() {
               </button>
 
               {notifOpen && (
-                <div className="absolute right-0 mt-2 w-96 bg-white rounded-lg shadow-xl border z-50 max-h-[500px] overflow-hidden">
+                <div className="absolute right-0 mt-2 w-[calc(100vw-1rem)] max-w-sm sm:w-96 bg-white rounded-lg shadow-xl border z-50 max-h-[min(70vh,500px)] overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-3 border-b bg-gray-50">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-gray-800">Notifications</span>
@@ -583,24 +801,195 @@ export default function UnifiedTopNavBar() {
         </div>
       </header>
 
+      {/* Mobile navigation drawer */}
+      {isMobileNav && mobileMenuOpen && (
+        <nav className="md:hidden w-full bg-white border-t border-gray-200 shadow-sm z-40">
+          <div className="px-4 py-3 space-y-2">
+            <Link
+              href="/home"
+              className="block rounded-lg px-3 py-3 text-base font-medium text-gray-800 hover:bg-gray-50"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                setMobileDropdown(null);
+              }}
+            >
+              Home
+            </Link>
+
+            <div className="rounded-lg border border-gray-100">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-3 text-base font-medium text-gray-800"
+                onClick={() => toggleMobileDropdown("about")}
+                aria-expanded={isDropdownOpen("about")}
+                aria-label="Toggle About Us submenu"
+              >
+                <span>About Us</span>
+                <FaChevronDown className={`text-xs transition-transform ${isDropdownOpen("about") ? "rotate-180" : ""}`} />
+              </button>
+              {isDropdownOpen("about") && (
+                <div className="pb-2">
+                  <Link
+                    href="/about-us"
+                    className="block px-5 py-2.5 text-sm font-semibold text-[#8B1C1C] hover:bg-gray-50"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setMobileDropdown(null);
+                    }}
+                  >
+                    View About Us
+                  </Link>
+                  <Link
+                    href="/showroom"
+                    className="block px-5 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setMobileDropdown(null);
+                    }}
+                  >
+                    Showroom
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-gray-100">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-3 text-base font-medium text-gray-800"
+                onClick={() => toggleMobileDropdown("services")}
+                aria-expanded={isDropdownOpen("services")}
+                aria-label="Toggle Services submenu"
+              >
+                <span>Services We Offer</span>
+                <FaChevronDown className={`text-xs transition-transform ${isDropdownOpen("services") ? "rotate-180" : ""}`} />
+              </button>
+              {isDropdownOpen("services") && (
+                <div className="pb-2">
+                  <Link
+                    href="/services"
+                    className="block px-5 py-2.5 text-sm font-semibold text-[#8B1C1C] hover:bg-gray-50"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setMobileDropdown(null);
+                    }}
+                  >
+                    View All Services
+                  </Link>
+                  <Link
+                    href="/Featured"
+                    className="block px-5 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setMobileDropdown(null);
+                    }}
+                  >
+                    Featured Projects
+                  </Link>
+                  <Link
+                    href="/DeliveryProcess"
+                    className="block px-5 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setMobileDropdown(null);
+                    }}
+                  >
+                    Delivery & Ordering Process
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-gray-100">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-3 text-base font-medium text-gray-800"
+                onClick={() => toggleMobileDropdown("products")}
+                aria-expanded={isDropdownOpen("products")}
+                aria-label="Toggle Products submenu"
+              >
+                <span>Products</span>
+                <FaChevronDown className={`text-xs transition-transform ${isDropdownOpen("products") ? "rotate-180" : ""}`} />
+              </button>
+              {isDropdownOpen("products") && (
+                <div className="pb-2 grid grid-cols-2 gap-1 px-2">
+                  <Link
+                    href="/Product"
+                    className="col-span-2 rounded-md px-3 py-2 text-sm font-semibold text-[#8B1C1C] hover:bg-gray-50"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setMobileDropdown(null);
+                    }}
+                  >
+                    View All Products
+                  </Link>
+                  {[
+                    ["Doors", "/Product?category=Doors"],
+                    ["Enclosures", "/Product?category=Enclosure"],
+                    ["Windows", "/Product?category=Windows"],
+                    ["Railings", "/Product?category=Railings"],
+                    ["Canopy", "/Product?category=Canopy"],
+                    ["Curtain Wall", "/Product?category=Curtain Wall"],
+                  ].map(([label, href]) => (
+                    <Link
+                      key={label}
+                      href={href}
+                      className="rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        setMobileDropdown(null);
+                      }}
+                    >
+                      {label}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Link
+              href="/FAQs"
+              className="block rounded-lg px-3 py-3 text-base font-medium text-gray-800 hover:bg-gray-50"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                setMobileDropdown(null);
+              }}
+            >
+              FAQs
+            </Link>
+            <Link
+              href="/blogs"
+              className="block rounded-lg px-3 py-3 text-base font-medium text-gray-800 hover:bg-gray-50"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                setMobileDropdown(null);
+              }}
+            >
+              Blogs
+            </Link>
+          </div>
+        </nav>
+      )}
+
       {/* Contact Bar */}
       <div className="w-full bg-[#232d3b] text-white flex flex-col sm:flex-row items-center justify-center gap-4 py-2 px-2 text-xs sm:text-sm z-10">
         <div className="flex items-center gap-1">
-          <FaEnvelope className="text-base" /> grandeast.org@gmail.com
+          <FaEnvelope className="text-base" /> {chromeSettings.topNavContactEmail}
         </div>
         <span className="hidden sm:inline">|</span>
         <div className="flex items-center gap-1">
-          <FaThumbsUp className="text-base" /> Click here visit to our FB Page
+          <FaThumbsUp className="text-base" /> {chromeSettings.topNavFacebookText}
         </div>
         <span className="hidden sm:inline">|</span>
         <div className="flex items-center gap-1">
-          <FaPhone className="text-base" /> Smart | 09082810586 Globe (Viber) | 09277640475
+          <FaPhone className="text-base" /> {chromeSettings.topNavPhoneText}
         </div>
+      </div>
       </div>
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed top-20 right-4 z-50 bg-white rounded-lg shadow-xl border-l-4 border-[#8B1C1C] p-4 max-w-sm animate-slide-in">
+        <div className="fixed top-20 left-4 right-4 sm:left-auto sm:right-4 z-50 bg-white rounded-lg shadow-xl border-l-4 border-[#8B1C1C] p-4 max-w-sm animate-slide-in">
           <div className="flex items-start gap-3">
             <div className="text-2xl">🔔</div>
             <div className="flex-1">

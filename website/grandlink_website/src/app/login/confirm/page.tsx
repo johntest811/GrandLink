@@ -7,6 +7,8 @@ import { supabase } from "../../Clients/Supabase/SupabaseClients";
 // Ensure this page is rendered dynamically (no prerender), fixing Vercel build errors
 export const dynamic = "force-dynamic";
 
+const PENDING_VERIFICATION_KEY = "gl_pending_email_verification";
+
 export default function ConfirmLoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string>("");
@@ -18,7 +20,6 @@ export default function ConfirmLoginPage() {
         // Supabase sends a "code" param for magic links and password recovery
         const url = new URL(window.location.href);
         const code = url.searchParams.get("code");
-        const type = url.searchParams.get("type");
         const errParam = url.searchParams.get("error");
         const hash = window.location.hash || "";
 
@@ -30,9 +31,9 @@ export default function ConfirmLoginPage() {
 
         // Two possible flows depending on Supabase link version:
         // 1) New PKCE flow with ?code=... -> use exchangeCodeForSession
-        // 2) Older hash-based flow with #access_token=... -> use getSessionFromUrl
+        // 2) Older hash-based flow with #access_token=... -> use setSession
         if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          const { data, error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) {
             setError(error.message || "Failed to complete sign-in. Try again.");
             setWorking(false);
@@ -49,7 +50,7 @@ export default function ConfirmLoginPage() {
             return;
           }
 
-          const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+          const { data, error } = await supabase.auth.setSession({ access_token, refresh_token });
           if (error) {
             setError(error.message || "Failed to complete sign-in. Try again.");
             setWorking(false);
@@ -81,6 +82,11 @@ export default function ConfirmLoginPage() {
         sessionStorage.setItem("login_email", userEmail);
         sessionStorage.setItem("login_flow", "oauth");
 
+        // Mark that this session is pending email-code verification.
+        // We keep the Supabase session (no signOut) to avoid "Auth session missing" issues.
+        localStorage.setItem(PENDING_VERIFICATION_KEY, "1");
+        window.dispatchEvent(new Event("gl:pendingVerificationChanged"));
+
         // Send verification code
         const sendRes = await fetch("/api/auth/send-verification-code", {
           method: "POST",
@@ -96,7 +102,7 @@ export default function ConfirmLoginPage() {
         }
 
         router.replace("/login/verify");
-      } catch (e: any) {
+      } catch {
         setError("Failed to complete sign-in. Try again.");
         setWorking(false);
       }

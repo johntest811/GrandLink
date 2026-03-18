@@ -4,6 +4,9 @@ import { Suspense, useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { getMetaFulfillmentMethod } from "@/utils/fulfillment";
+
+const DELIVERY_FEE = 2599;
 import { FaCheckCircle, FaShoppingCart, FaArrowRight } from "react-icons/fa";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -36,13 +39,57 @@ function CartSuccessPageContent() {
   const router = useRouter();
   const source = searchParams.get("source");
   const ref = searchParams.get("ref");
+  const paypalOrderId = searchParams.get("token");
+  const paymentProvider = (searchParams.get("payment_provider") || "").toLowerCase();
+  const isPayPalReturn = Boolean(paypalOrderId) && (!paymentProvider || paymentProvider === "paypal");
   
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [products, setProducts] = useState<Record<string, Product>>({});
   const [loading, setLoading] = useState(true);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [paypalCaptureState, setPaypalCaptureState] = useState<"capturing" | "done">(
+    isPayPalReturn ? "capturing" : "done"
+  );
 
   useEffect(() => {
+    if (!isPayPalReturn || !paypalOrderId) {
+      setPaypalCaptureState("done");
+      return;
+    }
+
+    let cancelled = false;
+
+    const capturePayPalOrder = async () => {
+      setPaypalCaptureState("capturing");
+      try {
+        const response = await fetch("/api/paypal/capture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId: paypalOrderId }),
+        });
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          console.error("PayPal capture failed on return:", payload);
+        }
+      } catch (error) {
+        console.error("PayPal capture error on return:", error);
+      } finally {
+        if (!cancelled) {
+          setPaypalCaptureState("done");
+        }
+      }
+    };
+
+    capturePayPalOrder();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPayPalReturn, paypalOrderId]);
+
+  useEffect(() => {
+    if (paypalCaptureState === "capturing") return;
+
     const loadOrderDetails = async () => {
       try {
         // Get current user
@@ -53,7 +100,6 @@ function CartSuccessPageContent() {
         }
 
         const uid = userData.user.id;
-        setUserId(uid);
 
         // First try: use receipt_ref to fetch only the items from this transaction
         let scopedItems: any[] = [];
@@ -112,7 +158,7 @@ function CartSuccessPageContent() {
     };
 
     loadOrderDetails();
-  }, [router]);
+  }, [router, ref, source, paypalCaptureState]);
 
   // Fallback cleanup to ensure any cart rows tied to these reservations are removed
   useEffect(() => {
@@ -177,15 +223,34 @@ function CartSuccessPageContent() {
       if (discount === 0 && typeof meta.discount_value !== 'undefined') {
         discount = Number(meta.discount_value || 0);
       }
-      if (reservationFee === 0 && (meta.reservation_fee || meta.reservation_fee_share)) {
-        reservationFee = Number(meta.reservation_fee || 500);
-      }
+          if (
+            reservationFee === 0 &&
+            (typeof meta.reservation_fee !== "undefined" || typeof meta.reservation_fee_share !== "undefined")
+          ) {
+            const explicitFee = meta.reservation_fee;
+            if (explicitFee !== null && typeof explicitFee !== "undefined") {
+              reservationFee = Number(explicitFee);
+            } else if (getMetaFulfillmentMethod(meta) === "delivery") {
+              reservationFee = DELIVERY_FEE;
+            }
+          }
     });
 
     return { subtotal, addonsTotal, discount, reservationFee, total: grandTotal };
   };
 
   const totals = calculateTotals();
+  const primaryMeta = orderItems[0]?.meta || {};
+  const billingEmail =
+    primaryMeta?.billing_email ||
+    primaryMeta?.customer_email ||
+    orderItems[0]?.meta?.delivery_address?.email ||
+    null;
+  const billingPhone =
+    primaryMeta?.billing_phone ||
+    primaryMeta?.customer_phone ||
+    orderItems[0]?.meta?.delivery_address?.phone ||
+    null;
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
@@ -207,6 +272,14 @@ function CartSuccessPageContent() {
                 <FaShoppingCart className="text-[#8B1C1C]" />
                 Order Receipt
               </h2>
+
+              {(billingEmail || billingPhone) && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 text-sm text-blue-900">
+                  <div className="font-semibold">Invoice Destination</div>
+                  {billingEmail && <div>Email: {billingEmail}</div>}
+                  {billingPhone && <div>Phone: {billingPhone}</div>}
+                </div>
+              )}
               
               <div className="bg-gray-50 rounded-lg p-4 mb-4">
                 <div className="grid grid-cols-2 gap-4 text-sm">
@@ -229,7 +302,18 @@ function CartSuccessPageContent() {
                     <div className="font-semibold text-gray-900 capitalize">
                       {orderItems.length > 0 && orderItems[0].payment_method 
                         ? orderItems[0].payment_method === 'paymongo' 
-                          ? 'PayMongo (GCash/Maya/Card)' 
+                          ? (() => {
+                              const rawChannel = orderItems[0].meta?.paymongo_channel;
+                              const channel = rawChannel != null ? String(rawChannel) : '';
+                              const normalized = channel.trim().toLowerCase();
+
+                              // Hide card-related channels; checkout no longer offers card.
+                              if (normalized && ['card', 'credit', 'debit', 'credit_card', 'debit_card'].includes(normalized)) {
+                                return 'PayMongo';
+                              }
+
+                              return `PayMongo${normalized ? ` (${channel.toUpperCase()})` : ' (QRPH)'}`;
+                            })()
                           : 'PayPal'
                         : '-'}
                     </div>
@@ -323,7 +407,7 @@ function CartSuccessPageContent() {
                 )}
                 
                 <div className="flex justify-between text-gray-700">
-                  <span>Reservation Fee</span>
+                  <span>Delivery Fee</span>
                   <span className="font-semibold">₱{totals.reservationFee.toLocaleString()}</span>
                 </div>
                 

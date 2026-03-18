@@ -22,11 +22,23 @@ const DEFAULT_POSITIONS = [
   'Site Manager',
   'Media Handler',
   'Supervisor',
-  'Employee',
   'Manager',
   'Admin',
   'Superadmin',
 ];
+
+const normalizePosition = (value: unknown): string | null => {
+  const v = String(value ?? '').trim();
+  return v ? v : null;
+};
+
+const roleFromPosition = (position: string | null | undefined): AdminUser['role'] => {
+  const raw = String(position ?? '').trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (raw === 'superadmin') return 'superadmin';
+  if (raw === 'admin') return 'admin';
+  if (raw === 'manager') return 'manager';
+  return 'employee';
+};
 
 export default function AdminsPage() {
   const router = useRouter();
@@ -39,14 +51,14 @@ export default function AdminsPage() {
 
   // Positions list (for dropdowns)
   const [positionsList, setPositionsList] = useState<string[]>(DEFAULT_POSITIONS);
+  const [positionFilter, setPositionFilter] = useState<string>('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedAdminForPassword, setSelectedAdminForPassword] = useState<AdminUser | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [newAdmin, setNewAdmin] = useState({
     username: '',
-    position: 'Employee',
-    role: 'employee' as AdminUser['role'],
+    position: '',
     password: ''
   });
   const [editingAdmin, setEditingAdmin] = useState<AdminUser | null>(null);
@@ -80,6 +92,29 @@ export default function AdminsPage() {
   };
 
   const norm = (v?: string) => String(v || '').toLowerCase().replace(/[\s_-]/g, '');
+
+  const positionFilterOptions = useMemo(() => {
+    const unique = new Set<string>();
+
+    for (const p of positionsList) {
+      const v = String(p || '').trim();
+      if (v) unique.add(v);
+    }
+
+    for (const a of admins) {
+      const v = String(a.position || '').trim();
+      if (v) unique.add(v);
+    }
+
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [admins, positionsList]);
+
+  const filteredAdmins = useMemo(() => {
+    const f = String(positionFilter || '').trim();
+    if (!f) return admins;
+    const fNorm = norm(f);
+    return admins.filter((a) => norm(a.position || '') === fNorm);
+  }, [admins, positionFilter]);
   const isSuperadmin = useMemo(() => {
     const roleNorm = norm(currentAdmin?.role);
     const posNorm = norm(currentAdmin?.position);
@@ -187,21 +222,16 @@ export default function AdminsPage() {
       return;
     }
 
-    if (
-      String(newAdmin.role || '').toLowerCase().replace(/[\s_-]/g, '') === 'superadmin' &&
-      !isSuperadmin
-    ) {
-      alert('Only a superadmin can create another superadmin.');
-      return;
-    }
-
     try {
+      const position = normalizePosition(newAdmin.position);
+      const role = roleFromPosition(position);
+
       // Create admin (let DB generate uuid id)
       const payload = {
         username: newAdmin.username,
         password: newAdmin.password,
-        role: newAdmin.role,
-        position: newAdmin.position,
+        role,
+        position,
         is_active: true,
       };
       const { data: insertedRow, error: insertError } = await supabase
@@ -216,19 +246,27 @@ export default function AdminsPage() {
       // Match Settings page: create notification record
       await supabase.from('notifications').insert({
         title: 'Admin created',
-        message: `Admin "${newAdmin.username}" created with role "${newAdmin.role}".`,
+        message: `Admin "${newAdmin.username}" created with position "${position || '—'}".`,
         type: 'general',
         recipient_role: 'admin',
         metadata: { created_by: currentAdmin?.username || 'system', admin_id: createdId || undefined },
       });
 
       setShowAddModal(false);
-      setNewAdmin({ username: '', position: 'Employee', role: 'employee', password: '' });
+      setNewAdmin({ username: '', position: '', password: '' });
       await loadAdmins();
       alert('Admin account created.');
     } catch (error: any) {
       console.error('Error adding admin:', error);
-      alert(`Error: ${error.message}`);
+      const message = String(error?.message || 'Unknown error');
+      if (message.includes('admins_position_check')) {
+        alert(
+          'Error: Selected position is not allowed by the database constraint (admins_position_check).\n\n' +
+            'Fix: update/remove the DB check constraint for admins.position in Supabase to allow your employee positions.'
+        );
+        return;
+      }
+      alert(`Error: ${message}`);
     }
   };
 
@@ -240,9 +278,16 @@ export default function AdminsPage() {
     }
 
     try {
+      const nextUpdates: Partial<AdminUser> = { ...updates };
+      if (Object.prototype.hasOwnProperty.call(updates, 'position')) {
+        const position = normalizePosition(updates.position);
+        nextUpdates.position = position;
+        nextUpdates.role = roleFromPosition(position);
+      }
+
       const { error } = await supabase
         .from('admins')
-        .update(updates)
+        .update(nextUpdates)
         .eq('id', adminId);
 
       if (error) throw error;
@@ -260,7 +305,7 @@ export default function AdminsPage() {
         page: "admins",
         metadata: {
           updatedAdmin: adminToUpdate?.username,
-          updates
+          updates: nextUpdates
         }
       });
 
@@ -268,7 +313,15 @@ export default function AdminsPage() {
       setEditingAdmin(null);
     } catch (error: any) {
       console.error('Error updating admin:', error);
-      alert(`Error: ${error.message}`);
+      const message = String(error?.message || 'Unknown error');
+      if (message.includes('admins_position_check')) {
+        alert(
+          'Error: Selected position is not allowed by the database constraint (admins_position_check).\n\n' +
+            'Fix: update/remove the DB check constraint for admins.position in Supabase to allow your employee positions.'
+        );
+        return;
+      }
+      alert(`Error: ${message}`);
     }
   };
 
@@ -364,20 +417,37 @@ export default function AdminsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-center">
         <h1 className="text-3xl font-bold text-gray-900">Admin & Employee Accounts</h1>
-        <button
-          onClick={() => setShowAddModal(true)}
-          disabled={!isSuperadmin}
-          className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
-        >
-          Add New Account
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-gray-700">Position</label>
+            <select
+              value={positionFilter}
+              onChange={(e) => setPositionFilter(e.target.value)}
+              className="bg-white border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="">All</option>
+              {positionFilterOptions.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={() => setShowAddModal(true)}
+            disabled={!isSuperadmin}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Add New Account
+          </button>
+        </div>
       </div>
 
       {/* Admin Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {admins.map((admin) => (
+        {filteredAdmins.map((admin) => (
           <div key={admin.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-3">
@@ -508,25 +578,12 @@ export default function AdminsPage() {
                   onChange={(e) => setNewAdmin({ ...newAdmin, position: e.target.value })}
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                 >
+                  <option value="">Select a position…</option>
                   {ensurePositionOptions(newAdmin.position).map((p) => (
                     <option key={p} value={p}>
                       {p}
                     </option>
                   ))}
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-900">Role</label>
-                <select
-                  value={newAdmin.role}
-                  onChange={(e) => setNewAdmin({...newAdmin, role: e.target.value as AdminUser['role']})}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value="employee">Employee</option>
-                  <option value="manager">Manager</option>
-                  <option value="admin">Admin</option>
-                  {isSuperadmin && <option value="superadmin">Superadmin</option>}
                 </select>
               </div>
               
@@ -604,7 +661,6 @@ export default function AdminsPage() {
               handleUpdateAdmin(editingAdmin.id, {
                 username: editingAdmin.username,
                 position: editingAdmin.position,
-                role: editingAdmin.role
               });
             }} className="space-y-4">
               <div>
@@ -625,25 +681,12 @@ export default function AdminsPage() {
                   onChange={(e) => setEditingAdmin({ ...editingAdmin, position: e.target.value })}
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                 >
+                  <option value="">Select a position…</option>
                   {ensurePositionOptions(editingAdmin.position).map((p) => (
                     <option key={p} value={p}>
                       {p}
                     </option>
                   ))}
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-900">Role</label>
-                <select
-                  value={editingAdmin.role}
-                  onChange={(e) => setEditingAdmin({...editingAdmin, role: e.target.value as any})}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value="employee">Employee</option>
-                  <option value="manager">Manager</option>
-                  <option value="admin">Admin</option>
-                  <option value="superadmin">Superadmin</option>
                 </select>
               </div>
               

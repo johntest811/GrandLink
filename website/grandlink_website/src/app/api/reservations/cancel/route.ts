@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
 
     const now = new Date().toISOString();
     const meta = { ...(item.meta || {}) } as Record<string, any>;
-    const reservationFee = Number(meta.reservation_fee ?? item.reservation_fee ?? 500);
+    const reservationFee = Number(meta.reservation_fee ?? item.reservation_fee ?? 2599);
     const inventoryReserved = Boolean(meta.inventory_reserved);
 
     let restoredInventory = false;
@@ -84,7 +84,6 @@ export async function POST(request: NextRequest) {
       .update({
         status: 'cancelled',
         order_status: 'cancelled',
-        order_progress: 'cancelled',
         payment_status: meta.payment_status === 'completed' ? 'refund_pending' : meta.payment_status ?? 'pending',
         meta,
         updated_at: now,

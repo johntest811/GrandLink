@@ -1,0 +1,2144 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
+import { FBXLoader, GLTFLoader, OrbitControls } from "three-stdlib";
+import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+
+function getUrlExtension(url: string): string {
+  const clean = (url || "").split("?")[0].split("#")[0];
+  const lastDot = clean.lastIndexOf(".");
+  if (lastDot === -1) return "";
+  return clean.slice(lastDot + 1).toLowerCase();
+}
+
+type WeatherKey = "sunny" | "rainy" | "night" | "foggy";
+type SkyboxKey = WeatherKey | "default";
+
+type ModelUnits = "mm" | "cm" | "m";
+type FrameFinish = "default" | "matteBlack" | "matteGray" | "narra" | "walnut";
+
+const FRAME_FINISH_PRESETS: Record<Exclude<FrameFinish, "default">, { color: number; roughness: number; metalness: number }> = {
+  matteBlack: { color: 0x1b1b1b, roughness: 0.82, metalness: 0.06 },
+  matteGray: { color: 0x6b6b6b, roughness: 0.82, metalness: 0.06 },
+  narra: { color: 0x8a4b2a, roughness: 0.72, metalness: 0.05 },
+  walnut: { color: 0x5b3a29, roughness: 0.72, metalness: 0.05 },
+};
+
+type MaterialSnapshot = {
+  colorHex?: number;
+  roughness?: number;
+  metalness?: number;
+  map?: THREE.Texture | null;
+  transparent?: boolean;
+  opacity?: number;
+};
+
+type WeatherMaterialSnapshot = {
+  roughness?: number;
+  metalness?: number;
+  envMapIntensity?: number;
+};
+
+export type ThreeDModelViewerProps = {
+  modelUrls: string[];
+  modelFileNames?: Array<string | null | undefined>;
+  houseModelUrl?: string | null;
+  productCategory?: string | null;
+  initialIndex?: number;
+  weather: WeatherKey;
+  frameFinish?: FrameFinish;
+  onFrameFinishChange?: (finish: FrameFinish) => void;
+  skyboxes?: Partial<Record<SkyboxKey, string | null>> | null;
+  productDimensions?: {
+    width?: number | string | null;
+    height?: number | string | null;
+    thickness?: number | string | null;
+    units?: ModelUnits | null;
+  };
+  width?: number;
+  height?: number;
+};
+
+function mmPerUnit(units: ModelUnits): number {
+  switch (units) {
+    case "mm":
+      return 1;
+    case "cm":
+      return 10;
+    case "m":
+      return 1000;
+  }
+}
+
+function formatLength(valueMm: number, displayUnits: ModelUnits): string {
+  if (!Number.isFinite(valueMm)) return "—";
+  const divisor = mmPerUnit(displayUnits);
+  const value = valueMm / divisor;
+
+  let rounded: number;
+  if (displayUnits === "mm") {
+    const abs = Math.abs(value);
+    rounded = abs >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  } else if (displayUnits === "cm") {
+    rounded = Math.round(value * 10) / 10;
+  } else {
+    rounded = Math.round(value * 100) / 100;
+  }
+
+  return `${rounded.toLocaleString()} ${displayUnits}`;
+}
+
+function parseDimensionToMm(value: unknown, defaultUnits: ModelUnits): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value * mmPerUnit(defaultUnits) : null;
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const m = raw.match(/^(-?\d+(?:\.\d+)?)(?:\s*(mm|cm|m))?$/i);
+  if (!m) return null;
+
+  const num = Number.parseFloat(m[1]);
+  if (!Number.isFinite(num)) return null;
+
+  const units = (m[2]?.toLowerCase() as ModelUnits | undefined) ?? defaultUnits;
+  return num * mmPerUnit(units);
+}
+
+function normalizeCategoryKey(input: unknown): string {
+  const s = String(input ?? "").trim().toLowerCase();
+  if (!s) return "";
+  const key = s
+    .replace(/\s+/g, " ")
+    .replace(/[-_]/g, " ")
+    .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+
+  if (key.includes("door")) return "doors";
+  if (key.includes("window")) return "windows";
+  if (key.includes("enclosure") || key.includes("enclosures")) return "enclosure";
+  if (key.includes("railing") || key.includes("railings")) return "railings";
+  if (key.includes("canopy")) return "canopy";
+  if (key.includes("curtain") || key.includes("curtainwall") || key.includes("curtainwalls")) return "curtainwall";
+  return key;
+}
+
+function resolveSkyboxUrl(
+  skyboxes: Partial<Record<SkyboxKey, string | null>> | null | undefined,
+  weather: WeatherKey
+): string {
+  if (!skyboxes || typeof skyboxes !== "object") return "";
+  const customSkybox = skyboxes[weather];
+  const defaultSkybox = skyboxes.default;
+  const rawUrl = customSkybox || defaultSkybox;
+  return typeof rawUrl === "string" ? rawUrl.trim() : "";
+}
+
+export default function ThreeDModelViewer({
+  modelUrls,
+  modelFileNames,
+  houseModelUrl,
+  productCategory,
+  initialIndex,
+  weather,
+  frameFinish: frameFinishProp = "default",
+  onFrameFinishChange,
+  skyboxes,
+  productDimensions,
+  width = 1200,
+  height = 700,
+}: ThreeDModelViewerProps) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [currentFbxIndex, setCurrentFbxIndex] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [showMeasurements, setShowMeasurements] = useState(true);
+  const [showBaseplate, setShowBaseplate] = useState(true);
+  const [showShadows, setShowShadows] = useState(true);
+  const [showHouseContext, setShowHouseContext] = useState(false);
+  const [modelUnits, setModelUnits] = useState<ModelUnits>("mm");
+  const [frameFinishUi, setFrameFinishUi] = useState<FrameFinish>(frameFinishProp);
+  const [dimsMm, setDimsMm] = useState<{ width: number; height: number; thickness: number } | null>(null);
+
+  const frameFinishUiRef = useRef<FrameFinish>(frameFinishProp);
+
+  const frameMaterialsRef = useRef<THREE.Material[]>([]);
+  const finishMaterialsRef = useRef<THREE.Material[]>([]);
+  const frameMaterialSnapshotsRef = useRef<WeakMap<THREE.Material, MaterialSnapshot>>(new WeakMap());
+  const labelElsRef = useRef<{ w?: HTMLDivElement; h?: HTMLDivElement; t?: HTMLDivElement }>({});
+  const originalSizeRef = useRef<THREE.Vector3 | null>(null);
+  const showMeasurementsRef = useRef<boolean>(true);
+  const modelUnitsRef = useRef<ModelUnits>("mm");
+  const assumedModelUnitsRef = useRef<ModelUnits>("m");
+
+  const showBaseplateRef = useRef<boolean>(true);
+  const showShadowsRef = useRef<boolean>(true);
+  const updateGroundRef = useRef<(() => void) | null>(null);
+  const updateShadowsRef = useRef<(() => void) | null>(null);
+
+  const weatherRef = useRef<WeatherKey>(weather);
+  const skyboxesRef = useRef<ThreeDModelViewerProps["skyboxes"]>(skyboxes ?? null);
+  const applyWeatherRef = useRef<((type: WeatherKey) => void) | null>(null);
+
+  const validUrls = useMemo(
+    () => (Array.isArray(modelUrls) ? modelUrls.filter((u) => typeof u === "string" && u.trim()) : []),
+    [modelUrls]
+  );
+
+  useEffect(() => {
+    if (!Number.isFinite(initialIndex as any)) return;
+    if (!validUrls.length) return;
+    const clamped = Math.max(0, Math.min(validUrls.length - 1, Number(initialIndex) || 0));
+    setCurrentFbxIndex(clamped);
+  }, [initialIndex, validUrls.length]);
+
+  const currentUrl = validUrls[currentFbxIndex] || validUrls[0] || "";
+  const currentFileName = modelFileNames?.[currentFbxIndex] || modelFileNames?.[0] || "";
+  const resolvedHouseModelUrl = useMemo(() => {
+    if (!houseModelUrl || typeof houseModelUrl !== "string") return null;
+    const trimmed = houseModelUrl.trim();
+    return trimmed ? trimmed : null;
+  }, [houseModelUrl]);
+
+  const categoryKey = useMemo(() => normalizeCategoryKey(productCategory), [productCategory]);
+
+  const productDimsMm = useMemo(() => {
+    const defaultUnits = (productDimensions?.units ?? "mm") as ModelUnits;
+    const w = parseDimensionToMm(productDimensions?.width, defaultUnits);
+    const h = parseDimensionToMm(productDimensions?.height, defaultUnits);
+    const t = parseDimensionToMm(productDimensions?.thickness, defaultUnits);
+    if (w === null || h === null || t === null) return null;
+    return { width: w, height: h, thickness: t };
+  }, [productDimensions?.width, productDimensions?.height, productDimensions?.thickness, productDimensions?.units]);
+
+  const usesProductDimensions = !!productDimsMm;
+
+  useEffect(() => {
+    showMeasurementsRef.current = showMeasurements;
+  }, [showMeasurements]);
+
+  useEffect(() => {
+    showBaseplateRef.current = showBaseplate;
+    updateGroundRef.current?.();
+  }, [showBaseplate]);
+
+  useEffect(() => {
+    showShadowsRef.current = showShadows;
+    updateShadowsRef.current?.();
+    updateGroundRef.current?.();
+  }, [showShadows]);
+
+  useEffect(() => {
+    modelUnitsRef.current = modelUnits;
+
+    if (usesProductDimensions && productDimsMm) {
+      setDimsMm(productDimsMm);
+    }
+
+    const s = originalSizeRef.current;
+    if (s && labelElsRef.current) {
+      const mpuNow = mmPerUnit(assumedModelUnitsRef.current);
+      const computedMm = {
+        width: s.x * mpuNow,
+        height: s.y * mpuNow,
+        thickness: s.z * mpuNow,
+      };
+      const displayMm = productDimsMm ?? computedMm;
+      setDimsMm(displayMm);
+
+      try {
+        if (labelElsRef.current.w) labelElsRef.current.w.textContent = formatLength(displayMm.width, modelUnits);
+        if (labelElsRef.current.h) labelElsRef.current.h.textContent = formatLength(displayMm.height, modelUnits);
+        if (labelElsRef.current.t) labelElsRef.current.t.textContent = formatLength(displayMm.thickness, modelUnits);
+      } catch {}
+    }
+  }, [modelUnits, usesProductDimensions, productDimsMm]);
+
+  useEffect(() => {
+    weatherRef.current = weather;
+    applyWeatherRef.current?.(weather);
+  }, [weather]);
+
+  useEffect(() => {
+    skyboxesRef.current = skyboxes ?? null;
+    applyWeatherRef.current?.(weatherRef.current);
+  }, [skyboxes]);
+
+  useEffect(() => {
+    setFrameFinishUi(frameFinishProp);
+  }, [frameFinishProp]);
+
+  useEffect(() => {
+    frameFinishUiRef.current = frameFinishUi;
+  }, [frameFinishUi]);
+
+  const applyFrameFinishToTargets = (finish: FrameFinish) => {
+    const materials = finishMaterialsRef.current || [];
+    const frameMaterials = frameMaterialsRef.current || [];
+    const snapshots = frameMaterialSnapshotsRef.current;
+    if (!materials.length) return;
+
+    if (finish === "default") {
+      for (const mat of materials) {
+        const snap = snapshots.get(mat);
+        const m: any = mat as any;
+        if (!snap || !m) continue;
+        try {
+          if (m.color && typeof snap.colorHex === "number") m.color.setHex(snap.colorHex);
+        } catch {}
+        try {
+          if (typeof snap.roughness === "number" && typeof m.roughness === "number") m.roughness = snap.roughness;
+        } catch {}
+        try {
+          if (typeof snap.metalness === "number" && typeof m.metalness === "number") m.metalness = snap.metalness;
+        } catch {}
+        try {
+          if ("map" in m) m.map = snap.map ?? null;
+        } catch {}
+        try {
+          if (typeof snap.transparent === "boolean") m.transparent = snap.transparent;
+          if (typeof snap.opacity === "number") m.opacity = snap.opacity;
+        } catch {}
+        try {
+          m.needsUpdate = true;
+        } catch {}
+      }
+      return;
+    }
+
+    const preset = FRAME_FINISH_PRESETS[finish];
+    if (!preset) return;
+
+    // Tint all non-glass materials so the overall finish follows the product setting.
+    for (const mat of materials) {
+      const m: any = mat as any;
+      if (!m) continue;
+      try {
+        if (m.color && typeof m.color.set === "function") m.color.set(preset.color);
+      } catch {}
+      try {
+        if (typeof m.roughness === "number") m.roughness = preset.roughness;
+      } catch {}
+      try {
+        if (typeof m.metalness === "number") m.metalness = preset.metalness;
+      } catch {}
+      try {
+        m.needsUpdate = true;
+      } catch {}
+    }
+
+    // Force solid color finish for detected frame materials only.
+    for (const mat of frameMaterials) {
+      const m: any = mat as any;
+      if (!m) continue;
+      try {
+        if ("map" in m) m.map = null;
+      } catch {}
+      try {
+        m.transparent = false;
+        m.opacity = 1;
+      } catch {}
+      try {
+        m.needsUpdate = true;
+      } catch {}
+    }
+  };
+
+  useEffect(() => {
+    applyFrameFinishToTargets(frameFinishUiRef.current);
+  }, [frameFinishUi]);
+
+  const storageKey = useMemo(() => (currentUrl ? `gl:fbxUnits:${currentUrl}` : ""), [currentUrl]);
+
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const u = raw === "mm" || raw === "cm" || raw === "m" ? (raw as ModelUnits) : null;
+      if (u) assumedModelUnitsRef.current = u;
+    } catch {}
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!mountRef.current || !currentUrl) return;
+
+    setLoading(true);
+
+    try {
+      const anyTHREE: any = THREE;
+      if (anyTHREE.ColorManagement && "enabled" in anyTHREE.ColorManagement) {
+        anyTHREE.ColorManagement.enabled = true;
+      }
+    } catch {}
+
+    const hwConcurrency = (navigator as any).hardwareConcurrency || 4;
+    const deviceDpr = window.devicePixelRatio || 1;
+
+    const dprForPerf = Math.min(deviceDpr, 1.5);
+    const performanceFactor = Math.min(1, hwConcurrency / 4) * (1 / dprForPerf);
+    const isLowEnd = hwConcurrency < 4 || performanceFactor < 0.5;
+    const detailLevel = isLowEnd ? 0.5 : performanceFactor > 0.8 ? 1.0 : 0.75;
+
+    const dpr = Math.min(deviceDpr, isLowEnd ? 1.25 : 2);
+
+    const BASE_RAIN = Math.round(8000 * performanceFactor);
+    const STORM_RAIN = Math.round(22000 * performanceFactor);
+    const BASE_WIND = Math.round(300 * performanceFactor);
+    const STRONG_WIND = Math.round(600 * performanceFactor);
+
+    const container = mountRef.current;
+    const renderWidth = Math.floor(container.clientWidth || width);
+    const renderHeight = Math.floor(container.clientHeight || height);
+
+    while (container.firstChild) container.removeChild(container.firstChild);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb);
+
+    const camera = new THREE.PerspectiveCamera(50, renderWidth / renderHeight, 0.1, 2000);
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: !isLowEnd,
+      alpha: false,
+      powerPreference: isLowEnd ? "low-power" : "high-performance",
+      logarithmicDepthBuffer: !isLowEnd,
+      preserveDrawingBuffer: false,
+      premultipliedAlpha: false,
+    });
+    renderer.setSize(renderWidth, renderHeight);
+    renderer.setPixelRatio(dpr);
+
+    renderer.shadowMap.enabled = true;
+    if (!isLowEnd) {
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    } else {
+      renderer.shadowMap.type = THREE.BasicShadowMap;
+    }
+
+    try {
+      const anyTHREE: any = THREE;
+      if ("outputColorSpace" in renderer && anyTHREE.SRGBColorSpace !== undefined) {
+        (renderer as any).outputColorSpace = anyTHREE.SRGBColorSpace;
+      } else if ("outputEncoding" in renderer && anyTHREE.sRGBEncoding !== undefined) {
+        (renderer as any).outputEncoding = anyTHREE.sRGBEncoding;
+      }
+    } catch {}
+    if ("physicallyCorrectLights" in renderer) (renderer as any).physicallyCorrectLights = true;
+
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    container.appendChild(renderer.domElement);
+
+    let labelRenderer: CSS2DRenderer | null = null;
+    try {
+      labelRenderer = new CSS2DRenderer();
+      labelRenderer.setSize(renderWidth, renderHeight);
+      labelRenderer.domElement.style.position = "absolute";
+      labelRenderer.domElement.style.top = "0px";
+      labelRenderer.domElement.style.left = "0px";
+      labelRenderer.domElement.style.pointerEvents = "none";
+      container.appendChild(labelRenderer.domElement);
+    } catch {
+      labelRenderer = null;
+    }
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.target.set(0, 0, 0);
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.enableRotate = true;
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambient);
+
+    const sunLight = new THREE.DirectionalLight(0xfff1c0, 2.0);
+    sunLight.position.set(100, 150, 50);
+    sunLight.castShadow = true;
+
+    const shadowMapSize = isLowEnd ? 1024 : detailLevel > 0.75 ? 4096 : 2048;
+    sunLight.shadow.mapSize.width = shadowMapSize;
+    sunLight.shadow.mapSize.height = shadowMapSize;
+    sunLight.shadow.camera.near = 0.1;
+    sunLight.shadow.camera.far = 1000;
+    sunLight.shadow.camera.left = -200;
+    sunLight.shadow.camera.right = 200;
+    sunLight.shadow.camera.top = 200;
+    sunLight.shadow.camera.bottom = -200;
+    sunLight.shadow.bias = -0.0001;
+    sunLight.shadow.normalBias = 0.02;
+    sunLight.shadow.radius = isLowEnd ? 2 : 8;
+    scene.add(sunLight);
+
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    fillLight.position.set(-80, 100, 80);
+    fillLight.castShadow = !isLowEnd;
+    if (!isLowEnd) {
+      fillLight.shadow.mapSize.width = 1024;
+      fillLight.shadow.mapSize.height = 1024;
+      fillLight.shadow.camera.near = 0.1;
+      fillLight.shadow.camera.far = 500;
+      fillLight.shadow.camera.left = -100;
+      fillLight.shadow.camera.right = 100;
+      fillLight.shadow.camera.top = 100;
+      fillLight.shadow.camera.bottom = -100;
+      fillLight.shadow.bias = -0.0002;
+      fillLight.shadow.normalBias = 0.015;
+      fillLight.shadow.radius = 4;
+    }
+    scene.add(fillLight);
+
+    if (!isLowEnd) {
+      const rimLight1 = new THREE.DirectionalLight(0xccddff, 0.8);
+      rimLight1.position.set(0, 50, -150);
+      scene.add(rimLight1);
+
+      const rimLight2 = new THREE.DirectionalLight(0xffeecc, 0.6);
+      rimLight2.position.set(150, 80, 0);
+      scene.add(rimLight2);
+    }
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+    hemi.position.set(0, 200, 0);
+    scene.add(hemi);
+
+    scene.environment = null;
+
+    const groundGeometry = new THREE.PlaneGeometry(1, 1);
+    const baseplateMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf3f4f6,
+      roughness: 0.95,
+      metalness: 0,
+    });
+    const shadowCatcherMaterial = new THREE.ShadowMaterial({ opacity: 0.28 });
+    shadowCatcherMaterial.transparent = true;
+    try {
+      (shadowCatcherMaterial as any).depthWrite = false;
+    } catch {}
+
+    const groundPlane = new THREE.Mesh<THREE.PlaneGeometry, THREE.Material>(groundGeometry, baseplateMaterial);
+    groundPlane.rotation.x = -Math.PI / 2;
+    groundPlane.position.set(0, -0.02, 0);
+    groundPlane.receiveShadow = true;
+    groundPlane.visible = true;
+    scene.add(groundPlane);
+
+    let modelRootForShadows: THREE.Object3D | null = null;
+    const setModelShadowFlags = (enabled: boolean) => {
+      if (!modelRootForShadows) return;
+      try {
+        modelRootForShadows.traverse((obj: any) => {
+          if (!obj || !obj.isMesh) return;
+          obj.castShadow = enabled;
+          obj.receiveShadow = enabled;
+        });
+      } catch {}
+    };
+
+    const updateGround = () => {
+      const base = !!showBaseplateRef.current;
+      const shadows = !!showShadowsRef.current;
+
+      if (base) {
+        groundPlane.visible = true;
+        if (groundPlane.material !== baseplateMaterial) {
+          groundPlane.material = baseplateMaterial;
+        }
+        groundPlane.receiveShadow = shadows;
+        baseplateMaterial.needsUpdate = true;
+      } else if (shadows) {
+        groundPlane.visible = true;
+        if (groundPlane.material !== shadowCatcherMaterial) {
+          groundPlane.material = shadowCatcherMaterial;
+        }
+        groundPlane.receiveShadow = true;
+        shadowCatcherMaterial.needsUpdate = true;
+      } else {
+        groundPlane.visible = false;
+      }
+    };
+
+    const updateShadowsNow = () => {
+      const enabled = !!showShadowsRef.current;
+
+      try {
+        renderer.shadowMap.enabled = enabled;
+        renderer.shadowMap.needsUpdate = true;
+      } catch {}
+      try {
+        sunLight.castShadow = enabled;
+      } catch {}
+      try {
+        fillLight.castShadow = enabled && !isLowEnd;
+      } catch {}
+
+      setModelShadowFlags(enabled);
+      updateGround();
+    };
+
+    updateGroundRef.current = updateGround;
+    updateShadowsRef.current = updateShadowsNow;
+    updateShadowsNow();
+
+    let skyboxTex: THREE.Texture | null = null;
+    let activeSkyboxUrl: string | null = null;
+
+    const setTexColorSpace = (tex: any) => {
+      const anyTHREE: any = THREE;
+      if (!tex) return;
+      if ("colorSpace" in tex && anyTHREE.SRGBColorSpace !== undefined) {
+        tex.colorSpace = anyTHREE.SRGBColorSpace;
+      } else if ("encoding" in tex && anyTHREE.sRGBEncoding !== undefined) {
+        tex.encoding = anyTHREE.sRGBEncoding;
+      }
+    };
+
+    const createWindTexture = () => {
+      const size = 64;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d")!;
+      ctx.clearRect(0, 0, size, size);
+
+      const grd = ctx.createLinearGradient(0, size / 2, size, size / 2);
+      grd.addColorStop(0, "rgba(220,230,255,0.0)");
+      grd.addColorStop(0.3, "rgba(200,220,255,0.6)");
+      grd.addColorStop(0.7, "rgba(180,200,255,0.8)");
+      grd.addColorStop(1, "rgba(160,180,255,0.0)");
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, size / 2 - 2, size, 4);
+
+      ctx.strokeStyle = "rgba(190,210,255,0.4)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, size / 2 - 1);
+      ctx.quadraticCurveTo(size / 2, size / 2 + 2, size, size / 2 - 1);
+      ctx.stroke();
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.needsUpdate = true;
+      return tex;
+    };
+
+    const windTexture = createWindTexture();
+
+    let rainSystem: THREE.LineSegments | null = null;
+    let rainVelY: Float32Array | null = null;
+    let rainVelX: Float32Array | null = null;
+    let rainLen: Float32Array | null = null;
+    let rainSwirlPhase: Float32Array | null = null;
+    let rainSwirlRadius: Float32Array | null = null;
+    let rainBaseX: Float32Array | null = null;
+    let rainBaseZ: Float32Array | null = null;
+    let rainArea:
+      | {
+          minX: number;
+          maxX: number;
+          minY: number;
+          maxY: number;
+          minZ: number;
+          maxZ: number;
+        }
+      | null = null;
+    const rainBaseOpacity = 0.6;
+    let windSystem: THREE.Points | null = null;
+    let windVel: Float32Array | null = null;
+    let windLifetime: Float32Array | null = null;
+    const windBaseOpacity = 0.3;
+    let splashSystem: THREE.Points | null = null;
+    let splashVelY: Float32Array | null = null;
+    let splashLifetime: Float32Array | null = null;
+    let splashArea: { minX: number; maxX: number; minZ: number; maxZ: number; groundY: number } | null = null;
+    let lightningFlash = 0;
+    let activeWeather: WeatherKey = weatherRef.current;
+
+    const lightingBase = {
+      ambient: 0.45,
+      hemi: 0.6,
+      fill: 0.6,
+      sun: 2.2,
+      exposure: 1.12,
+    };
+
+    const weatherMaterialSnapshots = new WeakMap<THREE.Material, WeatherMaterialSnapshot>();
+
+    let modelBounds: THREE.Box3 | null = null;
+    let modelGroupForPlacement: THREE.Group | null = null;
+    let measurementGroup: THREE.Group | null = null;
+
+    const disposeMeasurementGroup = () => {
+      if (!measurementGroup) return;
+      try {
+        measurementGroup.traverse((obj: any) => {
+          if (obj.geometry) {
+            try {
+              obj.geometry.dispose();
+            } catch {}
+          }
+          if (obj.material) {
+            if (Array.isArray(obj.material)) {
+              obj.material.forEach((m: any) => {
+                try {
+                  m.dispose();
+                } catch {}
+              });
+            } else {
+              try {
+                obj.material.dispose();
+              } catch {}
+            }
+          }
+        });
+      } catch {}
+      try {
+        scene.remove(measurementGroup);
+      } catch {}
+      measurementGroup = null;
+    };
+
+    const makeLabel = (initialText: string, kind: "w" | "h" | "t") => {
+      const el = document.createElement("div");
+      el.textContent = initialText;
+      el.style.padding = "6px 10px";
+      el.style.borderRadius = "999px";
+      el.style.background = "rgba(15, 23, 42, 0.78)";
+      el.style.color = "white";
+      el.style.fontSize = "12px";
+      el.style.fontWeight = "600";
+      el.style.letterSpacing = "0.2px";
+      el.style.whiteSpace = "nowrap";
+      el.style.boxShadow = "0 6px 18px rgba(0,0,0,0.25)";
+      el.style.backdropFilter = "blur(6px)";
+      labelElsRef.current[kind] = el;
+      return new CSS2DObject(el);
+    };
+
+    const addDimension = (opts: {
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+      extAStart?: THREE.Vector3;
+      extAEnd?: THREE.Vector3;
+      extBStart?: THREE.Vector3;
+      extBEnd?: THREE.Vector3;
+      tickDir: THREE.Vector3;
+      label: CSS2DObject;
+      color?: number;
+    }) => {
+      const color = opts.color ?? 0x1e88e5;
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const group = new THREE.Group();
+
+      const mkLine = (a: THREE.Vector3, b: THREE.Vector3) => {
+        const dir = b.clone().sub(a);
+        const len = dir.length();
+        if (!Number.isFinite(len) || len <= 1e-6) return;
+
+        const radius = THREE.MathUtils.clamp(len * 0.01, 0.06, 0.28);
+        const geom = new THREE.CylinderGeometry(radius, radius, len, 10, 1, true);
+        const mesh = new THREE.Mesh(geom, mat);
+
+        const mid = a.clone().add(b).multiplyScalar(0.5);
+        mesh.position.copy(mid);
+        const axis = new THREE.Vector3(0, 1, 0);
+        const quat = new THREE.Quaternion().setFromUnitVectors(axis, dir.clone().normalize());
+        mesh.quaternion.copy(quat);
+
+        mesh.renderOrder = 3;
+        group.add(mesh);
+      };
+
+      mkLine(opts.start, opts.end);
+      if (opts.extAStart && opts.extAEnd) mkLine(opts.extAStart, opts.extAEnd);
+      if (opts.extBStart && opts.extBEnd) mkLine(opts.extBStart, opts.extBEnd);
+
+      const tickLen = opts.start.distanceTo(opts.end) * 0.03;
+      const tick = opts.tickDir.clone().normalize().multiplyScalar(Math.max(1.5, tickLen));
+      mkLine(opts.start.clone().add(tick), opts.start.clone().sub(tick));
+      mkLine(opts.end.clone().add(tick), opts.end.clone().sub(tick));
+
+      const mid = opts.start.clone().add(opts.end).multiplyScalar(0.5);
+      opts.label.position.copy(mid);
+      group.add(opts.label);
+
+      return group;
+    };
+
+    let frameCounter = 0;
+    let lastFrameMs = performance.now();
+
+    const computeRainArea = () => {
+      if (modelBounds) {
+        const center = modelBounds.getCenter(new THREE.Vector3());
+        const size = modelBounds.getSize(new THREE.Vector3());
+        const spanX = Math.max(size.x * 2.4, 120);
+        const spanZ = Math.max(size.z * 2.4, 120);
+        const height = Math.max(size.y * 2.6, 200);
+        const padY = Math.max(size.y * 0.6, 40);
+
+        return {
+          minX: center.x - spanX * 0.5,
+          maxX: center.x + spanX * 0.5,
+          minY: center.y - padY,
+          maxY: center.y + height * 0.5,
+          minZ: center.z - spanZ * 0.5,
+          maxZ: center.z + spanZ * 0.5,
+        };
+      }
+
+      return {
+        minX: -110,
+        maxX: 110,
+        minY: -40,
+        maxY: 170,
+        minZ: -110,
+        maxZ: 110,
+      };
+    };
+
+    const applyWeather = (type: WeatherKey) => {
+      activeWeather = type;
+
+      if (rainSystem) {
+        try {
+          scene.remove(rainSystem);
+          rainSystem.geometry.dispose();
+          (rainSystem.material as THREE.LineBasicMaterial).dispose();
+        } catch {}
+        rainSystem = null;
+        rainVelY = null;
+        rainVelX = null;
+        rainLen = null;
+        rainSwirlPhase = null;
+        rainSwirlRadius = null;
+        rainBaseX = null;
+        rainBaseZ = null;
+        rainArea = null;
+      }
+
+      if (windSystem) {
+        try {
+          scene.remove(windSystem);
+          windSystem.geometry.dispose();
+          (windSystem.material as THREE.PointsMaterial).dispose();
+        } catch {}
+        windSystem = null;
+        windVel = null;
+        windLifetime = null;
+      }
+
+      if (splashSystem) {
+        try {
+          scene.remove(splashSystem);
+          splashSystem.geometry.dispose();
+          (splashSystem.material as THREE.PointsMaterial).dispose();
+        } catch {}
+        splashSystem = null;
+        splashVelY = null;
+        splashLifetime = null;
+        splashArea = null;
+      }
+
+      scene.fog = null;
+      lightningFlash = 0;
+
+      activeSkyboxUrl = null;
+      if (skyboxTex) {
+        try {
+          skyboxTex.dispose();
+        } catch {}
+        skyboxTex = null;
+      }
+
+      scene.environment = null;
+
+      const skyUrl = resolveSkyboxUrl(skyboxesRef.current, type);
+      if (skyUrl) {
+        activeSkyboxUrl = skyUrl;
+        const loader = new THREE.TextureLoader();
+        loader.setCrossOrigin("anonymous");
+        loader.load(
+          skyUrl,
+          (tex) => {
+            if (activeSkyboxUrl !== skyUrl) {
+              try {
+                tex.dispose();
+              } catch {}
+              return;
+            }
+            skyboxTex = tex;
+            setTexColorSpace(skyboxTex);
+            try {
+              skyboxTex.minFilter = THREE.LinearMipmapLinearFilter;
+              skyboxTex.magFilter = THREE.LinearFilter;
+              skyboxTex.generateMipmaps = true;
+              const maxAniso = Math.max(1, Math.min(16, renderer.capabilities.getMaxAnisotropy()));
+              (skyboxTex as any).anisotropy = maxAniso;
+              skyboxTex.needsUpdate = true;
+            } catch {}
+
+            skyboxTex.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = skyboxTex;
+
+            try {
+              const extras = scene as unknown as Record<string, unknown>;
+              if ("backgroundBlurriness" in extras) {
+                (scene as unknown as { backgroundBlurriness: number }).backgroundBlurriness = 0.08;
+              }
+              if ("backgroundIntensity" in extras) {
+                (scene as unknown as { backgroundIntensity: number }).backgroundIntensity = 1.0;
+              }
+            } catch {}
+          },
+          undefined,
+          () => {
+            if (activeSkyboxUrl === skyUrl) activeSkyboxUrl = null;
+          }
+        );
+      }
+
+      if (type === "sunny") {
+        scene.background = new THREE.Color(0x87ceeb);
+        lightingBase.ambient = 0.45;
+        lightingBase.hemi = 0.6;
+        lightingBase.fill = 0.62;
+        lightingBase.sun = 2.2;
+        lightingBase.exposure = 1.12;
+        ambient.intensity = lightingBase.ambient;
+        hemi.intensity = lightingBase.hemi;
+        fillLight.intensity = lightingBase.fill;
+        try {
+          sunLight.color.set(0xfff1c0);
+        } catch {}
+        sunLight.visible = true;
+        sunLight.intensity = lightingBase.sun;
+        renderer.toneMappingExposure = lightingBase.exposure;
+        renderer.setClearColor(0x87ceeb, 1);
+      } else if (type === "rainy") {
+        scene.background = new THREE.Color(0xa7b5c4);
+        lightingBase.ambient = 0.24;
+        lightingBase.hemi = 0.36;
+        lightingBase.fill = 0.46;
+        lightingBase.sun = 0.55;
+        lightingBase.exposure = 0.94;
+        ambient.intensity = lightingBase.ambient;
+        hemi.intensity = lightingBase.hemi;
+        fillLight.intensity = lightingBase.fill;
+        try {
+          sunLight.color.set(0xc7d5e6);
+        } catch {}
+        sunLight.visible = true;
+        sunLight.intensity = lightingBase.sun;
+        renderer.toneMappingExposure = lightingBase.exposure;
+        renderer.setClearColor(0xa7b5c4, 1);
+
+        // Streak rain (LineSegments) anchored to model bounds so it always appears.
+        const rainDensity = isLowEnd ? 0.16 : 0.26;
+        const rainCount = Math.max(420, Math.round((performanceFactor > 0.6 ? STORM_RAIN : BASE_RAIN) * rainDensity));
+        rainArea = computeRainArea();
+
+        const positions = new Float32Array(rainCount * 2 * 3);
+        rainVelY = new Float32Array(rainCount);
+        rainVelX = new Float32Array(rainCount);
+        rainLen = new Float32Array(rainCount);
+        rainSwirlPhase = new Float32Array(rainCount);
+        rainSwirlRadius = new Float32Array(rainCount);
+        rainBaseX = new Float32Array(rainCount);
+        rainBaseZ = new Float32Array(rainCount);
+
+        const spawnOne = (i: number) => {
+          if (!rainArea) return;
+          const headX = rainArea.minX + Math.random() * (rainArea.maxX - rainArea.minX);
+          const headY = rainArea.maxY + Math.random() * (rainArea.maxY - rainArea.minY) * 0.3;
+          const headZ = rainArea.minZ + Math.random() * (rainArea.maxZ - rainArea.minZ);
+          rainBaseX![i] = headX;
+          rainBaseZ![i] = headZ;
+
+          const baseLen = 9 + Math.random() * 16;
+          const len = baseLen * (0.85 + Math.min(1, performanceFactor) * 0.25);
+          rainLen![i] = len;
+
+          rainVelY![i] = (58 + Math.random() * 48) * (1 + (0.75 - performanceFactor) * 0.2);
+          rainVelX![i] = (Math.random() - 0.5) * (10 + Math.random() * 14);
+          rainSwirlPhase![i] = Math.random() * Math.PI * 2;
+          rainSwirlRadius![i] = 0.4 + Math.random() * 2.2;
+
+          const idx = i * 6;
+          positions[idx + 0] = headX;
+          positions[idx + 1] = headY;
+          positions[idx + 2] = headZ;
+          positions[idx + 3] = headX - rainVelX![i] * 0.015 * len;
+          positions[idx + 4] = headY - len;
+          positions[idx + 5] = headZ - 0.01 * len;
+        };
+
+        for (let i = 0; i < rainCount; i++) spawnOne(i);
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+        const mat = new THREE.LineBasicMaterial({
+          color: 0xb9d8ff,
+          transparent: true,
+          opacity: Math.min(0.5, Math.max(0.28, rainBaseOpacity * 0.82)),
+          depthWrite: false,
+          blending: THREE.NormalBlending,
+        });
+
+        rainSystem = new THREE.LineSegments(geo, mat);
+        rainSystem.frustumCulled = false;
+        rainSystem.renderOrder = 1;
+        scene.add(rainSystem);
+
+        const fogDensity = performanceFactor > 0.5 ? 0.0016 : 0.0011;
+        scene.fog = new THREE.FogExp2(0xa7b5c4, fogDensity);
+
+        const splashCount = Math.max(220, Math.round((isLowEnd ? BASE_WIND : STRONG_WIND) * 0.9));
+        const splashPositions = new Float32Array(splashCount * 3);
+        splashVelY = new Float32Array(splashCount);
+        splashLifetime = new Float32Array(splashCount);
+
+        if (modelBounds) {
+          const size = modelBounds.getSize(new THREE.Vector3());
+          splashArea = {
+            minX: modelBounds.min.x - Math.max(8, size.x * 0.2),
+            maxX: modelBounds.max.x + Math.max(8, size.x * 0.2),
+            minZ: modelBounds.min.z - Math.max(8, size.z * 0.2),
+            maxZ: modelBounds.max.z + Math.max(8, size.z * 0.2),
+            groundY: groundPlane.position.y + 0.03,
+          };
+        } else {
+          splashArea = { minX: -60, maxX: 60, minZ: -60, maxZ: 60, groundY: groundPlane.position.y + 0.03 };
+        }
+
+        for (let i = 0; i < splashCount; i++) {
+          const base = i * 3;
+          splashPositions[base + 0] = splashArea.minX + Math.random() * (splashArea.maxX - splashArea.minX);
+          splashPositions[base + 1] = splashArea.groundY + Math.random() * 0.04;
+          splashPositions[base + 2] = splashArea.minZ + Math.random() * (splashArea.maxZ - splashArea.minZ);
+          splashVelY[i] = 1.8 + Math.random() * 2.8;
+          splashLifetime[i] = Math.random();
+        }
+
+        const splashGeo = new THREE.BufferGeometry();
+        splashGeo.setAttribute("position", new THREE.BufferAttribute(splashPositions, 3));
+        const splashMat = new THREE.PointsMaterial({
+          color: 0xd9e9ff,
+          size: isLowEnd ? 1.4 : 2.1,
+          transparent: true,
+          opacity: 0.34,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          sizeAttenuation: true,
+        });
+        splashSystem = new THREE.Points(splashGeo, splashMat);
+        splashSystem.frustumCulled = false;
+        splashSystem.renderOrder = 2;
+        scene.add(splashSystem);
+
+        const windCount = Math.max(120, Math.round((isLowEnd ? BASE_WIND : STRONG_WIND) * 0.6));
+        const windPositions = new Float32Array(windCount * 3);
+        windVel = new Float32Array(windCount * 3);
+        windLifetime = new Float32Array(windCount);
+        const center = modelBounds ? modelBounds.getCenter(new THREE.Vector3()) : new THREE.Vector3();
+        const size = modelBounds ? modelBounds.getSize(new THREE.Vector3()) : new THREE.Vector3(40, 40, 40);
+        const spread = Math.max(size.x, size.z) * 2.2;
+        for (let i = 0; i < windCount; i++) {
+          const base = i * 3;
+          windPositions[base + 0] = center.x - spread + Math.random() * spread * 2;
+          windPositions[base + 1] = center.y - size.y * 0.2 + Math.random() * size.y * 1.3;
+          windPositions[base + 2] = center.z - spread + Math.random() * spread * 2;
+          windVel[base + 0] = 6 + Math.random() * 8;
+          windVel[base + 1] = (Math.random() - 0.5) * 0.6;
+          windVel[base + 2] = (Math.random() - 0.5) * 1.8;
+          windLifetime[i] = Math.random() * 100;
+        }
+        const windGeo = new THREE.BufferGeometry();
+        windGeo.setAttribute("position", new THREE.BufferAttribute(windPositions, 3));
+        const windMat = new THREE.PointsMaterial({
+          map: windTexture,
+          color: 0xd3e5ff,
+          size: isLowEnd ? 6 : 8,
+          transparent: true,
+          opacity: Math.max(0.16, windBaseOpacity * 0.7),
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          sizeAttenuation: true,
+        });
+        windSystem = new THREE.Points(windGeo, windMat);
+        windSystem.frustumCulled = false;
+        windSystem.renderOrder = 1;
+        scene.add(windSystem);
+      } else if (type === "night") {
+        scene.background = new THREE.Color(0x0b1020);
+        renderer.setClearColor(0x0b1020, 1);
+        lightingBase.ambient = 0.2;
+        lightingBase.hemi = 0.24;
+        lightingBase.fill = 0.62;
+        lightingBase.sun = 0.95;
+        lightingBase.exposure = 0.74;
+        ambient.intensity = lightingBase.ambient;
+        hemi.intensity = lightingBase.hemi;
+        fillLight.intensity = lightingBase.fill;
+        try {
+          sunLight.color.set(0x9fc3ff);
+        } catch {}
+        sunLight.visible = true;
+        sunLight.intensity = lightingBase.sun;
+        renderer.toneMappingExposure = lightingBase.exposure;
+        scene.fog = new THREE.FogExp2(0x0b1020, 0.0012);
+      } else if (type === "foggy") {
+        scene.background = new THREE.Color(0xd6dbe0);
+        lightingBase.ambient = 0.52;
+        lightingBase.hemi = 0.58;
+        lightingBase.fill = 0.5;
+        lightingBase.sun = 0.58;
+        lightingBase.exposure = 0.92;
+        ambient.intensity = lightingBase.ambient;
+        hemi.intensity = lightingBase.hemi;
+        fillLight.intensity = lightingBase.fill;
+        try {
+          sunLight.color.set(0xf2f5f8);
+        } catch {}
+        sunLight.visible = true;
+        sunLight.intensity = lightingBase.sun;
+        renderer.toneMappingExposure = lightingBase.exposure;
+        scene.fog = new THREE.FogExp2(0xd6dbe0, 0.0032);
+        renderer.setClearColor(0xd6dbe0, 1);
+      }
+
+      // Weather can subtly affect material response (wet look, hazy look, etc).
+      const mats = finishMaterialsRef.current || [];
+      for (const mat of mats) {
+        if (!mat) continue;
+        const anyMat: any = mat as any;
+        if (typeof anyMat.roughness !== "number" && typeof anyMat.metalness !== "number") continue;
+
+        if (!weatherMaterialSnapshots.has(mat)) {
+          weatherMaterialSnapshots.set(mat, {
+            roughness: typeof anyMat.roughness === "number" ? anyMat.roughness : undefined,
+            metalness: typeof anyMat.metalness === "number" ? anyMat.metalness : undefined,
+            envMapIntensity: typeof anyMat.envMapIntensity === "number" ? anyMat.envMapIntensity : undefined,
+          });
+        }
+
+        const snap = weatherMaterialSnapshots.get(mat);
+        if (!snap) continue;
+
+        const baseRough = typeof snap.roughness === "number" ? snap.roughness : anyMat.roughness;
+        const baseMetal = typeof snap.metalness === "number" ? snap.metalness : anyMat.metalness;
+        const baseEnv = typeof snap.envMapIntensity === "number" ? snap.envMapIntensity : anyMat.envMapIntensity;
+
+        if (type === "rainy") {
+          if (typeof anyMat.roughness === "number" && typeof baseRough === "number") anyMat.roughness = THREE.MathUtils.clamp(baseRough * 0.55, 0.05, 0.62);
+          if (typeof anyMat.metalness === "number" && typeof baseMetal === "number") anyMat.metalness = THREE.MathUtils.clamp(baseMetal + 0.12, 0, 1);
+          if (typeof anyMat.envMapIntensity === "number" && typeof baseEnv === "number") anyMat.envMapIntensity = Math.max(baseEnv * 1.4, baseEnv + 0.2);
+        } else if (type === "foggy") {
+          if (typeof anyMat.roughness === "number" && typeof baseRough === "number") anyMat.roughness = THREE.MathUtils.clamp(baseRough * 1.08, 0.1, 1);
+          if (typeof anyMat.metalness === "number" && typeof baseMetal === "number") anyMat.metalness = THREE.MathUtils.clamp(baseMetal * 0.9, 0, 1);
+          if (typeof anyMat.envMapIntensity === "number" && typeof baseEnv === "number") anyMat.envMapIntensity = baseEnv * 0.9;
+        } else if (type === "night") {
+          if (typeof anyMat.roughness === "number" && typeof baseRough === "number") anyMat.roughness = THREE.MathUtils.clamp(baseRough * 0.9, 0.06, 1);
+          if (typeof anyMat.metalness === "number" && typeof baseMetal === "number") anyMat.metalness = THREE.MathUtils.clamp(baseMetal + 0.03, 0, 1);
+          if (typeof anyMat.envMapIntensity === "number" && typeof baseEnv === "number") anyMat.envMapIntensity = Math.max(baseEnv, baseEnv * 1.05);
+        } else {
+          if (typeof anyMat.roughness === "number" && typeof baseRough === "number") anyMat.roughness = baseRough;
+          if (typeof anyMat.metalness === "number" && typeof baseMetal === "number") anyMat.metalness = baseMetal;
+          if (typeof anyMat.envMapIntensity === "number" && typeof baseEnv === "number") anyMat.envMapIntensity = baseEnv;
+        }
+        anyMat.needsUpdate = true;
+      }
+    };
+
+    applyWeatherRef.current = (t) => applyWeather(t);
+    applyWeather(weatherRef.current);
+
+    const handleLoaded = (object: THREE.Object3D) => {
+      // Detect finish targets after we normalize + scale the model.
+      frameMaterialsRef.current = [];
+      finishMaterialsRef.current = [];
+
+      object.traverse((child: any) => {
+        if (!child.isMesh) return;
+        child.castShadow = true;
+        child.receiveShadow = true;
+
+        // Keep GLB/GLTF PBR materials as-is; only apply safe tweaks.
+        try {
+          const tweakMat = (mat: any) => {
+            if (!mat) return;
+            try {
+              if (mat.map) setTexColorSpace(mat.map);
+            } catch {}
+            try {
+              if (mat.emissiveMap) setTexColorSpace(mat.emissiveMap);
+            } catch {}
+            try {
+              mat.side = THREE.DoubleSide;
+            } catch {}
+            mat.needsUpdate = true;
+          };
+          if (Array.isArray(child.material)) child.material.forEach(tweakMat);
+          else tweakMat(child.material);
+        } catch {}
+      });
+
+      const rawBox = new THREE.Box3().setFromObject(object);
+      const rawSize = rawBox.getSize(new THREE.Vector3());
+      const rawCenter = rawBox.getCenter(new THREE.Vector3());
+
+      originalSizeRef.current = rawSize.clone();
+      const mpuNow = mmPerUnit(assumedModelUnitsRef.current);
+      const computedMm = {
+        width: rawSize.x * mpuNow,
+        height: rawSize.y * mpuNow,
+        thickness: rawSize.z * mpuNow,
+      };
+      const displayMm = productDimsMm ?? computedMm;
+      setDimsMm(displayMm);
+
+      const modelGroup = new THREE.Group();
+      modelGroupForPlacement = modelGroup;
+      object.position.set(-rawCenter.x, -rawBox.min.y, -rawCenter.z);
+      modelGroup.add(object);
+
+      const maxDimension = Math.max(rawSize.x, rawSize.y, rawSize.z);
+      if (maxDimension > 0) {
+        const targetSize = 100;
+        const scale = targetSize / maxDimension;
+        modelGroup.scale.setScalar(scale);
+      }
+
+      modelGroup.position.set(0, 0, 0);
+      scene.add(modelGroup);
+      modelRootForShadows = modelGroup;
+      updateShadowsRef.current?.();
+
+      modelBounds = new THREE.Box3().setFromObject(modelGroup);
+
+      // Fit ground plane to model bounds and keep it slightly below the model.
+      if (modelBounds) {
+        const size = modelBounds.getSize(new THREE.Vector3());
+        const span = Math.max(size.x, size.z);
+        const floorSize = Math.max(180, span * 2.4);
+        groundPlane.scale.set(floorSize, floorSize, 1);
+        groundPlane.position.y = modelBounds.min.y - Math.max(0.02, size.y * 0.002);
+      }
+      updateGroundRef.current?.();
+
+      // Detect likely frame materials.
+      // Priorities:
+      // 1) mesh/material name tokens
+      // 2) geometry close to overall bounds
+      // 3) dark/neutral default colors
+      const frameTokens = ["frame", "border", "mould", "mold", "molding", "trim", "casing", "bezel", "edge"];
+      const overall = modelBounds ? modelBounds.clone() : new THREE.Box3(new THREE.Vector3(-50, -50, -50), new THREE.Vector3(50, 50, 50));
+      const overallSize = overall.getSize(new THREE.Vector3());
+      const overallVol = Math.max(1e-6, overallSize.x * overallSize.y * overallSize.z);
+      const eps = Math.max(1.25, Math.min(5, overallSize.length() * 0.015));
+
+      const isGlassLike = (mat: any, name: string) => {
+        if (name.includes("glass")) return true;
+        try {
+          if (typeof mat?.transmission === "number" && mat.transmission > 0.2) return true;
+        } catch {}
+        try {
+          if (mat?.transparent && typeof mat?.opacity === "number" && mat.opacity < 0.95) return true;
+        } catch {}
+        return false;
+      };
+
+      const scoreByMaterial = new Map<THREE.Material, { score: number; tokenMatch: boolean }>();
+      const finishMaterials = new Set<THREE.Material>();
+      const perMeshBox = new THREE.Box3();
+
+      modelGroup.traverse((child: any) => {
+        if (!child?.isMesh) return;
+        const meshName = (child?.name || "").toString().toLowerCase();
+        try {
+          perMeshBox.setFromObject(child);
+        } catch {
+          return;
+        }
+        if (perMeshBox.isEmpty()) return;
+
+        const size = perMeshBox.getSize(new THREE.Vector3());
+        const vol = Math.max(1e-6, size.x * size.y * size.z);
+        const volRatio = vol / overallVol;
+
+        const touches =
+          (Math.abs(perMeshBox.min.x - overall.min.x) < eps ? 1 : 0) +
+          (Math.abs(perMeshBox.max.x - overall.max.x) < eps ? 1 : 0) +
+          (Math.abs(perMeshBox.min.y - overall.min.y) < eps ? 1 : 0) +
+          (Math.abs(perMeshBox.max.y - overall.max.y) < eps ? 1 : 0) +
+          (Math.abs(perMeshBox.min.z - overall.min.z) < eps ? 1 : 0) +
+          (Math.abs(perMeshBox.max.z - overall.max.z) < eps ? 1 : 0);
+
+        const mats: any[] = Array.isArray(child.material) ? child.material : [child.material];
+        for (const m of mats) {
+          if (!m) continue;
+          const mat = m as THREE.Material;
+          const matName = (m?.name || "").toString().toLowerCase();
+          const haystack = `${meshName} ${matName}`;
+
+          if (isGlassLike(m, haystack)) continue;
+          finishMaterials.add(mat);
+
+          let score = 0;
+          const tokenMatch = frameTokens.some((t) => haystack.includes(t));
+          if (tokenMatch) score += 5;
+
+          if (touches >= 2) score += 2;
+          if (touches >= 4) score += 1;
+
+          if (volRatio < 0.5) score += 1;
+          if (volRatio < 0.2) score += 1;
+
+          try {
+            const c = (m?.color as THREE.Color | undefined) ?? undefined;
+            if (c && (c as any).isColor) {
+              const lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+              if (lum < 0.45) score += 1;
+            }
+          } catch {}
+
+          const prev = scoreByMaterial.get(mat);
+          if (!prev || score > prev.score) {
+            scoreByMaterial.set(mat, { score, tokenMatch });
+          } else if (tokenMatch && !prev.tokenMatch) {
+            scoreByMaterial.set(mat, { score: prev.score, tokenMatch: true });
+          }
+        }
+      });
+
+      const sorted = Array.from(scoreByMaterial.entries()).sort((a, b) => b[1].score - a[1].score);
+      let selected = sorted.filter(([, v]) => v.tokenMatch || v.score >= 4).map(([m]) => m);
+      if (selected.length === 0) {
+        selected = sorted.filter(([, v]) => v.score > 0).slice(0, 3).map(([m]) => m);
+      }
+
+      frameMaterialsRef.current = selected;
+      finishMaterialsRef.current = Array.from(finishMaterials);
+
+      // Snapshot original values so "Default" can restore them.
+      for (const mat of finishMaterialsRef.current) {
+        if (!mat) continue;
+        if (frameMaterialSnapshotsRef.current.has(mat)) continue;
+        const anyMat: any = mat as any;
+        const snap: MaterialSnapshot = {};
+        try {
+          if (anyMat.color && typeof anyMat.color.getHex === "function") snap.colorHex = anyMat.color.getHex();
+        } catch {}
+        try {
+          if (typeof anyMat.roughness === "number") snap.roughness = anyMat.roughness;
+        } catch {}
+        try {
+          if (typeof anyMat.metalness === "number") snap.metalness = anyMat.metalness;
+        } catch {}
+        try {
+          if ("map" in anyMat) snap.map = anyMat.map ?? null;
+        } catch {}
+        try {
+          if (typeof anyMat.transparent === "boolean") snap.transparent = anyMat.transparent;
+          if (typeof anyMat.opacity === "number") snap.opacity = anyMat.opacity;
+        } catch {}
+        frameMaterialSnapshotsRef.current.set(mat, snap);
+      }
+
+      // Apply chosen finish after we have stable material targets.
+      applyFrameFinishToTargets(frameFinishUiRef.current);
+
+      disposeMeasurementGroup();
+      labelElsRef.current = {};
+      if (modelBounds) {
+        const bounds = modelBounds.clone();
+        const bSize = bounds.getSize(new THREE.Vector3());
+        const maxS = Math.max(bSize.x, bSize.y, bSize.z);
+        const offset = Math.max(maxS * 0.08, 3);
+
+        measurementGroup = new THREE.Group();
+        measurementGroup.renderOrder = 3;
+
+        const min = bounds.min;
+        const max = bounds.max;
+
+        const wStart = new THREE.Vector3(min.x, min.y, max.z + offset);
+        const wEnd = new THREE.Vector3(max.x, min.y, max.z + offset);
+        const wExtAStart = new THREE.Vector3(min.x, min.y, max.z);
+        const wExtAEnd = wStart.clone();
+        const wExtBStart = new THREE.Vector3(max.x, min.y, max.z);
+        const wExtBEnd = wEnd.clone();
+        const wLabel = makeLabel(formatLength(displayMm.width, modelUnitsRef.current), "w");
+        measurementGroup.add(
+          addDimension({
+            start: wStart,
+            end: wEnd,
+            extAStart: wExtAStart,
+            extAEnd: wExtAEnd,
+            extBStart: wExtBStart,
+            extBEnd: wExtBEnd,
+            tickDir: new THREE.Vector3(0, 1, 0),
+            label: wLabel,
+          })
+        );
+
+        const hStart = new THREE.Vector3(max.x + offset, min.y, max.z + offset);
+        const hEnd = new THREE.Vector3(max.x + offset, max.y, max.z + offset);
+        const hExtAStart = new THREE.Vector3(max.x, min.y, max.z);
+        const hExtAEnd = hStart.clone();
+        const hExtBStart = new THREE.Vector3(max.x, max.y, max.z);
+        const hExtBEnd = hEnd.clone();
+        const hLabel = makeLabel(formatLength(displayMm.height, modelUnitsRef.current), "h");
+        measurementGroup.add(
+          addDimension({
+            start: hStart,
+            end: hEnd,
+            extAStart: hExtAStart,
+            extAEnd: hExtAEnd,
+            extBStart: hExtBStart,
+            extBEnd: hExtBEnd,
+            tickDir: new THREE.Vector3(1, 0, 0),
+            label: hLabel,
+          })
+        );
+
+        const tStart = new THREE.Vector3(min.x - offset, min.y, min.z);
+        const tEnd = new THREE.Vector3(min.x - offset, min.y, max.z);
+        const tExtAStart = new THREE.Vector3(min.x, min.y, min.z);
+        const tExtAEnd = tStart.clone();
+        const tExtBStart = new THREE.Vector3(min.x, min.y, max.z);
+        const tExtBEnd = tEnd.clone();
+        const tLabel = makeLabel(formatLength(displayMm.thickness, modelUnitsRef.current), "t");
+        measurementGroup.add(
+          addDimension({
+            start: tStart,
+            end: tEnd,
+            extAStart: tExtAStart,
+            extAEnd: tExtAEnd,
+            extBStart: tExtBStart,
+            extBEnd: tExtBEnd,
+            tickDir: new THREE.Vector3(0, 1, 0),
+            label: tLabel,
+          })
+        );
+
+        measurementGroup.visible = !!showMeasurementsRef.current;
+        scene.add(measurementGroup);
+      }
+
+      const scaledSize = maxDimension * modelGroup.scale.x;
+      const distance = scaledSize * 1.5;
+
+      camera.position.set(distance * 0.5, distance * 0.35, distance * 0.8);
+      const target = modelBounds ? modelBounds.getCenter(new THREE.Vector3()) : new THREE.Vector3(0, 0, 0);
+      camera.lookAt(target);
+      controls.target.copy(target);
+      controls.minDistance = distance * 0.3;
+      controls.maxDistance = distance * 4;
+      controls.update();
+
+      setLoading(false);
+      applyWeather(weatherRef.current);
+    };
+
+    const handleError = (err: any) => {
+      console.error("3D model load error:", err);
+      setLoading(false);
+    };
+
+    const manager = new THREE.LoadingManager();
+    manager.onError = (url) => console.warn("Failed to load asset:", url);
+
+    const fbxLoader = new FBXLoader(manager);
+    fbxLoader.setCrossOrigin("anonymous");
+    const gltfLoader = new GLTFLoader(manager);
+    (gltfLoader as any).setCrossOrigin?.("anonymous");
+
+    let objectURLToRevoke: string | null = null;
+    let houseObjectURLToRevoke: string | null = null;
+
+    const tryFetchAsObjectUrl = async (url: string, kind: "main" | "house"): Promise<string | null> => {
+      const tryUrls: string[] = [url];
+      if (url.includes(" ")) tryUrls.push(encodeURI(url));
+      for (const u of tryUrls) {
+        try {
+          const res = await fetch(u, { mode: "cors" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          const objUrl = URL.createObjectURL(blob);
+          if (kind === "main") objectURLToRevoke = objUrl;
+          if (kind === "house") houseObjectURLToRevoke = objUrl;
+          return objUrl;
+        } catch {
+          // try next
+        }
+      }
+      return null;
+    };
+
+    const loadObjectFromUrl = async (
+      url: string,
+      kind: "main" | "house",
+      fallbackFileName?: string | null
+    ): Promise<THREE.Object3D> => {
+      const ext = getUrlExtension(url) || getUrlExtension(fallbackFileName || "");
+
+      if (ext === "gltf") {
+        return await new Promise<THREE.Object3D>((resolve, reject) => {
+          try {
+            const base = new URL(url, window.location.href);
+            base.search = "";
+            base.hash = "";
+            base.pathname = base.pathname.slice(0, base.pathname.lastIndexOf("/") + 1);
+            manager.setURLModifier((requested) => {
+              if (!requested) return requested;
+              const lower = requested.toLowerCase();
+              if (lower.startsWith("data:") || lower.startsWith("blob:") || lower.startsWith("http://") || lower.startsWith("https://")) return requested;
+              try {
+                return new URL(requested, base).toString();
+              } catch {
+                return requested;
+              }
+            });
+          } catch {}
+
+          gltfLoader.load(
+            url,
+            (gltf: any) => {
+              const object = gltf?.scene as THREE.Object3D | undefined;
+              if (!object) return reject(new Error("Missing gltf.scene"));
+              resolve(object);
+            },
+            undefined,
+            reject
+          );
+        });
+      }
+
+      let loadUrl = url;
+      if ((ext === "fbx" || ext === "glb") && !url.startsWith("blob:") && !url.startsWith("data:")) {
+        const objUrl = await tryFetchAsObjectUrl(url, kind);
+        if (objUrl) loadUrl = objUrl;
+      }
+
+      if (ext === "fbx") {
+        return await new Promise<THREE.Object3D>((resolve, reject) => {
+          fbxLoader.load(loadUrl, resolve, undefined, reject);
+        });
+      }
+
+      if (ext === "glb") {
+        return await new Promise<THREE.Object3D>((resolve, reject) => {
+          gltfLoader.load(
+            loadUrl,
+            (gltf: any) => {
+              const object = gltf?.scene as THREE.Object3D | undefined;
+              if (!object) return reject(new Error("Missing gltf.scene"));
+              resolve(object);
+            },
+            undefined,
+            reject
+          );
+        });
+      }
+
+      throw new Error(`Unsupported 3D model type: .${ext || "?"}`);
+    };
+
+    const applyCategoryPlacement = (opts: { houseBounds: THREE.Box3; modelGroup: THREE.Group; modelBounds: THREE.Box3 }) => {
+      const { houseBounds, modelGroup, modelBounds } = opts;
+      const houseSize = houseBounds.getSize(new THREE.Vector3());
+      const modelSize = modelBounds.getSize(new THREE.Vector3());
+
+      if (houseSize.lengthSq() <= 1e-8 || modelSize.lengthSq() <= 1e-8) return;
+
+      const facadeZ = houseBounds.max.z;
+      const embed = Math.min(1.2, Math.max(0.2, modelSize.z * 0.12));
+      const z = facadeZ - embed - modelSize.z * 0.5;
+
+      const yGround = houseBounds.min.y + modelSize.y * 0.5;
+      const yMid = houseBounds.min.y + houseSize.y * 0.5;
+      const yUpper = houseBounds.min.y + houseSize.y * 0.65;
+
+      let x = 0;
+      let y = yMid;
+
+      switch (categoryKey) {
+        case "doors":
+          x = 0;
+          y = yGround;
+          break;
+        case "windows": {
+          const side = currentFbxIndex % 2 === 0 ? -1 : 1;
+          x = side * houseSize.x * 0.22;
+          y = houseBounds.min.y + houseSize.y * 0.42;
+          break;
+        }
+        case "enclosure":
+          x = 0;
+          y = houseBounds.min.y + houseSize.y * 0.35;
+          break;
+        case "railings":
+          x = 0;
+          y = yUpper;
+          break;
+        case "canopy":
+          x = 0;
+          y = houseBounds.min.y + houseSize.y * 0.52;
+          break;
+        case "curtainwall":
+          x = 0;
+          y = yMid;
+          break;
+        default:
+          x = 0;
+          y = yMid;
+          break;
+      }
+
+      const currentCenter = modelBounds.getCenter(new THREE.Vector3());
+      const desiredCenter = new THREE.Vector3(x, y, z);
+      const delta = desiredCenter.sub(currentCenter);
+      modelGroup.position.add(delta);
+    };
+
+    const addHouseContextModel = async () => {
+      if (!resolvedHouseModelUrl) return;
+      if (!showHouseContext) return;
+      try {
+        const houseObject = await loadObjectFromUrl(resolvedHouseModelUrl, "house");
+
+        houseObject.traverse((child: any) => {
+          if (!child?.isMesh) return;
+          child.castShadow = false;
+          child.receiveShadow = true;
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((mat: any) => {
+            if (!mat) return;
+            try {
+              mat.side = THREE.DoubleSide;
+            } catch {}
+            try {
+              mat.needsUpdate = true;
+            } catch {}
+          });
+        });
+
+        const rawBox = new THREE.Box3().setFromObject(houseObject);
+        const rawSize = rawBox.getSize(new THREE.Vector3());
+        const rawCenter = rawBox.getCenter(new THREE.Vector3());
+        const maxDimension = Math.max(rawSize.x, rawSize.y, rawSize.z);
+        if (!Number.isFinite(maxDimension) || maxDimension <= 0) return;
+
+        const houseGroup = new THREE.Group();
+        houseObject.position.set(-rawCenter.x, -rawBox.min.y, -rawCenter.z);
+        houseGroup.add(houseObject);
+
+        const targetSize = 520;
+        const scale = targetSize / maxDimension;
+        houseGroup.scale.setScalar(scale);
+        houseGroup.position.set(0, 0, 0);
+        scene.add(houseGroup);
+
+        const houseBounds = new THREE.Box3().setFromObject(houseGroup);
+
+        if (modelGroupForPlacement && modelBounds) {
+          applyCategoryPlacement({ houseBounds, modelGroup: modelGroupForPlacement, modelBounds });
+          modelBounds = new THREE.Box3().setFromObject(modelGroupForPlacement);
+        }
+
+        const combined = modelBounds ? modelBounds.clone().union(houseBounds) : houseBounds.clone();
+        modelBounds = combined.clone();
+
+        const size = combined.getSize(new THREE.Vector3());
+        const center = combined.getCenter(new THREE.Vector3());
+        const span = Math.max(size.x, size.z);
+
+        const floorSize = Math.max(180, span * 2.4);
+        groundPlane.scale.set(floorSize, floorSize, 1);
+        groundPlane.position.y = combined.min.y - Math.max(0.02, size.y * 0.002);
+        updateGroundRef.current?.();
+
+        const biggest = Math.max(size.x, size.y, size.z);
+        const distance = biggest * 1.4;
+        camera.position.set(distance * 0.5, distance * 0.35, distance * 0.8);
+        camera.lookAt(center);
+        controls.target.copy(center);
+        controls.minDistance = distance * 0.28;
+        controls.maxDistance = distance * 4.2;
+        controls.update();
+      } catch (err) {
+        console.error("House context model load error:", err);
+      }
+    };
+
+    const loadModel = async () => {
+      try {
+        const object = await loadObjectFromUrl(currentUrl, "main", currentFileName || undefined);
+        handleLoaded(object);
+        await addHouseContextModel();
+      } catch (err) {
+        handleError(err);
+      }
+    };
+
+    void loadModel();
+
+    let rafId = 0;
+    const animate = () => {
+      frameCounter++;
+      const heavyStep = frameCounter % (isLowEnd ? 4 : 3) === 0;
+
+      const nowMs = performance.now();
+      const dt = Math.min(0.05, (nowMs - lastFrameMs) / 1000);
+      lastFrameMs = nowMs;
+
+      if (measurementGroup) measurementGroup.visible = !!showMeasurementsRef.current;
+
+      const shouldUpdateRain = !isLowEnd || heavyStep;
+      if (shouldUpdateRain && rainSystem && rainVelY && rainVelX && rainLen && rainSwirlPhase && rainSwirlRadius && rainBaseX && rainBaseZ) {
+        if (!rainArea || modelBounds) {
+          rainArea = computeRainArea();
+        }
+
+        const posAttr = rainSystem.geometry.attributes.position as THREE.BufferAttribute;
+        const arr = posAttr.array as Float32Array;
+        const count = rainVelY.length;
+
+        const t = nowMs * 0.001;
+        for (let i = 0; i < count; i++) {
+          const idx = i * 6;
+          const gust = Math.sin(i * 0.013 + t * 1.7) * 0.4;
+          rainSwirlPhase[i] += dt * (1.8 + i * 0.0008);
+          const swirlX = Math.cos(rainSwirlPhase[i]) * rainSwirlRadius[i];
+          const swirlZ = Math.sin(rainSwirlPhase[i]) * rainSwirlRadius[i];
+
+          let headX = arr[idx + 0] + (rainVelX[i] + gust) * dt + swirlX * dt * 7;
+          let headY = arr[idx + 1] - rainVelY[i] * dt;
+          let headZ = arr[idx + 2] + swirlZ * dt * 6;
+
+          const bounds = rainArea;
+          if (bounds) {
+            if (headY < bounds.minY) {
+              const resetX = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
+              const resetZ = bounds.minZ + Math.random() * (bounds.maxZ - bounds.minZ);
+              rainBaseX[i] = resetX;
+              rainBaseZ[i] = resetZ;
+              rainSwirlPhase[i] = Math.random() * Math.PI * 2;
+              rainSwirlRadius[i] = 0.4 + Math.random() * 2.2;
+              headX = resetX;
+              headY = bounds.maxY + Math.random() * (bounds.maxY - bounds.minY) * 0.25;
+              headZ = resetZ;
+            }
+
+            if (headX < bounds.minX) headX = bounds.maxX;
+            if (headX > bounds.maxX) headX = bounds.minX;
+            if (headZ < bounds.minZ) headZ = bounds.maxZ;
+            if (headZ > bounds.maxZ) headZ = bounds.minZ;
+          }
+
+          const len = rainLen[i];
+          arr[idx + 0] = headX;
+          arr[idx + 1] = headY;
+          arr[idx + 2] = headZ;
+          arr[idx + 3] = headX - (rainVelX[i] + gust) * 0.012 * len;
+          arr[idx + 4] = headY - len;
+          arr[idx + 5] = headZ - 0.01 * len;
+        }
+
+        posAttr.needsUpdate = true;
+      }
+
+      if (activeWeather === "rainy") {
+        if (Math.random() < dt * 0.11) {
+          lightningFlash = Math.max(lightningFlash, 0.32 + Math.random() * 0.42);
+        }
+        if (lightningFlash > 0) {
+          ambient.intensity = lightingBase.ambient + lightningFlash * 0.18;
+          hemi.intensity = lightingBase.hemi + lightningFlash * 0.2;
+          fillLight.intensity = lightingBase.fill + lightningFlash * 0.3;
+          sunLight.intensity = lightingBase.sun + lightningFlash * 2.25;
+          renderer.toneMappingExposure = Math.min(1.65, lightingBase.exposure + lightningFlash * 0.45);
+          lightningFlash = Math.max(0, lightningFlash - dt * 1.9);
+          if (lightningFlash <= 0) {
+            ambient.intensity = lightingBase.ambient;
+            hemi.intensity = lightingBase.hemi;
+            fillLight.intensity = lightingBase.fill;
+            sunLight.intensity = lightingBase.sun;
+            renderer.toneMappingExposure = lightingBase.exposure;
+          }
+        }
+      }
+
+      if (splashSystem && splashVelY && splashLifetime && splashArea) {
+        const splashPositions = splashSystem.geometry.attributes.position as THREE.BufferAttribute;
+        const arr = splashPositions.array as Float32Array;
+        const count = splashVelY.length;
+
+        for (let i = 0; i < count; i++) {
+          const idx = i * 3;
+          splashLifetime[i] += dt * (1.6 + Math.random() * 0.8);
+          arr[idx + 1] += splashVelY[i] * dt;
+          splashVelY[i] -= 14 * dt;
+
+          if (splashLifetime[i] >= 1 || arr[idx + 1] < splashArea.groundY) {
+            arr[idx + 0] = splashArea.minX + Math.random() * (splashArea.maxX - splashArea.minX);
+            arr[idx + 1] = splashArea.groundY + Math.random() * 0.03;
+            arr[idx + 2] = splashArea.minZ + Math.random() * (splashArea.maxZ - splashArea.minZ);
+            splashVelY[i] = 1.4 + Math.random() * 3.2;
+            splashLifetime[i] = 0;
+          }
+        }
+
+        splashPositions.needsUpdate = true;
+      }
+
+      if (heavyStep && windSystem && windVel && windLifetime && modelBounds) {
+        const positions = windSystem.geometry.attributes.position as THREE.BufferAttribute;
+        const arr = positions.array as Float32Array;
+        const count = windVel.length / 3;
+        const t = Date.now() * 0.001;
+        const modelCenter = modelBounds.getCenter(new THREE.Vector3());
+        const modelSize = modelBounds.getSize(new THREE.Vector3());
+        const windRange = Math.max(modelSize.x, modelSize.y, modelSize.z) * 3;
+
+        for (let i = 0; i < count; i++) {
+          const base = i * 3;
+          windLifetime[i] += 0.8;
+
+          const turbulence = Math.sin(t * 2 + i * 0.1) * 0.8;
+          const gustFactor = 1 + Math.sin(t * 0.3 + i * 0.05) * 0.4;
+
+          arr[base + 0] += windVel[base + 0] * gustFactor + turbulence;
+          arr[base + 1] += windVel[base + 1] + Math.sin(t * 3 + i * 0.02) * 0.3;
+          arr[base + 2] += windVel[base + 2] + turbulence * 0.3;
+
+          const distanceFromModel = Math.sqrt(Math.pow(arr[base + 0] - modelCenter.x, 2) + Math.pow(arr[base + 2] - modelCenter.z, 2));
+
+          if (
+            distanceFromModel > windRange * 1.2 ||
+            windLifetime[i] > 150 ||
+            arr[base + 1] < modelCenter.y - modelSize.y * 3 ||
+            arr[base + 1] > modelCenter.y + modelSize.y * 3
+          ) {
+            const side = Math.random();
+            let startX, startY, startZ;
+
+            if (side < 0.7) {
+              startX = modelCenter.x - windRange * (0.8 + Math.random() * 0.4);
+              startY = modelCenter.y + (Math.random() - 0.5) * modelSize.y * 2;
+              startZ = modelCenter.z + (Math.random() - 0.5) * windRange;
+            } else if (side < 0.9) {
+              startX = modelCenter.x + (Math.random() - 0.5) * windRange;
+              startY = modelCenter.y + (Math.random() - 0.5) * modelSize.y * 2;
+              startZ = modelCenter.z - windRange * (0.8 + Math.random() * 0.4);
+            } else {
+              startX = modelCenter.x + (Math.random() - 0.5) * windRange * 0.5;
+              startY = modelCenter.y + windRange * (0.5 + Math.random() * 0.3);
+              startZ = modelCenter.z + (Math.random() - 0.5) * windRange * 0.5;
+            }
+
+            arr[base + 0] = startX;
+            arr[base + 1] = startY;
+            arr[base + 2] = startZ;
+
+            const baseWindSpeed = 8 + Math.random() * 12;
+            const windDirection = Math.PI * 0.1 * (Math.random() - 0.5);
+
+            windVel[base + 0] = baseWindSpeed * Math.cos(windDirection);
+            windVel[base + 1] = (Math.random() - 0.5) * 2;
+            windVel[base + 2] = baseWindSpeed * Math.sin(windDirection) * 0.3;
+
+            windLifetime[i] = 0;
+          }
+        }
+        positions.needsUpdate = true;
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+      if (labelRenderer) {
+        try {
+          labelRenderer.render(scene, camera);
+        } catch {}
+      }
+      rafId = requestAnimationFrame(animate);
+    };
+
+    animate();
+
+    const wheelHandler = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    try {
+      renderer.domElement.addEventListener("wheel", wheelHandler, { passive: false });
+    } catch {}
+
+    return () => {
+      applyWeatherRef.current = null;
+      try {
+        renderer.domElement.removeEventListener("wheel", wheelHandler as any);
+      } catch {}
+      cancelAnimationFrame(rafId);
+      disposeMeasurementGroup();
+
+      if (rainSystem) {
+        try {
+          rainSystem.geometry.dispose();
+          (rainSystem.material as THREE.LineBasicMaterial).dispose();
+        } catch {}
+      }
+      if (windSystem) {
+        try {
+          windSystem.geometry.dispose();
+          (windSystem.material as THREE.PointsMaterial).dispose();
+        } catch {}
+      }
+      if (splashSystem) {
+        try {
+          splashSystem.geometry.dispose();
+          (splashSystem.material as THREE.PointsMaterial).dispose();
+        } catch {}
+      }
+      try {
+        windTexture.dispose();
+      } catch {}
+
+      try {
+        controls.dispose();
+      } catch {}
+      try {
+        renderer.dispose();
+      } catch {}
+      if (objectURLToRevoke) {
+        try {
+          URL.revokeObjectURL(objectURLToRevoke);
+        } catch {}
+      }
+      if (houseObjectURLToRevoke) {
+        try {
+          URL.revokeObjectURL(houseObjectURLToRevoke);
+        } catch {}
+      }
+      try {
+        skyboxTex?.dispose();
+      } catch {}
+      if (labelRenderer) {
+        try {
+          container.removeChild(labelRenderer.domElement);
+        } catch {}
+      }
+      while (container && container.firstChild) container.removeChild(container.firstChild);
+    };
+  }, [currentUrl, currentFileName, productDimsMm, usesProductDimensions, width, height, resolvedHouseModelUrl, showHouseContext, categoryKey, currentFbxIndex]);
+
+  if (!validUrls.length) {
+    return (
+      <div className="flex items-center justify-center w-full h-full bg-gray-100">
+        <div className="text-center">
+          <div className="text-gray-500 text-lg">No 3D models available</div>
+        </div>
+      </div>
+    );
+  }
+
+  const goToPrevious = () => {
+    if (validUrls.length > 1) setCurrentFbxIndex((i) => (i > 0 ? i - 1 : validUrls.length - 1));
+  };
+
+  const goToNext = () => {
+    if (validUrls.length > 1) setCurrentFbxIndex((i) => (i < validUrls.length - 1 ? i + 1 : 0));
+  };
+
+  const goToIndex = (index: number) => {
+    if (index >= 0 && index < validUrls.length) setCurrentFbxIndex(index);
+  };
+
+  return (
+    <div className="relative w-full h-full">
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-10">
+          <div className="bg-white rounded-lg p-6 shadow-lg">
+            <div className="flex items-center space-x-3">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <span className="text-lg font-medium">Loading 3D model...</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
+
+      <div className="absolute top-3 left-3 z-[9999] pointer-events-auto">
+        <div className="bg-black/70 backdrop-blur-md rounded-xl px-4 py-3 shadow-lg text-white min-w-[220px]">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold">Measurements</div>
+            <label className="flex items-center gap-2 text-xs text-white/90">
+              <input type="checkbox" checked={showMeasurements} onChange={(e) => setShowMeasurements(e.target.checked)} />
+              Show
+            </label>
+          </div>
+
+          <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-white/90">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-white/70">Width</span>
+              <span className="font-semibold">{dimsMm ? formatLength(dimsMm.width, modelUnits) : "—"}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-white/70">Height</span>
+              <span className="font-semibold">{dimsMm ? formatLength(dimsMm.height, modelUnits) : "—"}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-white/70">Thickness</span>
+              <span className="font-semibold">{dimsMm ? formatLength(dimsMm.thickness, modelUnits) : "—"}</span>
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <label className="text-xs text-white/70">Units</label>
+            <select
+              value={modelUnits}
+              onChange={(e) => setModelUnits(e.target.value as ModelUnits)}
+              className="gl-units-select bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs text-white outline-none"
+              aria-label="Model units"
+            >
+              <option value="mm">mm</option>
+              <option value="cm">cm</option>
+              <option value="m">m</option>
+            </select>
+          </div>
+
+          <div className="mt-2 text-[11px] text-white/60 leading-snug">
+            {usesProductDimensions
+              ? "Using product dimensions (if provided). Use Units to convert display."
+              : "Use Units to change measurement display."}
+          </div>
+        </div>
+      </div>
+
+      <div className="absolute top-3 right-3 z-[9999] pointer-events-auto">
+        <div className="bg-black/70 backdrop-blur-md rounded-xl px-4 py-3 shadow-lg text-white min-w-[220px]">
+          <div className="text-sm font-semibold">Frame</div>
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <label className="text-xs text-white/70">Finish</label>
+            <select
+              value={frameFinishUi}
+              onChange={(e) => {
+                const next = e.target.value as FrameFinish;
+                setFrameFinishUi(next);
+                try {
+                  onFrameFinishChange?.(next);
+                } catch {}
+              }}
+              className="gl-units-select bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-xs text-white outline-none"
+              aria-label="Frame finish"
+            >
+              <option value="default">Default</option>
+              <option value="matteBlack">Matte Black</option>
+              <option value="matteGray">Matte Gray</option>
+              <option value="narra">Narra</option>
+              <option value="walnut">Walnut</option>
+            </select>
+          </div>
+          <div className="mt-2 text-[11px] text-white/60">Select a finish to preview frame color.</div>
+        </div>
+      </div>
+
+      <div className="absolute bottom-4 left-3 z-[9999] pointer-events-auto">
+        <div className="bg-black/70 backdrop-blur-md rounded-xl px-4 py-3 shadow-lg text-white min-w-[200px]">
+          <div className="text-sm font-semibold">Scene</div>
+
+          <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-white/90">
+            {resolvedHouseModelUrl && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-white/80">House</span>
+                <input
+                  type="checkbox"
+                  checked={showHouseContext}
+                  onChange={(e) => setShowHouseContext(e.target.checked)}
+                  aria-label="Toggle house context"
+                />
+              </label>
+            )}
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-white/80">Baseplate</span>
+              <input
+                type="checkbox"
+                checked={showBaseplate}
+                onChange={(e) => setShowBaseplate(e.target.checked)}
+                aria-label="Toggle baseplate"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-white/80">Shadows</span>
+              <input
+                type="checkbox"
+                checked={showShadows}
+                onChange={(e) => setShowShadows(e.target.checked)}
+                aria-label="Toggle shadows"
+              />
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .gl-units-select option {
+          color: #0f172a;
+          background: #ffffff;
+        }
+      `}</style>
+
+      {validUrls.length > 1 && (
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-auto">
+          <div className="bg-black bg-opacity-80 backdrop-blur-sm rounded-lg p-4 shadow-lg">
+            <div className="text-center mb-3">
+              <div className="text-white text-sm font-medium">
+                3D Model {currentFbxIndex + 1} of {validUrls.length}
+              </div>
+              <div className="text-gray-300 text-xs">{validUrls[currentFbxIndex]?.split("/").pop()?.split(".")[0] || `Model ${currentFbxIndex + 1}`}</div>
+            </div>
+
+            <div className="flex items-center justify-center space-x-4">
+              <button
+                onClick={goToPrevious}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                aria-label="Previous model"
+              >
+                ← Back
+              </button>
+
+              <div className="flex space-x-2">
+                {validUrls.map((_, index) => (
+                  <button
+                    key={index}
+                    onClick={() => goToIndex(index)}
+                    className={`w-3 h-3 rounded-full transition-colors ${index === currentFbxIndex ? "bg-blue-500" : "bg-gray-400 hover:bg-gray-300"}`}
+                    aria-label={`Go to model ${index + 1}`}
+                  />
+                ))}
+              </div>
+
+              <button
+                onClick={goToNext}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                Next →
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

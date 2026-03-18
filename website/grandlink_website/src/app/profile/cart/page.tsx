@@ -4,6 +4,8 @@ import { useEffect, useState, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { computeMeasurementPricing } from "@/utils/measurementPricing";
+import { PICKUP_ADDRESS, type FulfillmentMethod } from "@/utils/fulfillment";
 
 type UserItem = {
   price: number | undefined;
@@ -19,12 +21,16 @@ type Product = {
   price?: number;
   images?: string[];
   image1?: string;
+  width?: number;
+  height?: number;
 };
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
+
+const DELIVERY_FEE = 2599;
 
 type Address = {
   id: string;
@@ -34,12 +40,19 @@ type Address = {
   is_default: boolean;
 };
 
+const measurementsMatch = (left?: number, right?: number) => {
+  if (left == null && right == null) return true;
+  if (left == null || right == null) return false;
+  return Math.abs(left - right) < 0.000001;
+};
+
 export default function CartPage() {
   const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
   const [items, setItems] = useState<UserItem[]>([]);
   const [products, setProducts] = useState<Record<string, Product>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [fulfillmentMethod, setFulfillmentMethod] = useState<FulfillmentMethod>("delivery");
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [voucher, setVoucher] = useState("");
@@ -70,7 +83,7 @@ export default function CartPage() {
       if (productIds.length > 0) {
         const { data: prodData } = await supabase
           .from("products")
-          .select("id, name, price, images, image1")
+          .select("id, name, price, images, image1, width, height")
           .in("id", productIds);
 
         const map: Record<string, Product> = {};
@@ -98,11 +111,36 @@ export default function CartPage() {
     [items, selected]
   );
 
+  const computeUnitPrice = (item: UserItem) => {
+    const product = products[item.product_id];
+    const unitPricePerSqm = Math.max(0, Number(product?.price ?? 0));
+    const baseWidthRaw = Number(product?.width ?? 0);
+    const baseHeightRaw = Number(product?.height ?? 0);
+    const baseWidthM = Number.isFinite(baseWidthRaw) && baseWidthRaw > 0 ? baseWidthRaw / 1000 : undefined;
+    const baseHeightM = Number.isFinite(baseHeightRaw) && baseHeightRaw > 0 ? baseHeightRaw / 1000 : undefined;
+    const explicitEnabled = item.meta?.custom_dimensions?.enabled;
+    const customWidth = item.meta?.custom_dimensions?.width;
+    const customHeight = item.meta?.custom_dimensions?.height;
+    const useCustomMeasurements = explicitEnabled === true || (
+      explicitEnabled !== false && (
+        !measurementsMatch(Number(customWidth), baseWidthM) ||
+        !measurementsMatch(Number(customHeight), baseHeightM)
+      )
+    );
+
+    return computeMeasurementPricing({
+      widthMeters: useCustomMeasurements ? customWidth ?? baseWidthM : baseWidthM,
+      heightMeters: useCustomMeasurements ? customHeight ?? baseHeightM : baseHeightM,
+      unitPricePerSqm,
+      minSqm: 0,
+      sqmDecimals: 2,
+    }).unit_price;
+  };
+
   const totals = useMemo(() => {
     const base = selectedItems.reduce(
       (acc, item) => {
-        const product = products[item.product_id];
-        const unitPrice = Number(item.price ?? product?.price ?? 0);
+        const unitPrice = computeUnitPrice(item);
         const quantity = Number(item.quantity || 1);
         const addons = Array.isArray(item.meta?.addons)
           ? item.meta.addons.reduce((sum: number, addon: any) => sum + Number(addon?.fee || 0), 0)
@@ -123,10 +161,11 @@ export default function CartPage() {
         : voucherInfo.value;
       discount = Math.min(discount, preDiscount);
     }
-    const reservationFee = selectedItems.length > 0 ? 500 : 0;
-    const total = Math.max(0, preDiscount - discount + reservationFee);
-    return { ...base, discount, reservationFee, total };
-  }, [selectedItems, products, voucherInfo]);
+    const deliveryFee =
+      selectedItems.length > 0 && fulfillmentMethod === "delivery" ? DELIVERY_FEE : 0;
+    const total = Math.max(0, preDiscount - discount + deliveryFee);
+    return { ...base, discount, deliveryFee, total };
+  }, [selectedItems, products, voucherInfo, fulfillmentMethod]);
 
   const updateQuantity = async (item: UserItem, delta: number) => {
     const next = Math.max(1, (item.quantity || 1) + delta);
@@ -161,7 +200,7 @@ export default function CartPage() {
     
     // Navigate to checkout page with selected items
     const itemIds = selectedItems.map(item => item.id).join(",");
-    router.push(`/profile/cart/checkout?items=${itemIds}`);
+    router.push(`/profile/cart/checkout?items=${itemIds}&delivery_method=${fulfillmentMethod}`);
   };
 
   const applyVoucher = async () => {
@@ -228,7 +267,7 @@ export default function CartPage() {
 
           const selectedFlag = !!selected[item.id];
           const qty = item.quantity || 1;
-          const unitPrice = Number(item.price ?? product?.price ?? 0);
+          const unitPrice = computeUnitPrice(item);
           const addonsArr: any[] = Array.isArray(item.meta?.addons) ? item.meta.addons : [];
           const hasColorAddon = addonsArr.some((a: any) => a?.key === 'color_customization');
           const colorValue = (addonsArr.find((a: any) => a?.key === 'color_customization')?.value) || '';
@@ -342,6 +381,36 @@ export default function CartPage() {
         <div className="w-96">
           <div className="sticky top-6 bg-white border rounded-lg shadow-lg p-6 space-y-4">
             <div className="text-black font-bold text-xl border-b pb-3">Payment Summary</div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-semibold text-black">Delivery Option</div>
+              <div className="flex flex-wrap gap-6 text-sm text-black">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="fulfillmentMethod"
+                    checked={fulfillmentMethod === "delivery"}
+                    onChange={() => setFulfillmentMethod("delivery")}
+                  />
+                  Delivery
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="fulfillmentMethod"
+                    checked={fulfillmentMethod === "pickup"}
+                    onChange={() => setFulfillmentMethod("pickup")}
+                  />
+                  Pickup
+                </label>
+              </div>
+              {fulfillmentMethod === "pickup" ? (
+                <div className="rounded-lg border border-gray-300 bg-gray-50 px-4 py-3">
+                  <div className="text-sm font-semibold text-gray-700">Pickup Address</div>
+                  <div className="mt-1 text-sm text-gray-800">{PICKUP_ADDRESS}</div>
+                </div>
+              ) : null}
+            </div>
             
             <div className="space-y-3">
               <div className="flex justify-between text-sm text-black">
@@ -361,10 +430,12 @@ export default function CartPage() {
                 </div>
               )}
               
-              <div className="flex justify-between text-sm text-black">
-                <span>Reservation Fee</span>
-                <span>₱{totals.reservationFee.toLocaleString()}</span>
-              </div>
+              {fulfillmentMethod === "delivery" ? (
+                <div className="flex justify-between text-sm text-black">
+                  <span>Delivery Fee</span>
+                  <span>₱{totals.deliveryFee.toLocaleString()}</span>
+                </div>
+              ) : null}
               
               <hr className="my-3 border-gray-300" />
               

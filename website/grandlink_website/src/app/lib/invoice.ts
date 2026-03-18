@@ -1,3 +1,8 @@
+import fs from "fs/promises";
+import path from "path";
+import PDFDocument from "pdfkit";
+import sharp from "sharp";
+
 export type InvoiceLine = {
   description: string;
   quantity: number;
@@ -9,6 +14,7 @@ export type InvoiceData = {
   invoiceNumber: string;
   issuedAtIso: string;
   companyName: string;
+  companyLogoUrl?: string;
   companyAddress?: string;
   companyEmail?: string;
   customerName?: string;
@@ -29,6 +35,39 @@ export type InvoiceData = {
   lines: InvoiceLine[];
 };
 
+let companyLogoPdfBufferPromise: Promise<Buffer | null> | null = null;
+
+async function getCompanyLogoPdfBuffer(companyLogoUrl?: string): Promise<Buffer | null> {
+  if (!companyLogoPdfBufferPromise) {
+    companyLogoPdfBufferPromise = (async () => {
+      try {
+        const logoPath = path.join(process.cwd(), "public", "ge-logo.avif");
+        const raw = await fs.readFile(logoPath);
+        return await sharp(raw).png().toBuffer();
+      }
+
+      catch (fileError) {
+        if (companyLogoUrl) {
+          try {
+            const response = await fetch(companyLogoUrl, { cache: "force-cache" });
+            if (response.ok) {
+              const raw = Buffer.from(await response.arrayBuffer());
+              return await sharp(raw).png().toBuffer();
+            }
+          } catch (urlError) {
+            console.warn("Failed to load invoice logo from URL", urlError);
+          }
+        }
+
+        console.warn("Failed to prepare invoice logo for PDF", fileError);
+        return null;
+      }
+    })();
+  }
+
+  return companyLogoPdfBufferPromise;
+}
+
 const money = (n: number, currency = "PHP") => {
   const v = Number.isFinite(n) ? n : 0;
   if (currency === "PHP") return `₱${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -37,6 +76,9 @@ const money = (n: number, currency = "PHP") => {
 
 export function renderInvoiceHtml(data: InvoiceData) {
   const issued = new Date(data.issuedAtIso);
+  const logoHtml = data.companyLogoUrl
+    ? `<img src="${escapeHtml(data.companyLogoUrl)}" alt="${escapeHtml(data.companyName)} logo" style="height:52px;width:auto;object-fit:contain;display:block;" />`
+    : `<div style="font-size:22px;font-weight:800;letter-spacing:1px;">${escapeHtml(data.companyName)}</div>`;
   const deliveryRow =
     String(data.deliveryMethod || "").toLowerCase() === "pickup"
       ? `<div><strong>Pickup:</strong> ${escapeHtml(data.pickupBranch || "(not set)")}</div>`
@@ -65,7 +107,7 @@ export function renderInvoiceHtml(data: InvoiceData) {
   <div style="max-width:900px;margin:24px auto;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
     <div style="padding:24px;border-bottom:1px solid #eee;display:flex;gap:12px;justify-content:space-between;align-items:flex-start;">
       <div>
-        <div style="font-size:22px;font-weight:800;letter-spacing:1px;">${escapeHtml(data.companyName)}</div>
+        ${logoHtml}
         <div style="font-size:12px;color:#444;margin-top:6px;">${escapeHtml(data.companyAddress || "")}</div>
         <div style="font-size:12px;color:#444;">${escapeHtml(data.companyEmail || "")}</div>
       </div>
@@ -113,7 +155,7 @@ export function renderInvoiceHtml(data: InvoiceData) {
           <div style="display:flex;justify-content:space-between;margin:6px 0;"><span>Subtotal</span><span>${money(data.subtotal, data.currency)}</span></div>
           <div style="display:flex;justify-content:space-between;margin:6px 0;"><span>Add-ons</span><span>${money(data.addonsTotal, data.currency)}</span></div>
           <div style="display:flex;justify-content:space-between;margin:6px 0;"><span>Discount</span><span>- ${money(data.discountValue, data.currency)}</span></div>
-          <div style="display:flex;justify-content:space-between;margin:6px 0;"><span>Reservation Fee</span><span>${money(data.reservationFee, data.currency)}</span></div>
+          <div style="display:flex;justify-content:space-between;margin:6px 0;"><span>Delivery Fee</span><span>${money(data.reservationFee, data.currency)}</span></div>
           <div style="height:1px;background:#eee;margin:10px 0;"></div>
           <div style="display:flex;justify-content:space-between;margin:6px 0;font-weight:800;font-size:14px;"><span>Total</span><span>${money(data.totalAmount, data.currency)}</span></div>
         </div>
@@ -132,6 +174,107 @@ export function renderInvoiceHtml(data: InvoiceData) {
   </div>
 </body>
 </html>`;
+}
+
+export async function renderInvoicePdf(data: InvoiceData): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    (async () => {
+      try {
+        const doc = new PDFDocument({ size: "A4", margin: 48 });
+        const chunks: Buffer[] = [];
+
+        doc.on("data", (chunk) => chunks.push(chunk as Buffer));
+        doc.on("end", () => resolve(Buffer.concat(chunks)));
+        doc.on("error", reject);
+
+        const issued = new Date(data.issuedAtIso);
+        const lineHeight = 18;
+        const logoBuffer = await getCompanyLogoPdfBuffer(data.companyLogoUrl);
+        const headerTop = doc.y;
+
+        if (logoBuffer) {
+          doc.image(logoBuffer, 48, headerTop, { fit: [130, 52] });
+        } else {
+          doc.fontSize(20).fillColor("#111").text(data.companyName, 48, headerTop, { align: "left" });
+        }
+
+        doc.fontSize(10).fillColor("#555").text(data.companyAddress || "", 48, headerTop + 60);
+        doc.text(data.companyEmail || "", 48, doc.y + 2);
+
+        doc.fillColor("#111").fontSize(16).text(`Invoice ${data.invoiceNumber}`, 330, headerTop, { align: "right" });
+        doc.fontSize(10).fillColor("#555").text(`Issued: ${issued.toLocaleString()}`, 330, headerTop + 24, { align: "right" });
+        doc.text(`Order ID: ${data.orderId}`, 330, headerTop + 40, { align: "right" });
+        doc.text(`Payment: ${(data.paymentMethod || "").toUpperCase() || "N/A"}`, 330, headerTop + 56, { align: "right" });
+
+        doc.y = Math.max(doc.y, headerTop + 88);
+        doc.moveDown(1.2);
+        doc.fillColor("#111").fontSize(12).text("Billed To");
+        doc.fontSize(10).fillColor("#333").text(data.customerName || "");
+        doc.text(data.customerEmail || "");
+        doc.text(data.customerPhone || "");
+        doc.text(data.billingAddress || "");
+
+        doc.moveDown(0.8);
+        doc.fillColor("#111").fontSize(12).text("Fulfillment");
+        doc.fontSize(10).fillColor("#333").text(`Method: ${String(data.deliveryMethod || "").toUpperCase() || "N/A"}`);
+        if (String(data.deliveryMethod || "").toLowerCase() === "pickup") {
+          doc.text(`Pickup branch: ${data.pickupBranch || "(not set)"}`);
+        } else {
+          doc.text(`Delivery: ${data.deliveryAddress || "(not set)"}`);
+        }
+
+        doc.moveDown(1);
+        doc.fillColor("#111").fontSize(12).text("Items");
+        doc.moveDown(0.3);
+
+        const tableStartY = doc.y;
+        doc.fontSize(10).fillColor("#111");
+        doc.text("Description", 48, tableStartY);
+        doc.text("Qty", 300, tableStartY, { width: 40, align: "right" });
+        doc.text("Unit", 350, tableStartY, { width: 90, align: "right" });
+        doc.text("Amount", 450, tableStartY, { width: 100, align: "right" });
+
+        let rowY = tableStartY + 14;
+        doc.moveTo(48, rowY - 4).lineTo(550, rowY - 4).strokeColor("#ddd").stroke();
+
+        for (const line of data.lines) {
+          doc.fillColor("#333").fontSize(10);
+          doc.text(line.description, 48, rowY, { width: 240 });
+          doc.text(String(line.quantity), 300, rowY, { width: 40, align: "right" });
+          doc.text(money(line.unitPrice, data.currency), 350, rowY, { width: 90, align: "right" });
+          doc.text(money(line.amount, data.currency), 450, rowY, { width: 100, align: "right" });
+          rowY += lineHeight;
+        }
+
+        doc.moveTo(48, rowY - 2).lineTo(550, rowY - 2).strokeColor("#eee").stroke();
+        rowY += 8;
+
+        doc.fillColor("#111").fontSize(10);
+        doc.text("Subtotal", 360, rowY, { width: 90, align: "right" });
+        doc.text(money(data.subtotal, data.currency), 450, rowY, { width: 100, align: "right" });
+        rowY += lineHeight;
+        doc.text("Add-ons", 360, rowY, { width: 90, align: "right" });
+        doc.text(money(data.addonsTotal, data.currency), 450, rowY, { width: 100, align: "right" });
+        rowY += lineHeight;
+        doc.text("Discount", 360, rowY, { width: 90, align: "right" });
+        doc.text(`- ${money(data.discountValue, data.currency)}`, 450, rowY, { width: 100, align: "right" });
+        rowY += lineHeight;
+        doc.text("Delivery Fee", 360, rowY, { width: 90, align: "right" });
+        doc.text(money(data.reservationFee, data.currency), 450, rowY, { width: 100, align: "right" });
+        rowY += lineHeight;
+
+        doc.fontSize(12).fillColor("#000").text("Total", 360, rowY, { width: 90, align: "right" });
+        doc.text(money(data.totalAmount, data.currency), 450, rowY, { width: 100, align: "right" });
+
+        doc.moveDown(2);
+        doc.fontSize(9).fillColor("#666").text("This invoice is generated automatically after payment confirmation.");
+
+        doc.end();
+      } catch (error) {
+        reject(error);
+      }
+    })();
+  });
 }
 
 function escapeHtml(s: string) {

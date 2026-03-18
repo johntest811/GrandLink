@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { createServerClient } from "@/app/Clients/Supabase/SupabaseClients";
 
 type VerificationEntry = {
   code: string;
@@ -9,6 +10,51 @@ type VerificationEntry = {
 // Store verification codes temporarily (in production, use Redis or database)
 // Also track lastSentAt to avoid duplicate emails being sent rapidly.
 const verificationCodes = new Map<string, VerificationEntry>();
+
+type DbCodeRow = {
+  email: string;
+  code: string;
+  expires_at: string;
+  last_sent_at: string | null;
+};
+
+const VERIFICATION_TABLE = "login_verification_codes";
+
+async function getDbRow(email: string) {
+  const supabaseAdmin = createServerClient();
+  const { data, error } = await supabaseAdmin
+    .from(VERIFICATION_TABLE)
+    .select("email, code, expires_at, last_sent_at")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (error) throw error;
+  return (data as DbCodeRow | null) ?? null;
+}
+
+async function upsertDbRow(email: string, code: string, expiresAtMs: number) {
+  const supabaseAdmin = createServerClient();
+  const expiresAtIso = new Date(expiresAtMs).toISOString();
+  const nowIso = new Date().toISOString();
+
+  const { error } = await supabaseAdmin.from(VERIFICATION_TABLE).upsert(
+    {
+      email,
+      code,
+      expires_at: expiresAtIso,
+      last_sent_at: nowIso,
+    },
+    { onConflict: "email" }
+  );
+
+  if (error) throw error;
+}
+
+async function deleteDbRow(email: string) {
+  const supabaseAdmin = createServerClient();
+  const { error } = await supabaseAdmin.from(VERIFICATION_TABLE).delete().eq("email", email);
+  if (error) throw error;
+}
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
@@ -24,7 +70,23 @@ export async function sendVerificationCode(emailRaw: string, resend: boolean) {
     return { ok: false as const, status: 400, error: "Invalid email" };
   }
 
-  const existing = verificationCodes.get(email);
+  // Prefer DB-backed codes (reliable across reloads/instances). Fallback to in-memory if DB isn't available.
+  let existingDb: DbCodeRow | null = null;
+  try {
+    existingDb = await getDbRow(email);
+  } catch {
+    existingDb = null;
+  }
+
+  const existingMem = verificationCodes.get(email);
+
+  const existing = existingDb
+    ? {
+        code: existingDb.code,
+        expiresAt: Date.parse(existingDb.expires_at),
+        lastSentAt: existingDb.last_sent_at ? Date.parse(existingDb.last_sent_at) : 0,
+      }
+    : existingMem;
 
   // If a valid code already exists and this isn't an explicit resend request,
   // don't send another email. This prevents duplicate emails in the inbox.
@@ -46,11 +108,19 @@ export async function sendVerificationCode(emailRaw: string, resend: boolean) {
   const code = existing && existing.expiresAt > Date.now() ? existing.code : generateVerificationCode();
 
   // Persist metadata (reuse code if still valid, extend/refresh TTL and lastSentAt)
+  const expiresAtMs = Date.now() + 10 * 60 * 1000;
   verificationCodes.set(email, {
     code,
-    expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
+    expiresAt: expiresAtMs,
     lastSentAt: Date.now(),
   });
+
+  // Best-effort write-through to DB
+  try {
+    await upsertDbRow(email, code, expiresAtMs);
+  } catch {
+    // ignore; in-memory fallback still works in dev
+  }
 
   // Send email with verification code
   const LOGIN_GMAIL_USER = process.env.LOGIN_GMAIL_USER || process.env.GMAIL_USER;
@@ -122,7 +192,7 @@ export async function sendVerificationCode(emailRaw: string, resend: boolean) {
 
   try {
     await transporter.sendMail(mailOptions);
-  } catch (e) {
+  } catch {
     // If sending fails, keep the code stored so a resend can reuse it.
     return { ok: false as const, status: 500, error: "Failed to send verification code" };
   }
@@ -130,7 +200,7 @@ export async function sendVerificationCode(emailRaw: string, resend: boolean) {
   return { ok: true as const, status: 200, message: "Verification code sent to your email" };
 }
 
-export function verifyVerificationCode(emailRaw: string, codeRaw: string) {
+export async function verifyVerificationCode(emailRaw: string, codeRaw: string) {
   const email = normalizeEmail(emailRaw);
   const code = String(codeRaw || "").trim();
 
@@ -138,6 +208,30 @@ export function verifyVerificationCode(emailRaw: string, codeRaw: string) {
     return { ok: false as const, status: 400, error: "Email and code required" };
   }
 
+  // Prefer DB-backed verification (reliable across reloads/instances).
+  try {
+    const row = await getDbRow(email);
+    if (row) {
+      const expiresAtMs = Date.parse(row.expires_at);
+      if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) {
+        await deleteDbRow(email);
+        verificationCodes.delete(email);
+        return { ok: false as const, status: 400, error: "Verification code expired" };
+      }
+
+      if (row.code !== code) {
+        return { ok: false as const, status: 400, error: "Invalid verification code" };
+      }
+
+      await deleteDbRow(email);
+      verificationCodes.delete(email);
+      return { ok: true as const, status: 200, message: "Code verified successfully" };
+    }
+  } catch {
+    // ignore DB errors and fall back to memory
+  }
+
+  // Fallback: in-memory verification (dev only)
   const stored = verificationCodes.get(email);
   if (!stored) {
     return { ok: false as const, status: 404, error: "No verification code found" };

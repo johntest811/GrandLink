@@ -9,15 +9,62 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
+const DELIVERY_FEE = 2599;
+
 function ReservationSuccessPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const reservationId = searchParams.get("reservation_id");
+  const paypalOrderId = searchParams.get("token");
+  const paymentProvider = (searchParams.get("payment_provider") || "").toLowerCase();
+  const isPayPalReturn = Boolean(paypalOrderId) && (!paymentProvider || paymentProvider === "paypal");
   
   const [reservation, setReservation] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [paypalCaptureState, setPaypalCaptureState] = useState<"capturing" | "done">(
+    isPayPalReturn ? "capturing" : "done"
+  );
 
   useEffect(() => {
+    if (!isPayPalReturn || !paypalOrderId) {
+      setPaypalCaptureState("done");
+      return;
+    }
+
+    let cancelled = false;
+
+    const capturePayPalOrder = async () => {
+      setPaypalCaptureState("capturing");
+      try {
+        const response = await fetch("/api/paypal/capture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId: paypalOrderId }),
+        });
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          console.error("PayPal capture failed on reservation return:", payload);
+        }
+      } catch (error) {
+        console.error("PayPal capture error on reservation return:", error);
+      } finally {
+        if (!cancelled) {
+          setPaypalCaptureState("done");
+        }
+      }
+    };
+
+    capturePayPalOrder();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPayPalReturn, paypalOrderId]);
+
+  useEffect(() => {
+    if (paypalCaptureState === "capturing") return;
+
     const loadReservation = async () => {
       if (!reservationId) {
         router.push("/");
@@ -44,7 +91,7 @@ function ReservationSuccessPageContent() {
     };
 
     loadReservation();
-  }, [reservationId, router]);
+  }, [reservationId, router, paypalCaptureState]);
 
   if (loading) {
     return (
@@ -83,12 +130,30 @@ function ReservationSuccessPageContent() {
                   Number(reservation?.meta?.discount_value ?? reservation?.meta?.voucher_discount ?? 0);
                 const subtotal = Number(reservation?.meta?.subtotal ?? price * qty);
                 const total = Number(reservation?.meta?.total_amount ?? Math.max(0, subtotal + addonsTotal - discountValue));
-                const reservationFee = Number(reservation?.meta?.reservation_fee ?? 500);
+                const reservationFee = Number(reservation?.meta?.reservation_fee ?? DELIVERY_FEE);
                 const stockBefore = reservation?.meta?.product_stock_before ?? reservation?.meta?.product_inventory;
                 const stockAfter = reservation?.meta?.product_stock_after;
                 const dims = reservation?.meta?.custom_dimensions;
                 const branch = reservation?.meta?.selected_branch || '-';
                 const voucherCode = reservation?.meta?.voucher_code || null;
+                const billingEmail =
+                  reservation?.meta?.billing_email ||
+                  reservation?.meta?.customer_email ||
+                  reservation?.customer_email ||
+                  null;
+                const billingPhone =
+                  reservation?.meta?.billing_phone ||
+                  reservation?.meta?.customer_phone ||
+                  reservation?.customer_phone ||
+                  null;
+
+                const formatMeters = (v: any) => {
+                  const n = Number(v);
+                  if (!Number.isFinite(n) || n <= 0) return "-";
+                  // Back-compat: older data may be in mm.
+                  const meters = n > 50 ? n / 1000 : n;
+                  return meters.toFixed(3).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+                };
 
                 return (
                   <div className="bg-gray-50 rounded-lg p-4 space-y-3">
@@ -114,7 +179,7 @@ function ReservationSuccessPageContent() {
                       <span className="text-black font-medium">Dimensions:</span>
                       <span className="text-black">
                         {dims
-                          ? `${dims.width || '-'} x ${dims.height || '-'} x ${dims.thickness || '-'}`
+                          ? `${formatMeters(dims.width)}m x ${formatMeters(dims.height)}m`
                           : '—'}
                       </span>
                     </div>
@@ -142,7 +207,7 @@ function ReservationSuccessPageContent() {
                     </div>
 
                     <div className="flex justify-between text-sm">
-                      <span className="text-black font-medium">Reservation Fee (Paid Now):</span>
+                      <span className="text-black font-medium">Delivery Fee (Paid Now):</span>
                       <span className="text-black">₱{reservationFee.toLocaleString()}</span>
                     </div>
 
@@ -150,6 +215,14 @@ function ReservationSuccessPageContent() {
                       <span className="text-black font-medium">Balance Due:</span>
                       <span className="text-black">₱{Math.max(0, Number(total) - reservationFee).toLocaleString()}</span>
                     </div>
+
+                    {(billingEmail || billingPhone) && (
+                      <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+                        <div className="font-semibold">Invoice Destination</div>
+                        {billingEmail && <div>Email: {billingEmail}</div>}
+                        {billingPhone && <div>Phone: {billingPhone}</div>}
+                      </div>
+                    )}
 
                     {typeof stockBefore !== 'undefined' && (
                       <div className="flex justify-between text-xs text-black pt-2">
@@ -195,7 +268,7 @@ function ReservationSuccessPageContent() {
                   <div className="w-6 h-6 bg-gray-200 text-gray-600 rounded-full flex items-center justify-center text-xs font-bold mr-3 mt-0.5">2</div>
                   <div>
                     <p className="font-medium text-gray-800">Order Confirmation</p>
-                    <p>Once approved, your reservation will move to the orders section where you can see the full receipt.</p>
+                    <p>Once approved, your reservation will move to the orders section where you can see the full receipt and invoice.</p>
                   </div>
                 </div>
                 

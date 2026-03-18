@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
+import { getMetaFulfillmentMethod, PICKUP_ADDRESS } from "@/utils/fulfillment";
 
 type UserItem = {
   id: string;
@@ -195,21 +196,13 @@ export default function ProfileCancelledPage() {
   };
 
   const contactSupport = (item: UserItem) => {
-    const subject = `Inquiry about ${item.status === "cancelled" ? "cancelled" : "pending cancellation"} reservation ${item.id}`;
-    const body = `Hello,
+    const supportMessage = `Hi, I need help with my ${item.status === "cancelled" ? "cancelled" : "pending cancellation"} reservation. Reservation ID: ${item.id}, Product: ${productsById[item.product_id]?.name || item.meta?.product_name || "N/A"}, Status: ${getStatusDisplay(item.status).label}.`;
 
-I would like to inquire about my ${item.status === "cancelled" ? "cancelled" : "pending cancellation"} reservation:
-
-Reservation ID: ${item.id}
-Product: ${productsById[item.product_id]?.name || item.meta?.product_name}
-Status: ${getStatusDisplay(item.status).label}
-
-Please provide an update on the status.
-
-Thank you.`;
-
-    const mailto = `mailto:support@grandlink.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailto;
+    window.dispatchEvent(
+      new CustomEvent("gl:open-chat", {
+        detail: { message: supportMessage },
+      })
+    );
   };
 
   const reorder = async (item: UserItem) => {
@@ -321,7 +314,7 @@ Thank you.`;
 
               const statusDisplay = getStatusDisplay(it.status);
               const refundStatus = getRefundStatus(it);
-              const reservationFee = it.meta?.reservation_fee || 500;
+              const reservationFee = Number(it.meta?.reservation_fee ?? 0);
               const totalPrice = it.total_amount || it.total_paid || ((p?.price || it.meta?.product_price || 0) * it.quantity);
               // Define refundAmount for card section (was causing ReferenceError)
               const refundAmount = Number(it.meta?.refund_amount ?? reservationFee);
@@ -519,7 +512,9 @@ Thank you.`;
               const item = receiptItem!;
               const product = productsById[item.product_id];
               const totalPrice = item.total_amount || item.total_paid || ((product?.price || item.meta?.product_price || 0) * item.quantity);
-              const reservationFee = item.meta?.reservation_fee || 500;
+              const fulfillmentMethod = getMetaFulfillmentMethod(item.meta);
+              const pickupAddress = String(item.meta?.pickup_address || PICKUP_ADDRESS);
+              const reservationFee = Number(item.meta?.reservation_fee ?? 0);
               const refundAmount = item.meta?.refund_amount || reservationFee;
 
               return (
@@ -543,6 +538,13 @@ Thank you.`;
                     </div>
                   </div>
 
+                  {fulfillmentMethod === "pickup" ? (
+                    <div className="rounded border border-gray-200 bg-gray-50 p-3 text-xs">
+                      <div className="font-semibold text-gray-900">Pickup Address</div>
+                      <div className="mt-1 text-gray-700">{pickupAddress}</div>
+                    </div>
+                  ) : null}
+
                   <div className="border-t border-black pt-3">
                     <div className="flex justify-between">
                       <span>Quantity</span>
@@ -552,10 +554,12 @@ Thank you.`;
                       <span>Total Value</span>
                       <span>₱{Number(totalPrice).toLocaleString()}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span>Original Payment</span>
-                      <span>₱{Number(reservationFee).toLocaleString()}</span>
-                    </div>
+                    {fulfillmentMethod === "delivery" ? (
+                      <div className="flex justify-between">
+                        <span>Original Payment</span>
+                        <span>₱{Number(reservationFee).toLocaleString()}</span>
+                      </div>
+                    ) : null}
                     <div className="flex justify-between font-semibold text-lg border-t border-black pt-2">
                       <span>Refund Amount</span>
                       <span className="text-black">₱{Number(refundAmount).toLocaleString()}</span>

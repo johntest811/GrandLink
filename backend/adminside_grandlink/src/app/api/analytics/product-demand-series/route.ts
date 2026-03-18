@@ -20,6 +20,35 @@ function dateKey(iso: string) {
   return `${y}-${m}-${day}`;
 }
 
+function addDaysISO(dateISO: string, days: number) {
+  const d = new Date(`${dateISO}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function excelSerialToIso(serial: number) {
+  const base = new Date(Date.UTC(1899, 11, 30));
+  base.setUTCDate(base.getUTCDate() + Math.floor(serial));
+  return base.toISOString().slice(0, 10);
+}
+
+function parseSalesForecastDate(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return excelSerialToIso(value);
+  }
+
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    return excelSerialToIso(Number(text));
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
 function enumerateDates(startISO: string, endISO: string) {
   const out: string[] = [];
   const start = new Date(`${startISO}T00:00:00.000Z`);
@@ -33,105 +62,86 @@ function enumerateDates(startISO: string, endISO: string) {
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
-    const days = Math.max(30, Math.min(365, Number(url.searchParams.get("days") || 270)));
+    const days = Math.max(90, Math.min(3650, Number(url.searchParams.get("days") || 1095)));
     const limit = Math.max(3, Math.min(50, Number(url.searchParams.get("limit") || 12)));
-    const branch = (url.searchParams.get("branch") || "").trim();
+    const category = (url.searchParams.get("category") || "").trim().toLowerCase();
 
-    const end = new Date();
-    const start = new Date(end);
-    start.setUTCDate(end.getUTCDate() - days);
-
-    const startDate = url.searchParams.get("start") || dateKey(start.toISOString());
-    const endDate = url.searchParams.get("end") || dateKey(end.toISOString());
-
-    const baseSelect = branch
-      ? "product_id,quantity,created_at,status,order_status,item_type,delivery_address_id"
-      : "product_id,quantity,created_at,status,order_status,item_type";
-
-    const { data: items, error } = await supabase
-      .from("user_items")
-      .select(baseSelect)
-      .gte("created_at", `${startDate}T00:00:00.000Z`)
-      .lte("created_at", `${endDate}T23:59:59.999Z`)
-      .in("item_type", ["order", "reservation"])
-      .limit(50000);
-
+    const { data: rawRows, error } = await supabase
+      .from("SalesForecast")
+      .select("Date,Product_ID,Product_Name,Category,Selling_Price,Units_Sold,Revenue,Ending_Stock")
+      .limit(100000);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    const successStatuses = new Set([
-      "reserved",
-      "approved",
-      "in_production",
-      "start_packaging",
-      "ready_for_delivery",
-      "completed",
-    ]);
+    const rows = (rawRows || [])
+      .map((row: any) => {
+        const date = parseSalesForecastDate(row.Date);
+        if (!date) return null;
+        return {
+          date,
+          productId: String(row.Product_ID || ""),
+          productName: String(row.Product_Name || row.Product_ID || "Unknown Product"),
+          category: String(row.Category || "Uncategorized"),
+          sellingPrice: Math.max(0, Number(row.Selling_Price || 0)),
+          unitsSold: Math.max(0, Number(row.Units_Sold || 0)),
+          revenue: Math.max(0, Number(row.Revenue || 0)),
+          endingStock: Math.max(0, Number(row.Ending_Stock || 0)),
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .filter((row) => !category || row.category.toLowerCase() === category)
+      .sort((left, right) => left.date.localeCompare(right.date));
 
-    const labels = enumerateDates(startDate, endDate);
-
-    let filteredItems = items || [];
-    if (branch) {
-      const addressIds = Array.from(
-        new Set(
-          (filteredItems as any[])
-            .map((r) => r.delivery_address_id)
-            .filter((id) => typeof id === "string" && id.length > 0)
-        )
-      ) as string[];
-
-      if (addressIds.length === 0) {
-        filteredItems = [];
-      } else {
-        const { data: addresses, error: addressesError } = await supabase
-          .from("addresses")
-          .select("id,branch")
-          .in("id", addressIds);
-        if (addressesError) return NextResponse.json({ error: addressesError.message }, { status: 500 });
-
-        const branchById = new Map<string, string>();
-        for (const a of addresses || []) {
-          if (a?.id) branchById.set(a.id, String(a.branch || "").trim().toLowerCase());
-        }
-
-        const wanted = branch.toLowerCase();
-        filteredItems = (filteredItems as any[]).filter((r) => {
-          const id = r.delivery_address_id as string | null;
-          if (!id) return false;
-          return (branchById.get(id) || "") === wanted;
-        });
-      }
+    if (!rows.length) {
+      return NextResponse.json({
+        startDate: "",
+        endDate: "",
+        labels: [],
+        products: [],
+        source: "SalesForecast",
+        inventorySnapshot: [],
+      });
     }
 
-    // daily qty per product
+    const latestAvailableDate = rows[rows.length - 1].date;
+    const earliestAvailableDate = rows[0].date;
+    const defaultStart = addDaysISO(latestAvailableDate, -(days - 1));
+    const startDate = defaultStart < earliestAvailableDate ? earliestAvailableDate : defaultStart;
+    const endDate = latestAvailableDate;
+    const labels = enumerateDates(startDate, endDate);
+
     const qtyByProductDay: Record<string, Record<string, number>> = {};
     const totalByProduct: Record<string, number> = {};
+    const nameByProduct: Record<string, string> = {};
+    const inventoryByProduct: Record<string, { date: string; currentStock: number; unitsSold: number; revenue: number; sellingPrice: number; category: string; productName: string }> = {};
 
-    for (const row of filteredItems as any[]) {
-      const s = String(row.order_status || row.status || "").toLowerCase();
-      if (!successStatuses.has(s)) continue;
-      const pid = row.product_id;
+    for (const row of rows) {
+      const pid = row.productId;
       if (!pid) continue;
-      const d = dateKey(row.created_at);
-      const qty = Math.max(0, Number(row.quantity || 0));
+      if (row.date < startDate || row.date > endDate) continue;
 
       if (!qtyByProductDay[pid]) qtyByProductDay[pid] = {};
-      qtyByProductDay[pid][d] = (qtyByProductDay[pid][d] || 0) + qty;
-      totalByProduct[pid] = (totalByProduct[pid] || 0) + qty;
+      qtyByProductDay[pid][row.date] = (qtyByProductDay[pid][row.date] || 0) + row.unitsSold;
+      totalByProduct[pid] = (totalByProduct[pid] || 0) + row.unitsSold;
+      nameByProduct[pid] = row.productName;
+    }
+
+    for (const row of rows) {
+      if (row.date !== latestAvailableDate) continue;
+      inventoryByProduct[row.productId] = {
+        date: row.date,
+        currentStock: row.endingStock,
+        unitsSold: row.unitsSold,
+        revenue: row.revenue,
+        sellingPrice: row.sellingPrice,
+        category: row.category,
+        productName: row.productName,
+      };
     }
 
     const topProductIds = Object.entries(totalByProduct)
       .sort((a, b) => (b[1] || 0) - (a[1] || 0))
       .slice(0, limit)
       .map(([pid]) => pid);
-
-    const nameByProduct: Record<string, string> = {};
-    if (topProductIds.length) {
-      const { data: products } = await supabase
-        .from("products")
-        .select("id,name")
-        .in("id", topProductIds);
-      (products || []).forEach((p: any) => (nameByProduct[p.id] = p.name || p.id));
-    }
 
     const products = topProductIds.map((pid) => {
       const byDay = qtyByProductDay[pid] || {};
@@ -144,7 +154,28 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({ startDate, endDate, labels, products });
+    const inventorySnapshot = Object.entries(inventoryByProduct)
+      .map(([productId, value]) => ({
+        date: value.date,
+        productId,
+        productName: value.productName,
+        category: value.category,
+        currentStock: value.currentStock,
+        unitsSold: value.unitsSold,
+        revenue: value.revenue,
+        sellingPrice: value.sellingPrice,
+      }))
+      .sort((left, right) => right.currentStock - left.currentStock);
+
+    return NextResponse.json({
+      startDate,
+      endDate,
+      labels,
+      products,
+      source: "SalesForecast",
+      latestAvailableDate,
+      inventorySnapshot,
+    });
   } catch (e: any) {
     console.error("GET /api/analytics/product-demand-series error", e);
     return NextResponse.json({ error: e?.message || "Internal error" }, { status: 500 });

@@ -46,20 +46,21 @@ export default function AboutUsPage() {
 
         {/* Logo and Description */}
         <section className="py-10 px-4 bg-white flex flex-col items-center">
-          <Image
+          {/* <Image
             src="/GE Logo.avif"
             alt="Grand East Logo"
             width={220}
             height={120}
             className="mb-4"
-          />
+          /> */}
           <div className="max-w-4xl mx-auto text-center">
             <h3 className="text-3xl font-extrabold text-gray-900 mb-4">
               {about.grand}
             </h3>
-            <p className="text-lg text-gray-700 leading-relaxed">
-              {about.description}
-            </p>
+            <div
+              className="blog-content text-lg text-gray-700 leading-relaxed text-left md:text-center"
+              dangerouslySetInnerHTML={{ __html: about.description || "" }}
+            />
           </div>
         </section>
 
@@ -77,9 +78,10 @@ export default function AboutUsPage() {
               <h4 className="text-4xl font-normal mb-4 tracking-tight text-center text-white max-w-lg mx-auto">
                 MISSION
               </h4>
-              <p className="text-center text-xl font-normal text-white max-w-lg mx-auto leading-snug">
-                {about.mission}
-              </p>
+              <div
+                className="blog-content blog-content-light text-center text-xl font-normal text-white max-w-lg mx-auto leading-snug"
+                dangerouslySetInnerHTML={{ __html: about.mission || "" }}
+              />
             </div>
           </div>
           <div
@@ -93,9 +95,10 @@ export default function AboutUsPage() {
               <h4 className="text-4xl font-normal mb-4 tracking-tight text-center text-white max-w-lg mx-auto">
                 VISION
               </h4>
-              <p className="text-center text-xl font-normal text-white max-w-lg mx-auto leading-snug">
-                {about.vision}
-              </p>
+              <div
+                className="blog-content blog-content-light text-center text-xl font-normal text-white max-w-lg mx-auto leading-snug"
+                dangerouslySetInnerHTML={{ __html: about.vision || "" }}
+              />
             </div>
           </div>
         </section>

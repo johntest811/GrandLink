@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, Suspense, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import Image from "next/image";
+import { getMetaFulfillmentMethod, PICKUP_ADDRESS } from "@/utils/fulfillment";
 
 const BRANCHES = [
   "BALINTAWAK BRANCH",
@@ -265,14 +266,86 @@ function ProfileReservePageContent() {
     }
   };
 
-  const handlePrint = () => {
-    window.print();
-  };
-
   const handleDownloadPDF = () => {
-    // Use browser's print to PDF feature
-    alert("Please use your browser's Print dialog and select 'Save as PDF' as the destination.");
-    window.print();
+    if (!showFullReceipt) return;
+
+    const item = showFullReceipt.item;
+    const product = showFullReceipt.product;
+    const unitPrice = Number(item.meta?.product_price ?? product?.price ?? 0);
+    const totalAmount = Number(getItemTotalPrice(item, product) || 0);
+    const reservationFee = Number(item.meta?.reservation_fee ?? 0);
+    const fulfillmentMethod = getMetaFulfillmentMethod(item.meta);
+    const pickupAddress = String(item.meta?.pickup_address || PICKUP_ADDRESS);
+    const addonsTotal = Number(item.meta?.addons_total ?? 0);
+    const discountValue = Number(item.meta?.discount_value ?? 0);
+    const createdAt = new Date(item.created_at).toLocaleString();
+
+    const popup = window.open("", "_blank", "width=900,height=900");
+    if (!popup) {
+      alert("Please allow pop-ups to export your receipt as PDF.");
+      return;
+    }
+
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Reservation Receipt</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; margin: 24px; color: #111; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; }
+    .title { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+    .muted { color: #4b5563; font-size: 12px; }
+    .label { color: #4b5563; font-size: 12px; margin-bottom: 4px; }
+    .value { font-size: 14px; }
+    .summary { background: #f9fafb; border-radius: 10px; padding: 12px; margin-top: 12px; }
+    .row { display: flex; justify-content: space-between; font-size: 13px; margin: 6px 0; }
+    .total { font-weight: 700; font-size: 18px; border-top: 1px solid #d1d5db; padding-top: 8px; margin-top: 8px; }
+    @media print { body { margin: 10mm; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">
+      <h1 style="margin:0;">GRAND EAST</h1>
+      <div class="muted">Reservation Receipt</div>
+    </div>
+
+    <div class="grid">
+      <div><div class="label">Order ID</div><div class="value">${item.id}</div></div>
+      <div><div class="label">Date Created</div><div class="value">${createdAt}</div></div>
+      <div><div class="label">Product</div><div class="value">${product?.name || "Unknown Product"}</div></div>
+      <div><div class="label">Quantity</div><div class="value">${item.quantity} unit(s)</div></div>
+    </div>
+
+    <div class="summary">
+      <div class="row"><span>Unit Price</span><span>₱${unitPrice.toLocaleString()}</span></div>
+      ${
+        fulfillmentMethod === "pickup"
+          ? `<div class="row"><span>Pickup Address</span><span style="max-width:60%; text-align:right;">${pickupAddress}</span></div>`
+          : reservationFee > 0
+            ? `<div class="row"><span>Delivery Fee</span><span>₱${reservationFee.toLocaleString()}</span></div>`
+            : ""
+      }
+      <div class="row"><span>Add-ons</span><span>₱${addonsTotal.toLocaleString()}</span></div>
+      <div class="row"><span>Discount</span><span>-₱${discountValue.toLocaleString()}</span></div>
+      <div class="row total"><span>Total Amount</span><span>₱${totalAmount.toLocaleString()}</span></div>
+    </div>
+  </div>
+
+  <script>
+    window.onload = function () {
+      window.print();
+      setTimeout(function () { window.close(); }, 300);
+    };
+  </script>
+</body>
+</html>`;
+
+    popup.document.open();
+    popup.document.write(html);
+    popup.document.close();
   };
 
   const canChangeReservation = (it: UserItem) => {
@@ -500,6 +573,9 @@ function ProfileReservePageContent() {
                       {item.payment_method && (
                         <div>
                           <span className="font-medium">Method:</span> {item.payment_method.toUpperCase()}
+                          {item.payment_method === 'paymongo' && item.meta?.paymongo_channel
+                            ? ` (${String(item.meta.paymongo_channel).toUpperCase()})`
+                            : ''}
                         </div>
                       )}
                       {address && (
@@ -754,15 +830,6 @@ function ProfileReservePageContent() {
                 <h2 className="text-lg font-semibold text-gray-800">Reservation Receipt</h2>
                 <div className="flex gap-2">
                   <button
-                    onClick={handlePrint}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                    </svg>
-                    Print
-                  </button>
-                  <button
                     onClick={handleDownloadPDF}
                     className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center gap-2"
                   >
@@ -846,6 +913,11 @@ function ProfileReservePageContent() {
                           <span className="font-medium">Branch:</span> {showFullReceipt.item.meta.branch}
                         </p>
                       )}
+                      {getMetaFulfillmentMethod(showFullReceipt.item.meta) === "pickup" ? (
+                        <p className="text-sm text-gray-600 mt-1">
+                          <span className="font-medium">Pickup Address:</span> {String(showFullReceipt.item.meta?.pickup_address || PICKUP_ADDRESS)}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -856,16 +928,14 @@ function ProfileReservePageContent() {
                   <div className="bg-gray-50 rounded-lg p-4 space-y-2">
                     {showFullReceipt.item.meta?.reservation_fee && (
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Reservation Fee</span>
+                        <span className="text-gray-600">Delivery Fee</span>
                         <span className="text-gray-900 font-medium">₱{Number(showFullReceipt.item.meta.reservation_fee).toLocaleString()}</span>
                       </div>
                     )}
-                    {showFullReceipt.item.meta?.product_price && (
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Unit Price</span>
-                        <span className="text-gray-900 font-medium">₱{Number(showFullReceipt.item.meta.product_price).toLocaleString()}</span>
-                      </div>
-                    )}
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Unit Price</span>
+                      <span className="text-gray-900 font-medium">₱{Number(showFullReceipt.item.meta?.product_price ?? showFullReceipt.product.price ?? 0).toLocaleString()}</span>
+                    </div>
                     {showFullReceipt.item.meta?.addons_total && Number(showFullReceipt.item.meta.addons_total) > 0 && (
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-600">Add-ons</span>
