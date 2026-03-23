@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
+import { useModal } from '@/hooks/useModal';
 
 type CancelledOrder = {
   id: string;
@@ -37,6 +38,7 @@ type CancelledOrder = {
 
 export default function CancelledOrdersScreen() {
   const router = useRouter();
+  const modal = useModal();
   const [orders, setOrders] = useState<CancelledOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

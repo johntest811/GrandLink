@@ -18,6 +18,7 @@ import { supabase } from './supabaseClient';
 import { resendVerificationCode } from '@/services/TwoFactorAuthService';
 import { hybridVerifyCode, sendSupabaseOTP } from '@/services/SupabaseTwoFactorService';
 import SecurityService from '@/services/SecurityService';
+import { useModal } from '@/hooks/useModal';
 
 export default function VerifyCodeScreen() {
   const [code, setCode] = useState(['', '', '', '', '', '']);

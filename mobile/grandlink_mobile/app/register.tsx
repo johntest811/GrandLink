@@ -3,7 +3,8 @@ import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet, Alert,
 import { Stack, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { supabase } from "./supabaseClient"; 
+import { supabase } from "./supabaseClient";
+import { useModal } from '@/hooks/useModal'; 
 
 export default function RegisterScreen() {
   const [name, setName] = useState("");
@@ -14,6 +15,7 @@ export default function RegisterScreen() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const modal = useModal();
 
   const passwordChecks = useMemo(() => {
     const pw = password ?? '';

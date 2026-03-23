@@ -2,10 +2,11 @@ import '../../utils/polyfills';
 // Force reload
 import React, { useEffect, useState, useRef } from 'react';
 import { Asset } from 'expo-asset';
-import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, Modal, Alert, Platform, Switch, PanResponder } from 'react-native';
+import { View, Text, Image as RNImage, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Dimensions, Modal, Platform, Switch, PanResponder } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
+import { useModal } from '@/hooks/useModal';
 
 // Lazy load expo-gl to prevent startup errors
 let GLView: any = null;
@@ -33,6 +34,7 @@ const DISABLE_COMPLEX_EFFECTS = true; // Disable heavy visual effects
 
 export default function ProductViewScreen() {
   const router = useRouter();
+  const modal = useModal();
   const { id } = useLocalSearchParams();
   const [product, setProduct] = useState<any>(null);
   const [loading, setLoading] = useState(true);

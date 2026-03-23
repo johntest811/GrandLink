@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, ActivityIndicator, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import type { User } from '@supabase/supabase-js';
 import { Ionicons, MaterialIcons, FontAwesome5, Entypo, Feather } from '@expo/vector-icons';
 import BottomNavBar from "@BottomNav/../components/BottomNav";
+import { useModal } from '@/hooks/useModal';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<User | null>(null);
@@ -15,6 +16,7 @@ export default function ProfileScreen() {
   const [reservationsCount, setReservationsCount] = useState(0);
   const [deletingAddress, setDeletingAddress] = useState(false);
   const router = useRouter();
+  const modal = useModal();
 
   useEffect(() => {
     const fetchUser = async () => {

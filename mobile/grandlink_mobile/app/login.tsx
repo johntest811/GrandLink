@@ -12,6 +12,7 @@ import { supabase } from './supabaseClient';
 import { resendVerificationCode } from '@/services/TwoFactorAuthService';
 import { hybridSendVerificationCode } from '@/services/SupabaseTwoFactorService';
 import SecurityService from '@/services/SecurityService';
+import { useModal } from '@/hooks/useModal';
 
 // Constants
 const MAX_LOGIN_ATTEMPTS = 3;
@@ -24,6 +25,7 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [lockdownTimer, setLockdownTimer] = useState<number | null>(null);
   const router = useRouter();
+  const modal = useModal();
   const [loading, setLoading] = useState(false);
   const params = useLocalSearchParams();
   

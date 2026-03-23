@@ -17,10 +17,11 @@ import { supabase } from "../supabaseClient";
 import { useAppContext } from "@/context/AppContext"; // ✅ import context (fixed alias)
 import BottomNavBar from "@BottomNav/../components/BottomNav";
 import TopBar from "@/components/TopBar";
-
+import { useModal } from '@/hooks/useModal';
 
 export default function InquirePage() {
   const router = useRouter();
+  const modal = useModal();
   const { darkMode } = useAppContext(); // ✅ use darkMode
   const [formData, setFormData] = useState({
     firstName: "",

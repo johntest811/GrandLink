@@ -15,10 +15,12 @@ import { Ionicons, MaterialIcons, Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "./../supabaseClient";
 import { useAppContext } from "@AppContext/../context/AppContext";
+import { useModal } from '@/hooks/useModal';
 
 import BottomNavBar from "@BottomNav/../components/BottomNav";
 export default function SettingsTab() {
   const router = useRouter();
+  const modal = useModal();
   const { darkMode, setDarkMode } = useAppContext();
   const [user, setUser] = useState<any>(null);
 

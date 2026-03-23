@@ -3,10 +3,12 @@ import { Alert, ImageBackground, ScrollView, StyleSheet, Text, TextInput, Toucha
 import { Stack, router } from 'expo-router';
 import { Image } from 'expo-image';
 import { supabase } from './supabaseClient';
+import { useModal } from '@/hooks/useModal';
 
 export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const modal = useModal();
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

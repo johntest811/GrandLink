@@ -17,6 +17,7 @@ import {
 import { supabase } from "../supabaseClient";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useModal } from "@/hooks/useModal";
 
 type Address = {
   id: string;
@@ -36,6 +37,7 @@ type ChangeAddressProps = {
 
 export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
   const router = useRouter();
+  const modal = useModal();
 
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [loading, setLoading] = useState(true);
@@ -133,7 +135,7 @@ export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        Alert.alert("Error", "You must be signed in.");
+        modal.showError("Error", "You must be signed in.");
         return;
       }
 
@@ -152,23 +154,23 @@ export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
         .eq("user_id", user.id);
       if (setError) throw setError;
 
-      Alert.alert("Success", "Default address updated.");
+      modal.showSuccess("Success", "Default address updated.");
       fetchAddresses();
     } catch (e) {
       console.error("Set default error:", e);
-      Alert.alert("Error", "Could not set default address.");
+      modal.showError("Error", "Could not set default address.");
     }
   };
 
   const handleSaveAddress = async () => {
     if (!fullName || !phone || !street || !city || !stateRegion || !zipCode) {
-      Alert.alert("Error", "Please fill in all required fields!");
+      modal.showWarning("Error", "Please fill in all required fields!");
       return;
     }
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      Alert.alert("Error", "You must be signed in.");
+      modal.showError("Error", "You must be signed in.");
       return;
     }
 
@@ -239,10 +241,10 @@ export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
 
       if (error) {
         console.error("Update error:", error);
-        Alert.alert("Error", `Could not update address: ${error.message}`);
+        modal.showError("Error", `Could not update address: ${error.message}`);
         return;
       }
-      Alert.alert("Success", "Address updated.");
+      modal.showSuccess("Success", "Address updated.");
     } else {
       const { error } = await supabase
         .from("addresses")
@@ -250,10 +252,10 @@ export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
 
       if (error) {
         console.error("Insert error:", error);
-        Alert.alert("Error", `Could not save address: ${error.message}`);
+        modal.showError("Error", `Could not save address: ${error.message}`);
         return;
       }
-      Alert.alert("Success", "Address saved.");
+      modal.showSuccess("Success", "Address saved.");
     }
 
     setShowForm(false);

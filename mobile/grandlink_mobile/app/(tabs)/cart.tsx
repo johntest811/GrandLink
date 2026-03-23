@@ -16,10 +16,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, FlatList, Alert, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, FlatList, ScrollView, RefreshControl } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
+import { useModal } from '@/hooks/useModal';
 
 type CartItem = {
   id: string;
@@ -38,6 +39,7 @@ export default function CartScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const router = useRouter();
+  const modal = useModal();
 
   // Load cart when component mounts
   useEffect(() => {
@@ -56,7 +58,7 @@ export default function CartScreen() {
       if (!isRefreshing) setLoading(true);
       const { data: authData } = await supabase.auth.getUser();
       if (!authData?.user) {
-        Alert.alert('Not signed in', 'Please sign in to view your cart.');
+        modal.showError('Not signed in', 'Please sign in to view your cart.');
         router.replace('/login');
         return;
       }
@@ -97,7 +99,7 @@ export default function CartScreen() {
       // setSelectedItems(new Set(items.map(item => item.id)));
     } catch (e: any) {
       console.error('Failed to load cart', e);
-      Alert.alert('Error', `Failed to load cart: ${e?.message || 'Unknown error'}`);
+      modal.showError('Error', `Failed to load cart: ${e?.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -151,7 +153,7 @@ export default function CartScreen() {
       await loadCart();
     } catch (e) {
       console.error('Failed to update quantity', e);
-      Alert.alert('Error', 'Failed to update quantity.');
+      modal.showError('Error', 'Failed to update quantity.');
     }
   };
 
@@ -177,7 +179,7 @@ export default function CartScreen() {
 
   const proceedToCheckout = async () => {
     if (selectedItems.size === 0) {
-      Alert.alert('No items selected', 'Please select at least one item to checkout.');
+      modal.showWarning('No items selected', 'Please select at least one item to checkout.');
       return;
     }
 

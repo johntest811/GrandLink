@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, Image, TouchableOpacity, StyleSheet, RefreshControl, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
+import { useModal } from '@/hooks/useModal';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 
 interface ReservationItem {

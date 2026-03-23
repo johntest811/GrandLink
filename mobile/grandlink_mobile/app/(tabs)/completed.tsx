@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabaseClient';
+import { useModal } from '@/hooks/useModal';
 
 type CompletedOrder = {
   id: string;
@@ -36,6 +37,7 @@ type CompletedOrder = {
 
 export default function CompletedOrdersScreen() {
   const router = useRouter();
+  const modal = useModal();
   const [orders, setOrders] = useState<CompletedOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

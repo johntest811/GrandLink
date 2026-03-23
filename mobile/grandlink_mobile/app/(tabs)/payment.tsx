@@ -7,7 +7,6 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  Alert,
   Platform,
   Dimensions,
   SafeAreaView,
@@ -19,6 +18,7 @@ import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../supabaseClient';
+import { useModal } from '@/hooks/useModal';
 
 const { width } = Dimensions.get('window');
 
@@ -37,6 +37,7 @@ type CartItem = {
 
 export default function PaymentScreen() {
   const router = useRouter();
+  const modal = useModal();
   const params = useLocalSearchParams();
   const appState = useRef(AppState.currentState);
   const [awaitingReturn, setAwaitingReturn] = useState(false);
@@ -152,7 +153,7 @@ export default function PaymentScreen() {
       const { data: authData } = await supabase.auth.getUser();
       console.log('Auth data:', authData?.user?.id);
       if (!authData?.user) {
-        Alert.alert('Not signed in', 'Please sign in to continue.');
+        modal.showError('Not signed in', 'Please sign in to continue.');
         router.replace('/login');
         return;
       }
@@ -215,7 +216,7 @@ export default function PaymentScreen() {
       }
     } catch (e: any) {
       console.error('Failed to load cart items', e);
-      Alert.alert('Error', `Failed to load cart items: ${e?.message || 'Unknown error'}`);
+      modal.showError('Error', `Failed to load cart items: ${e?.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
@@ -272,7 +273,7 @@ export default function PaymentScreen() {
 
   const applyDiscountCode = async () => {
     if (!discountCode.trim()) {
-      Alert.alert('Invalid Code', 'Please enter a discount code.');
+      modal.showWarning('Invalid Code', 'Please enter a discount code.');
       return;
     }
 
@@ -304,13 +305,13 @@ export default function PaymentScreen() {
 
       if (error) {
         console.error('Discount query error:', error);
-        Alert.alert('Error', `Database error: ${error.message}\n\nPlease check if discount_codes table exists and has proper RLS policies.`);
+        modal.showError('Error', `Database error: ${error.message}\n\nPlease check if discount_codes table exists and has proper RLS policies.`);
         return;
       }
 
       if (!data) {
         console.log('7. No matching code found in database');
-        Alert.alert('Invalid Code', `Discount code "${codeToCheck}" not found in database.\n\nAvailable codes: ${allCodes?.map(c => c.code).join(', ') || 'None'}`);
+        modal.showError('Invalid Code', `Discount code "${codeToCheck}" not found in database.\n\nAvailable codes: ${allCodes?.map(c => c.code).join(', ') || 'None'}`);
         return;
       }
 
@@ -324,7 +325,7 @@ export default function PaymentScreen() {
       console.log('12. Is active check result:', isActive);
 
       if (!isActive) {
-        Alert.alert('Invalid Code', 'This discount code is no longer active.');
+        modal.showWarning('Invalid Code', 'This discount code is no longer active.');
         return;
       }
 
@@ -334,7 +335,7 @@ export default function PaymentScreen() {
         const now = new Date();
         console.log('13. Start date check:', startDate, 'vs Now:', now, 'Started?:', startDate <= now);
         if (startDate > now) {
-          Alert.alert('Invalid Code', 'This discount code is not yet active.');
+          modal.showWarning('Invalid Code', 'This discount code is not yet active.');
           return;
         }
       }
@@ -345,7 +346,7 @@ export default function PaymentScreen() {
         const now = new Date();
         console.log('14. Expiry check:', expiryDate, 'vs Now:', now, 'Expired?:', expiryDate < now);
         if (expiryDate < now) {
-          Alert.alert('Invalid Code', 'This discount code has expired.');
+          modal.showWarning('Invalid Code', 'This discount code has expired.');
           return;
         }
       }
@@ -356,7 +357,7 @@ export default function PaymentScreen() {
         const maxUses = parseInt(data.max_uses) || 0;
         console.log('15. Usage check:', usedCount, '>=', maxUses, '?', usedCount >= maxUses);
         if (usedCount >= maxUses) {
-          Alert.alert('Invalid Code', 'This discount code has reached its usage limit.');
+          modal.showWarning('Invalid Code', 'This discount code has reached its usage limit.');
           return;
         }
       }
@@ -365,7 +366,7 @@ export default function PaymentScreen() {
       const minSubtotal = parseFloat(data.min_subtotal || '0') || 0;
       console.log('16. Min subtotal check:', minSubtotal, 'vs', subtotalWithAddOns, 'Pass?:', subtotalWithAddOns >= minSubtotal);
       if (minSubtotal > 0 && subtotalWithAddOns < minSubtotal) {
-        Alert.alert(
+        modal.showWarning(
           'Minimum Purchase Not Met',
           `This code requires a minimum purchase of ${formatCurrency(minSubtotal)}.\n\nYour current total: ${formatCurrency(subtotalWithAddOns)}`
         );
@@ -377,11 +378,11 @@ export default function PaymentScreen() {
 
       const discountValue = parseFloat(data.value) || 0;
       const discountType = data.type === 'percent' ? 'percentage' : 'fixed amount';
-      Alert.alert('Success!', `Discount code "${data.code}" applied!\n\n${discountValue}${data.type === 'percent' ? '%' : ' PHP'} ${discountType} discount`);
+      modal.showSuccess('Success!', `Discount code "${data.code}" applied!\n\n${discountValue}${data.type === 'percent' ? '%' : ' PHP'} ${discountType} discount`);
       console.log('========== DISCOUNT APPLIED ==========');
     } catch (e: any) {
       console.error('Failed to apply discount:', e);
-      Alert.alert('Error', `Failed to apply discount code: ${e.message || 'Unknown error'}\n\nCheck console for details.`);
+      modal.showError('Error', `Failed to apply discount code: ${e.message || 'Unknown error'}\n\nCheck console for details.`);
     } finally {
       setApplyingDiscount(false);
     }
@@ -401,7 +402,7 @@ export default function PaymentScreen() {
       // Get authenticated user
       const { data: authData } = await supabase.auth.getUser();
       if (!authData?.user) {
-        Alert.alert('Error', 'Please sign in to continue.');
+        modal.showError('Error', 'Please sign in to continue.');
         return;
       }
 
@@ -579,19 +580,19 @@ export default function PaymentScreen() {
           await Linking.openURL(checkoutUrl);
           // No immediate navigation; we move the user when they return to the app
         } else {
-          Alert.alert('Error', 'Unable to open payment page. Please try again.');
+          modal.showError('Error', 'Unable to open payment page. Please try again.');
         }
       } else if (result.errors) {
         console.error('PayMongo errors:', result.errors);
         const errorMsg = result.errors[0]?.detail || 'Failed to create payment session';
-        Alert.alert('Payment Error', errorMsg);
+        modal.showError('Payment Error', errorMsg);
       } else {
         console.error('Unexpected PayMongo response:', result);
-        Alert.alert('Error', 'Failed to create payment session. Please try again.');
+        modal.showError('Error', 'Failed to create payment session. Please try again.');
       }
     } catch (error: any) {
       console.error('Payment error:', error);
-      Alert.alert('Error', `Payment failed: ${error.message || 'Unknown error'}`);
+      modal.showError('Error', `Payment failed: ${error.message || 'Unknown error'}`);
     } finally {
       setProcessingPayment(false);
     }
@@ -610,11 +611,11 @@ export default function PaymentScreen() {
 
     const missing = requiredFields.filter(f => !f.val.trim());
     if (missing.length > 0) {
-      Alert.alert('Missing info', `Please fill in: ${missing.map(m => m.label).join(', ')}`);
+      modal.showWarning('Missing info', `Please fill in: ${missing.map(m => m.label).join(', ')}`);
       return;
     }
     if (colorCustomization && !customColor.trim()) {
-      Alert.alert('Missing info', 'Please specify the color for customization.');
+      modal.showWarning('Missing info', 'Please specify the color for customization.');
       return;
     }
 
