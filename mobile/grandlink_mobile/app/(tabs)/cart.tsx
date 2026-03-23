@@ -112,25 +112,22 @@ export default function CartScreen() {
   };
 
   const removeFromCart = async (id: string) => {
-    Alert.alert('Remove item', 'Remove this item from cart?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            // Use cart table to match web version
-            const { error } = await supabase.from('cart').delete().eq('id', id);
-            if (error) throw error;
-            await loadCart();
-            Alert.alert('Removed', 'Item removed from cart.');
-          } catch (e) {
-            console.error('Failed to remove', e);
-            Alert.alert('Error', 'Failed to remove item.');
-          }
-        },
-      },
-    ]);
+    modal.showConfirmation(
+      'Remove item',
+      'Remove this item from cart?',
+      async () => {
+        try {
+          // Use cart table to match web version
+          const { error } = await supabase.from('cart').delete().eq('id', id);
+          if (error) throw error;
+          await loadCart();
+          modal.showSuccess('Removed', 'Item removed from cart.');
+        } catch (e) {
+          console.error('Failed to remove', e);
+          modal.showError('Error', 'Failed to remove item.');
+        }
+      }
+    );
   };
 
   const updateQuantity = async (id: string, newQty: number) => {

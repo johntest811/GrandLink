@@ -209,16 +209,9 @@ export default function CompletedOrdersScreen() {
                   <TouchableOpacity
                     style={styles.reorderButton}
                     onPress={() => {
-                      Alert.alert(
+                      modal.showInfo(
                         'Reorder',
-                        'Would you like to order this product again?',
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          {
-                            text: 'Yes, Reorder',
-                            onPress: () => Alert.alert('Coming Soon', 'Reorder feature will be available soon!')
-                          }
-                        ]
+                        'Reorder feature will be available soon!'
                       );
                     }}
                   >

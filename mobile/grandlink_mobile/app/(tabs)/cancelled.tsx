@@ -242,16 +242,9 @@ export default function CancelledOrdersScreen() {
                   <TouchableOpacity
                     style={styles.reorderButton}
                     onPress={() => {
-                      Alert.alert(
+                      modal.showInfo(
                         'Order Again',
-                        'Would you like to place a new order for this product?',
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          {
-                            text: 'Yes, Order Again',
-                            onPress: () => Alert.alert('Coming Soon', 'Order again feature will be available soon!')
-                          }
-                        ]
+                        'Order again feature will be available soon!'
                       );
                     }}
                   >

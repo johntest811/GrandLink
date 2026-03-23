@@ -210,9 +210,8 @@ export default function PaymentScreen() {
       setCartItems(items as CartItem[]);
 
       if (items.length === 0) {
-        Alert.alert('Empty Cart', 'Your cart is empty. Please add items first.', [
-          { text: 'OK', onPress: () => router.back() }
-        ]);
+        modal.showWarning('Empty Cart', 'Your cart is empty. Please add items first.');
+        setTimeout(() => router.back(), 1500);
       }
     } catch (e: any) {
       console.error('Failed to load cart items', e);

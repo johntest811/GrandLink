@@ -33,17 +33,14 @@ export default function SettingsTab() {
   }, []);
 
   const handleLogout = async () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Log Out",
-        style: "destructive",
-        onPress: async () => {
-          await supabase.auth.signOut();
-          router.replace("/login");
-        },
-      },
-    ]);
+    modal.showConfirmation(
+      "Log Out",
+      "Are you sure you want to log out?",
+      async () => {
+        await supabase.auth.signOut();
+        router.replace("/login");
+      }
+    );
   };
 
   return (

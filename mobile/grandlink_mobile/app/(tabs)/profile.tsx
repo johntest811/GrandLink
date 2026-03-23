@@ -23,14 +23,11 @@ export default function ProfileScreen() {
       const { data } = await supabase.auth.getUser();
       if (!data?.user) {
         // User not logged in, redirect to login
-        Alert.alert(
+        modal.showInfo(
           'Login Required',
-          'Please login to access your profile.',
-          [
-            { text: 'Cancel', onPress: () => router.back() },
-            { text: 'Login', onPress: () => router.replace('/login') }
-          ]
+          'Please login to access your profile.'
         );
+        router.back();
         return;
       }
       setUser(data.user);
@@ -108,21 +105,13 @@ export default function ProfileScreen() {
 
 
   const handleLogout = async () => {
-    Alert.alert(
+    modal.showConfirmation(
       'Logout',
       'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            await supabase.auth.signOut();
-            router.replace('/login');
-          }
-        },
-      ],
-      { cancelable: false }
+      async () => {
+        await supabase.auth.signOut();
+        router.replace('/login');
+      }
     );
   };
 

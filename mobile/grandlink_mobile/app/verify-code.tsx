@@ -183,7 +183,7 @@ export default function VerifyCodeScreen() {
           setMethod(result.method);
         }
         
-        Alert.alert('Success', result.message || 'Verification code sent to your email!');
+        modal.showSuccess('Success', result.message || 'Verification code sent to your email!');
       }
     } catch (err: any) {
       console.error('Resend error:', err);

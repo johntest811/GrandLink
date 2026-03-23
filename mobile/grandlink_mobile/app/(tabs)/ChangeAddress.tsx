@@ -182,20 +182,10 @@ export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
 
     // If user wants to set as default but another already exists → ask first
     if (isDefaultChecked && existingDefault) {
-      Alert.alert(
+      modal.showConfirmation(
         "Change Default Address?",
         `You already have a default address set to "${existingDefault.full_name}". Do you want to replace it with this one?`,
-        [
-          {
-            text: "Yes, make this default",
-            onPress: () => performSave(user, true),
-          },
-          {
-            text: "No, save without default",
-            style: "cancel",
-            onPress: () => performSave(user, false),
-          },
-        ]
+        () => performSave(user, true)
       );
     } else {
       // No conflict — just save. Auto-default if it's the very first address.
@@ -263,34 +253,31 @@ export default function ChangeAddress({ onSelectAddress }: ChangeAddressProps) {
   };
 
   const handleDelete = async (id: string) => {
-    Alert.alert("Delete Address", "Are you sure you want to delete this address?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          const { data: { user }, error: userError } = await supabase.auth.getUser();
-          if (userError || !user) {
-            Alert.alert("Error", "You must be signed in.");
-            return;
-          }
+    modal.showConfirmation(
+      "Delete Address",
+      "Are you sure you want to delete this address?",
+      async () => {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) {
+          modal.showError("Error", "You must be signed in.");
+          return;
+        }
 
-          const { error } = await supabase
-            .from("addresses")
-            .delete()
-            .eq("id", id)
-            .eq("user_id", user.id);
+        const { error } = await supabase
+          .from("addresses")
+          .delete()
+          .eq("id", id)
+          .eq("user_id", user.id);
 
-          if (error) {
-            console.error("Delete error:", error);
-            Alert.alert("Error", "Could not delete address. Check your console for details.");
-          } else {
-            Alert.alert("Deleted", "Address deleted successfully.");
-            fetchAddresses();
-          }
-        },
-      },
-    ]);
+        if (error) {
+          console.error("Delete error:", error);
+          modal.showError("Error", "Could not delete address. Check your console for details.");
+        } else {
+          modal.showSuccess("Deleted", "Address deleted successfully.");
+          fetchAddresses();
+        }
+      }
+    );
   };
 
   return (
