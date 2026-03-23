@@ -48,7 +48,7 @@ export default function RegisterScreen() {
 
   const handleRegister = async () => {
     if (cooldownSeconds > 0) {
-      Alert.alert('Please wait', `Try again in ${cooldownSeconds}s.`);
+      modal.showWarning('Please wait', `Try again in ${cooldownSeconds}s.`);
       return;
     }
 
@@ -58,28 +58,28 @@ export default function RegisterScreen() {
     const cpw = confirmPassword;
 
     if (!trimmedName || !trimmedEmail || !pw || !cpw) {
-      Alert.alert("Error", "Please fill in all fields.");
+      modal.showWarning("Error", "Please fill in all fields.");
       return;
     }
     if (!emailRegex.test(trimmedEmail)) {
-      Alert.alert("Invalid Email", "Please enter a valid email address.");
+      modal.showWarning("Invalid Email", "Please enter a valid email address.");
       return;
     }
     if (pw.length < 6) {
-      Alert.alert("Weak Password", "Password must be at least 6 characters.");
+      modal.showWarning("Weak Password", "Password must be at least 6 characters.");
       return;
     }
 
     // Strength guidance (still allow sign-up, but warn)
     if (passwordStrength.score < 3) {
-      Alert.alert(
+      modal.showWarning(
         'Weak Password',
         'Your password looks weak. Add length (8+), uppercase, lowercase, numbers, and symbols for a stronger password.'
       );
       return;
     }
     if (pw !== cpw) {
-      Alert.alert("Error", "Passwords do not match.");
+      modal.showWarning("Error", "Passwords do not match.");
       return;
     }
 
@@ -98,19 +98,18 @@ export default function RegisterScreen() {
         const msg = /already registered|user already exists|Duplicate/i.test(error.message)
           ? 'This email is already registered. Try logging in instead.'
           : error.message;
-        Alert.alert("Registration Failed", msg);
+        modal.showError("Registration Failed", msg);
         return;
       }
 
       // Success: take user back to Login
-      Alert.alert(
+      modal.showSuccess(
         "Success",
-        "Account created. Please check your email to verify your account.",
-        [{ text: "Go to Login", onPress: () => router.replace("/login") }],
-        { cancelable: false }
+        "Account created. Please check your email to verify your account."
       );
+      setTimeout(() => router.replace("/login"), 2000);
     } catch (e: any) {
-      Alert.alert("Registration Failed", e?.message ?? 'Unexpected error');
+      modal.showError("Registration Failed", e?.message ?? 'Unexpected error');
     } finally {
       setLoading(false);
     }
