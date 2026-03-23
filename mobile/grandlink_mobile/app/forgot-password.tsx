@@ -15,11 +15,11 @@ export default function ForgotPasswordScreen() {
   const sendResetLink = async () => {
     const trimmed = email.trim().toLowerCase();
     if (!trimmed) {
-      Alert.alert('Missing Email', 'Please enter your email address.');
+      modal.showWarning('Missing Email', 'Please enter your email address.');
       return;
     }
     if (!emailRegex.test(trimmed)) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      modal.showWarning('Invalid Email', 'Please enter a valid email address.');
       return;
     }
 
@@ -30,17 +30,18 @@ export default function ForgotPasswordScreen() {
       const { error } = await supabase.auth.resetPasswordForEmail(trimmed, { redirectTo });
       setLoading(false);
       if (error) {
-        Alert.alert('Failed to send link', error.message);
+        modal.showError('Failed to send link', error.message);
         return;
       }
-      Alert.alert(
+      modal.showSuccess(
         'Check your email',
-        'We sent a password reset link to your inbox. Follow the link to set a new password.',
-        [{ text: 'Back to Login', onPress: () => router.replace('/login') }],
+        'We sent a password reset link to your inbox. Follow the link to set a new password.'
       );
+      // Auto-navigate after showing success
+      setTimeout(() => router.replace('/login'), 2000);
     } catch (e: any) {
       setLoading(false);
-      Alert.alert('Error', e?.message ?? 'Unexpected error');
+      modal.showError('Error', e?.message ?? 'Unexpected error');
     }
   };
 

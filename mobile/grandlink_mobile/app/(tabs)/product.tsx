@@ -2029,7 +2029,7 @@ export default function ProductViewScreen() {
   // Reserve now navigation - opens payment screen and passes product id
   const onReserveNow = () => {
     if (!product) {
-      Alert.alert('No product', 'Product data not loaded yet.');
+      modal.showError('No product', 'Product data not loaded yet.');
       return;
     }
     // If you prefer query string:
@@ -2098,11 +2098,11 @@ export default function ProductViewScreen() {
         if (insErr) throw insErr;
       }
 
-      Alert.alert('Added', `${product?.name} has been added to your cart.`);
+      modal.showSuccess('Added', `${product?.name} has been added to your cart.`);
     } catch (e: any) {
       console.error('Add to cart failed', e);
       const msg = e?.message ?? JSON.stringify(e);
-      Alert.alert('Error', `Failed to add to cart.\n${msg}`);
+      modal.showError('Error', `Failed to add to cart.\n${msg}`);
     }
   };
 

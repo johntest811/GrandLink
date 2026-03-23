@@ -50,7 +50,7 @@ export default function CompletedOrdersScreen() {
     try {
       const { data: authData } = await supabase.auth.getUser();
       if (!authData?.user) {
-        Alert.alert('Error', 'Please sign in to view orders.');
+        modal.showError('Error', 'Please sign in to view orders.');
         router.replace('/login');
         return;
       }
@@ -84,7 +84,7 @@ export default function CompletedOrdersScreen() {
       setOrders(data || []);
     } catch (error: any) {
       console.error('Failed to load completed orders:', error);
-      Alert.alert('Error', 'Failed to load completed orders. Please try again.');
+      modal.showError('Error', 'Failed to load completed orders. Please try again.');
     } finally {
       setLoading(false);
       setRefreshing(false);
