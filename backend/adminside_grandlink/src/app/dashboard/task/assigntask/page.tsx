@@ -36,6 +36,7 @@ type OrderOption = {
   customer_name: string | null;
   order_status: string | null;
   created_at: string;
+  special_instructions?: string | null;
   meta?: Record<string, unknown> | null;
 };
 
@@ -194,10 +195,72 @@ function mapApprovedOrders(items: any[]): OrderOption[] {
         customer_name: getCustomerNameFromEnrichedItem(row),
         order_status: (row.order_status || row.status || null) as string | null,
         created_at: String(row.created_at || new Date().toISOString()),
+        special_instructions: (row.special_instructions || null) as string | null,
         meta: (row.meta || null) as Record<string, unknown> | null,
       };
     })
     .filter(Boolean) as OrderOption[];
+}
+
+function formatRequestValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => formatRequestValue(entry))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => {
+        const formatted = formatRequestValue(entry);
+        if (!formatted) return "";
+        return `${key.replace(/_/g, " ")}: ${formatted}`;
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function extractRequestDetails(order: Pick<OrderOption, "special_instructions" | "meta"> | null) {
+  const meta = (order?.meta || {}) as Record<string, any>;
+
+  const specialInstructions = [
+    order?.special_instructions,
+    meta.special_instructions,
+    meta.specialInstructions,
+    meta.customer_special_instructions,
+    meta.customer_request?.special_instructions,
+    meta.customer_request?.specialInstructions,
+    meta.customization?.special_instructions,
+    meta.customization?.notes,
+    meta.notes,
+  ]
+    .map((entry) => formatRequestValue(entry))
+    .find(Boolean) || "";
+
+  const colorCustomization = [
+    meta.color_customization,
+    meta.colorCustomization,
+    meta.custom_color,
+    meta.customColor,
+    meta.preferred_color,
+    meta.preferredColor,
+    meta.color,
+    meta.product_color,
+    meta.customization?.color,
+    meta.customization?.colors,
+  ]
+    .map((entry) => formatRequestValue(entry))
+    .find(Boolean) || "";
+
+  return {
+    specialInstructions,
+    colorCustomization,
+  };
 }
 
 export default function StartProductionPage() {
@@ -206,6 +269,7 @@ export default function StartProductionPage() {
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [employees, setEmployees] = useState<AdminUser[]>([]);
   const [orders, setOrders] = useState<OrderOption[]>([]);
+  const [orderSearch, setOrderSearch] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [selectedOrderRecord, setSelectedOrderRecord] = useState<UserItemRecord | null>(null);
   const [existingTaskCount, setExistingTaskCount] = useState(0);
@@ -215,6 +279,7 @@ export default function StartProductionPage() {
   const [startingProduction, setStartingProduction] = useState(false);
   const [loadingOrderContext, setLoadingOrderContext] = useState(false);
   const [workflowPopupOrderId, setWorkflowPopupOrderId] = useState<string | null>(null);
+  const [requestDetailsOrderId, setRequestDetailsOrderId] = useState<string | null>(null);
   const [workflowRefreshKey, setWorkflowRefreshKey] = useState(0);
 
   const isLeader = useMemo(() => canManageProductionWorkflow(adminSession), [adminSession]);
@@ -381,16 +446,37 @@ export default function StartProductionPage() {
     [orders, selectedOrderId]
   );
 
-  const currentWorkflow = useMemo(
-    () => ensureProductionWorkflow(selectedOrderRecord?.meta?.production_workflow),
-    [selectedOrderRecord?.meta]
-  );
+  const filteredOrders = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+    if (!q) return orders;
+    return orders.filter((order) => {
+      const product = String(order.product_name || "").toLowerCase();
+      const customer = String(order.customer_name || "").toLowerCase();
+      const orderId = String(order.user_item_id || "").toLowerCase();
+      return product.includes(q) || customer.includes(q) || orderId.includes(q);
+    });
+  }, [orderSearch, orders]);
 
   const workflowPreview = useMemo(() => {
     const stagePlans = buildStagePlansFromAssignments(roleAssignments);
     const teamMembers = buildWorkflowMembers(employees, roleAssignments);
     return { stagePlans, teamMembers };
   }, [employees, roleAssignments]);
+
+  const requestDetailsOrder = useMemo(() => {
+    if (!requestDetailsOrderId) return null;
+    const fromList = orders.find((order) => order.user_item_id === requestDetailsOrderId) || null;
+    if (!fromList) return null;
+    return {
+      ...fromList,
+      meta: {
+        ...(fromList.meta || {}),
+        ...((selectedOrderRecord?.id === requestDetailsOrderId ? selectedOrderRecord.meta : null) || {}),
+      },
+    };
+  }, [requestDetailsOrderId, orders, selectedOrderRecord]);
+
+  const requestDetails = useMemo(() => extractRequestDetails(requestDetailsOrder), [requestDetailsOrder]);
 
   const stageCoverageIssues = useMemo(
     () => workflowPreview.stagePlans.filter((stage) => stage.assigned_admin_ids.length === 0),
@@ -758,13 +844,21 @@ export default function StartProductionPage() {
             </div>
           </div>
 
+          <input
+            type="text"
+            value={orderSearch}
+            onChange={(event) => setOrderSearch(event.target.value)}
+            placeholder="Search order by product, customer, or order ID"
+            className="mt-4 w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none ring-0 transition focus:border-emerald-500"
+          />
+
           <select
             value={selectedOrderId}
             onChange={(event) => setSelectedOrderId(event.target.value)}
             className="mt-4 w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none ring-0 transition focus:border-emerald-500"
           >
             <option value="">Select an order…</option>
-            {orders.map((order) => (
+            {filteredOrders.map((order) => (
               <option key={order.user_item_id} value={order.user_item_id}>
                 {order.product_name} • {order.customer_name || "No customer"} • {order.order_status || "—"}
               </option>
@@ -788,10 +882,10 @@ export default function StartProductionPage() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => openWorkflowEditor(selectedOrder.user_item_id)}
+                  onClick={() => setRequestDetailsOrderId(selectedOrder.user_item_id)}
                   className="rounded-2xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white"
                 >
-                  Set up / Edit workflow
+                  View request details
                 </button>
               </div>
             </div>
@@ -1047,6 +1141,53 @@ export default function StartProductionPage() {
               src={`/dashboard/task/setup-workflow?orderId=${encodeURIComponent(workflowPopupOrderId)}&popup=1`}
               className="h-full w-full border-0"
             />
+          </div>
+        </div>
+      ) : null}
+
+      {requestDetailsOrder ? (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/45 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">Customer request details</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {requestDetailsOrder.product_name} • {requestDetailsOrder.customer_name || "No customer"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRequestDetailsOrderId(null)}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-600 transition hover:bg-slate-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Special Instructions</div>
+                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                  {requestDetails.specialInstructions || "No special instructions provided."}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Color Customization</div>
+                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                  {requestDetails.colorCustomization || "No color customization provided."}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRequestDetailsOrderId(null)}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

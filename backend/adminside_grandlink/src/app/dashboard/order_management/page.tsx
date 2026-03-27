@@ -37,7 +37,247 @@ type UserItem = {
   product_details?: any;
   address_details?: any;
   customer?: { name?: string|null; email?: string|null; phone?: string|null };
+  invoice_details?: {
+    id: string;
+    invoice_number?: string | null;
+    invoice_html?: string | null;
+    issued_at?: string | null;
+    email_sent_at?: string | null;
+    updated_at?: string | null;
+  } | null;
 };
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatStageLabel(value: string): string {
+  const key = String(value || '').toLowerCase();
+  const labels: Record<string, string> = {
+    pending_payment: 'Pending Payment',
+    approved: 'Approved',
+    in_production: 'In Production',
+    quality_check: 'Final Quality Check',
+    packaging: 'Packaging',
+    ready_for_delivery: 'Ready for Delivery',
+    out_for_delivery: 'Out for Delivery',
+    completed: 'Completed',
+    pending_cancellation: 'Pending Cancellation',
+    cancelled: 'Cancelled',
+  };
+  return labels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function buildReceiptPreviewHtml(item: UserItem): string {
+  const meta = (item.meta || {}) as Record<string, any>;
+  const productName = String(meta.product_name || item.product_details?.name || item.product_id || 'Purchased Item');
+  const paymentMethod = String(item.payment_method || meta.payment_method || 'PayMongo');
+  const paymentChannel = String(meta.paymongo_channel || '').toUpperCase();
+  const reference = String(item.payment_id || meta.payment_session_id || '').trim();
+  const paidAmount = Number(
+    item.total_paid ?? item.total_amount ?? meta.amount_paid ?? meta.final_total_per_item ?? 0
+  );
+  const qty = Number(item.quantity || 1);
+  const sentAt = String(meta.receipt_email_sent_at || '').trim();
+  const sentTo = String(meta.receipt_email_to || item.customer_email || '').trim();
+
+  return `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:760px;margin:0 auto;background:#f3f4f6;padding:24px;border-radius:16px;">
+      <div style="background:#16a34a;color:#fff;padding:24px;border-radius:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;line-height:1.2;">Payment Successful</div>
+        <div style="font-size:14px;opacity:0.95;margin-top:6px;">Reservation payment has been received and is waiting for admin approval.</div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:16px;">
+        <div style="font-size:18px;font-weight:700;color:#111827;margin-bottom:10px;">Reservation Receipt</div>
+        <div style="font-size:13px;color:#374151;line-height:1.7;">
+          <div><strong>Order ID:</strong> ${escapeHtml(item.id)}</div>
+          <div><strong>Payment Reference:</strong> ${escapeHtml(reference || 'N/A')}</div>
+          <div><strong>Payment Method:</strong> ${escapeHtml(paymentMethod)}${paymentChannel ? ` (${escapeHtml(paymentChannel)})` : ''}</div>
+          <div><strong>Total Paid:</strong> PHP ${paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          ${sentTo ? `<div><strong>Receipt Email:</strong> ${escapeHtml(sentTo)}</div>` : ''}
+          ${sentAt ? `<div><strong>Sent At:</strong> ${escapeHtml(new Date(sentAt).toLocaleString())}</div>` : ''}
+        </div>
+      </div>
+
+      <div style="display:flex;gap:16px;align-items:flex-start;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;margin-top:12px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:15px;font-weight:700;color:#111827;">${escapeHtml(productName)}</div>
+          <div style="margin-top:6px;font-size:13px;color:#374151;">Quantity: ${escapeHtml(qty)}</div>
+          <div style="margin-top:4px;font-size:13px;color:#111827;font-weight:600;">Paid Amount: PHP ${paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:16px;">
+        <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:10px;">What’s Next?</div>
+        <div style="font-size:13px;color:#374151;line-height:1.8;">
+          <div><strong>1.</strong> Payment is confirmed and waiting for admin approval.</div>
+          <div><strong>2.</strong> After approval, production and delivery workflow continues.</div>
+          <div><strong>3.</strong> Final invoice PDF is sent after admin approval.</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function formatRequestValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => formatRequestValue(entry))
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => {
+        const formatted = formatRequestValue(entry);
+        if (!formatted) return '';
+        return `${key.replace(/_/g, ' ')}: ${formatted}`;
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+function extractRequestDetails(item: UserItem | null) {
+  const meta = (item?.meta || {}) as Record<string, any>;
+  const specialInstructions = [
+    item?.special_instructions,
+    meta.special_instructions,
+    meta.specialInstructions,
+    meta.customer_special_instructions,
+    meta.customer_request?.special_instructions,
+    meta.customer_request?.specialInstructions,
+    meta.customization?.special_instructions,
+    meta.customization?.notes,
+    meta.notes,
+  ]
+    .map((entry) => formatRequestValue(entry))
+    .find(Boolean) || '';
+
+  const colorCustomization = [
+    meta.color_customization,
+    meta.colorCustomization,
+    meta.custom_color,
+    meta.customColor,
+    meta.preferred_color,
+    meta.preferredColor,
+    meta.color,
+    meta.product_color,
+    meta.customization?.color,
+    meta.customization?.colors,
+  ]
+    .map((entry) => formatRequestValue(entry))
+    .find(Boolean) || '';
+
+  return { specialInstructions, colorCustomization };
+}
+
+function formatLocalDateTime(value: unknown) {
+  const text = typeof value === "string" ? value : "";
+  if (!text) return "";
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleString();
+}
+
+function getPaymentSummary(item: UserItem) {
+  const meta = (item.meta || {}) as Record<string, any>;
+  const paymentStatus = String(item.payment_status || meta.payment_status || "").toLowerCase();
+  const paymongoChannel = String(meta.paymongo_channel || "").toLowerCase();
+  const confirmedAt = meta.payment_confirmed_at || meta.paid_at || meta.payment_paid_at || null;
+  const reference = item.payment_id || meta.payment_session_id || meta.payment_reference || null;
+
+  const isPaid = paymentStatus === "completed" || paymentStatus === "paid";
+  const provider = String(item.payment_method || meta.payment_method || "").toLowerCase();
+  const providerLabel = provider ? provider.toUpperCase() : "";
+  const channelLabel = paymongoChannel ? paymongoChannel.toUpperCase() : "";
+
+  return {
+    isPaid,
+    paymentStatus: paymentStatus || "unknown",
+    providerLabel,
+    channelLabel,
+    confirmedAtText: formatLocalDateTime(confirmedAt),
+    reference: reference ? String(reference) : "",
+  };
+}
+
+function normalizeText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function buildAddressText(source: any): string {
+  if (!source) return "";
+  if (typeof source === "string") return source.trim();
+  if (typeof source !== "object") return "";
+
+  const directAddress = normalizeText(source.address);
+  if (directAddress) return directAddress;
+
+  const parts = [
+    normalizeText(source.line1 || source.street),
+    normalizeText(source.line2),
+    normalizeText(source.barangay),
+    normalizeText(source.city),
+    normalizeText(source.province || source.state || source.region),
+    normalizeText(source.postal_code || source.zip_code),
+    normalizeText(source.country),
+  ].filter(Boolean);
+
+  return parts.join(", ");
+}
+
+function getCustomerDeliveryAddress(item: UserItem): string {
+  const addr = item.address_details;
+  const meta = (item.meta || {}) as Record<string, any>;
+
+  const candidates = [
+    buildAddressText(addr),
+    normalizeText(item.delivery_address),
+    buildAddressText(meta.delivery_address),
+    normalizeText(meta.delivery_address_text),
+    normalizeText(meta.deliveryAddress),
+    normalizeText(meta.billing_address),
+    normalizeText(meta.address),
+    normalizeText(meta.pickup_address),
+  ].filter(Boolean);
+
+  return candidates[0] || "-";
+}
+
+function getCustomerDisplayEmail(item: UserItem): string {
+  const addr = item.address_details;
+  const meta = (item.meta || {}) as Record<string, any>;
+  const deliveryMeta = meta.delivery_address && typeof meta.delivery_address === "object" ? meta.delivery_address : null;
+  const raw =
+    normalizeText(addr?.email) ||
+    normalizeText(item.customer?.email) ||
+    normalizeText(item.customer_email) ||
+    normalizeText(meta.customer_email) ||
+    normalizeText(meta.billing_email) ||
+    normalizeText(deliveryMeta?.email);
+  return raw;
+}
+
+function InlineSpinner() {
+  return (
+    <span
+      className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+      aria-hidden="true"
+    />
+  );
+}
 
 export default function OrdersPage() {
   const [reservations, setReservations] = useState<UserItem[]>([]);
@@ -56,6 +296,9 @@ export default function OrdersPage() {
     payment_id: '',
     payment_method: '',
   });
+  const [requestDetailsItem, setRequestDetailsItem] = useState<UserItem | null>(null);
+  const [receiptPreviewItem, setReceiptPreviewItem] = useState<UserItem | null>(null);
+  const [invoicePreviewItem, setInvoicePreviewItem] = useState<UserItem | null>(null);
   // New: date/time filter
   const [startDateTime, setStartDateTime] = useState<string>('');
   const [endDateTime, setEndDateTime] = useState<string>('');
@@ -178,9 +421,25 @@ export default function OrdersPage() {
             : newStatus === 'reject_cancellation'
             ? 'cancellation_denied'
             : newStatus;
-        await adminNotificationService.notifyOrderStatusUpdate(itemId, item.user_id, notifStatus, by, item.meta?.product_name || '');
+        const preferredRecipientEmail = getCustomerDisplayEmail(item);
+        const notifyResult = await adminNotificationService.notifyOrderStatusUpdate(
+          itemId,
+          item.user_id,
+          notifStatus,
+          by,
+          item.meta?.product_name || '',
+          undefined,
+          preferredRecipientEmail || undefined
+        );
+
+        if (newStatus === 'approved' && !notifyResult?.invoiceEmailSent) {
+          alert('Order was approved, but invoice email was not confirmed as sent. Please verify mail settings and use invoice resend if needed.');
+        }
       } catch (notifError: any) {
         console.warn('Failed to send notification:', notifError);
+        if (newStatus === 'approved') {
+          alert('Order was approved, but invoice email failed to send. Please verify mail settings and resend the invoice.');
+        }
       }
 
       setReservations(prev => prev.map(r => (r.id === itemId ? { ...r, ...updatedItem } : r)));
@@ -238,7 +497,7 @@ export default function OrdersPage() {
       approved: "✅ Approve",
       pending_balance_payment: "💰 Request Balance",
       in_production: "🏭 Start Production",
-      quality_check: "🔍 Quality Check",
+      quality_check: "🔍 Final Quality Check",
       packaging: "📦 Start Packaging",
       ready_for_delivery: "🚚 Ready for Delivery",
       out_for_delivery: "🚛 Out for Delivery",
@@ -257,7 +516,7 @@ export default function OrdersPage() {
       { value: 'pending_payment', label: 'Pending Payment' },
       { value: 'approved', label: 'Approved' },
       { value: 'in_production', label: 'In Production' },
-      { value: 'quality_check', label: 'Quality Check' },
+      { value: 'quality_check', label: 'Final Quality Check' },
       { value: 'packaging', label: 'Packaging' },
       { value: 'ready_for_delivery', label: 'Ready for Delivery' },
       { value: 'out_for_delivery', label: 'Out for Delivery' },
@@ -311,6 +570,17 @@ export default function OrdersPage() {
     return fields.some((f) => f.includes(q));
   });
 
+  const filteredStageCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    filteredReservations.forEach((r) => {
+      const s = getStage(r);
+      counts[s] = (counts[s] || 0) + 1;
+    });
+    return counts;
+  }, [filteredReservations]);
+
+  const requestDetails = useMemo(() => extractRequestDetails(requestDetailsItem), [requestDetailsItem]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -327,6 +597,27 @@ export default function OrdersPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-black">Reservations & Orders Management</h1>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-lg border bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Total Records</p>
+          <p className="mt-1 text-2xl font-semibold text-black">{reservations.length}</p>
+        </div>
+        <div className="rounded-lg border bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Filtered Results</p>
+          <p className="mt-1 text-2xl font-semibold text-black">{filteredReservations.length}</p>
+        </div>
+        <div className="rounded-lg border bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-gray-500">In Progress</p>
+          <p className="mt-1 text-2xl font-semibold text-black">
+            {(filteredStageCounts.approved || 0) + (filteredStageCounts.in_production || 0) + (filteredStageCounts.quality_check || 0) + (filteredStageCounts.packaging || 0)}
+          </p>
+        </div>
+        <div className="rounded-lg border bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Pending Cancellation</p>
+          <p className="mt-1 text-2xl font-semibold text-black">{filteredStageCounts.pending_cancellation || 0}</p>
+        </div>
       </div>
 
       {/* Filters / Controls */}
@@ -395,37 +686,25 @@ export default function OrdersPage() {
 
       {/* Table */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
+        <div className="border-b bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Review each order from left to right: order details, customer delivery info, payment details, then apply next-stage actions.
+        </div>
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-2 text-left text-xs font-medium text-black">Order</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-black">Delivery Address</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-black">Payment</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-black">Production Progress</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-black">Status</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-black">Actions</th>
+              <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Order Details</th>
+              <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Customer and Delivery</th>
+              <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Payment</th>
+              <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Current Status</th>
+              <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Next Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
             {filteredReservations.map((r) => {
               const actions = getNextActions(r);
               const addr = r.address_details || {} as any;
-              
-              // Build comprehensive address string from address_details
-              const addressParts = [];
-              if (addr.address) {
-                addressParts.push(addr.address);
-              } else {
-                if (addr.line1 || addr.street) addressParts.push(addr.line1 || addr.street);
-                if (addr.barangay) addressParts.push(addr.barangay);
-                if (addr.city) addressParts.push(addr.city);
-                if (addr.province || addr.region) addressParts.push(addr.province || addr.region);
-                if (addr.postal_code) addressParts.push(addr.postal_code);
-              }
-              
-              const fullAddress = addressParts.length > 0 
-                ? addressParts.join(', ') 
-                : r.delivery_address || '—';
+
+              const fullAddress = getCustomerDeliveryAddress(r);
               
               const customerName = addr.full_name || 
                 (addr.first_name && addr.last_name ? `${addr.first_name} ${addr.last_name}` : '') ||
@@ -434,16 +713,13 @@ export default function OrdersPage() {
                 '';
               
               const phone = addr.phone || r.customer?.phone || r.customer_phone || '';
-              const email = addr.email || r.customer?.email || r.customer_email || '';
+              const email = getCustomerDisplayEmail(r);
               const branch = addr.branch || '';
               
               const stage = getStage(r);
+              const payment = getPaymentSummary(r);
               // inline payment editing removed; we now use a modal
 
-              const rawPct = (r as any)?.meta?.production_percent;
-              const pctNum = Number(rawPct);
-              const pct = Number.isFinite(pctNum) ? Math.max(0, Math.min(100, pctNum)) : null;
-              
               return (
                 <tr key={r.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 align-top">
@@ -484,18 +760,39 @@ export default function OrdersPage() {
                   <td className="px-4 py-3 align-top">
                     <div className="text-xs text-black">
                       {(() => {
-                        const perItem = (r.total_amount ?? r.meta?.final_total_per_item ?? r.price ?? r.meta?.price ?? 0);
-                        const total = Number(perItem) * Number(r.quantity || 1);
-                        return <div>Total Amount: ₱{Number(total || 0).toLocaleString()}</div>;
+                        const paidAmount =
+                          r.total_paid ??
+                          r.total_amount ??
+                          r.meta?.amount_paid ??
+                          r.meta?.final_total_per_item ??
+                          r.price ??
+                          r.meta?.price ??
+                          0;
+                        return <div>Total Amount: ₱{Number(paidAmount || 0).toLocaleString()}</div>;
                       })()}
                     </div>
+
+                    <div className="mt-2 space-y-1 text-xs">
+                      <div className={payment.isPaid ? "text-emerald-700 font-semibold" : "text-amber-700 font-semibold"}>
+                        {payment.isPaid ? "PAID" : "NOT PAID"}
+                        {payment.providerLabel ? ` · ${payment.providerLabel}` : ""}
+                        {payment.channelLabel ? ` · ${payment.channelLabel}` : ""}
+                      </div>
+                      {payment.confirmedAtText ? (
+                        <div className="text-slate-700">Confirmed: {payment.confirmedAtText}</div>
+                      ) : null}
+                      {payment.reference ? (
+                        <div className="text-slate-700 break-all">Ref: {payment.reference}</div>
+                      ) : null}
+                    </div>
+
                     <button
                       className="mt-2 text-xs bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700"
                       onClick={() => {
                         setEditPaymentItem(r);
                         setEditPaymentForm({
                           price: String(r.price ?? r.meta?.price ?? ''),
-                          total_amount: String(r.total_amount ?? r.meta?.final_total_per_item ?? ''),
+                          total_amount: String(r.total_paid ?? r.total_amount ?? r.meta?.amount_paid ?? r.meta?.final_total_per_item ?? ''),
                           payment_id: String(r.payment_id ?? ''),
                           payment_method: String(r.payment_method ?? r.meta?.payment_type ?? ''),
                         });
@@ -503,30 +800,29 @@ export default function OrdersPage() {
                     >
                       Edit Payment
                     </button>
-                  </td>
-
-                  <td className="px-4 py-3 align-top">
-                    {pct === null ? (
-                      <span className="text-xs text-gray-500">—</span>
-                    ) : (
-                      <div className="min-w-[160px]">
-                        <div className="flex items-center justify-between text-xs text-black mb-1">
-                          <span>{pct}%</span>
-                          <span className="text-[11px] text-gray-600">{pct >= 100 ? "Complete" : "In progress"}</span>
-                        </div>
-                        <div className="h-2 w-full bg-gray-200 rounded">
-                          <div
-                            className="h-2 bg-green-600 rounded"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="text-xs bg-emerald-600 text-white px-3 py-1 rounded hover:bg-emerald-700"
+                        onClick={() => setReceiptPreviewItem(r)}
+                      >
+                        View Receipt
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 disabled:opacity-60"
+                        disabled={!r.invoice_details?.invoice_html}
+                        onClick={() => setInvoicePreviewItem(r)}
+                        title={r.invoice_details?.invoice_html ? 'View invoice sent to customer email' : 'Invoice will be available after approval email generation'}
+                      >
+                        View Invoice
+                      </button>
+                    </div>
                   </td>
 
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${getStatusColor(stage)}`}>
-                      {(stage || "").replace(/_/g, " ").toUpperCase()}
+                      {formatStageLabel(stage || "")}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -547,11 +843,25 @@ export default function OrdersPage() {
                               className={btnClass}
                               title={`Set status: ${a}`}
                             >
-                              {formatActionLabel(a)}
+                              {updatingStatus === r.id ? (
+                                <span className="inline-flex items-center gap-2">
+                                  <InlineSpinner />
+                                  Processing...
+                                </span>
+                              ) : (
+                                formatActionLabel(a)
+                              )}
                             </button>
                           );
                         })
                       )}
+                      <button
+                        type="button"
+                        onClick={() => setRequestDetailsItem(r)}
+                        className="text-xs font-semibold bg-white text-slate-700 border border-slate-200 px-2 py-1 rounded hover:bg-slate-50 transition-colors"
+                      >
+                        Request Details
+                      </button>
                     </div>
                     {['approved', 'in_production', 'quality_check', 'packaging'].includes(String(stage || '')) ? (
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -610,7 +920,7 @@ export default function OrdersPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-black mb-1">Total Amount (per item) (₱)</label>
+                  <label className="block text-xs text-black mb-1">Total Amount (line total) (₱)</label>
                   <input
                     type="number"
                     className="w-full px-3 py-2 border rounded text-black"
@@ -661,7 +971,11 @@ export default function OrdersPage() {
                     const pr = editPaymentForm.price.trim();
                     const ta = editPaymentForm.total_amount.trim();
                     if (pr !== '') updates.price = Number(pr);
-                    if (ta !== '') updates.total_amount = Number(ta);
+                    if (ta !== '') {
+                      const amount = Number(ta);
+                      updates.total_amount = amount;
+                      updates.total_paid = amount;
+                    }
                     if (editPaymentForm.payment_id) updates.payment_id = editPaymentForm.payment_id.trim();
                     if (editPaymentForm.payment_method) updates.payment_method = editPaymentForm.payment_method.trim();
 
@@ -671,7 +985,7 @@ export default function OrdersPage() {
                       manual_payment_updated_at: new Date().toISOString(),
                       ...(editPaymentForm.payment_method ? { payment_type: editPaymentForm.payment_method.trim() } : {}),
                       ...(pr !== '' ? { price: Number(pr) } : {}),
-                      ...(ta !== '' ? { final_total_per_item: Number(ta) } : {}),
+                      ...(ta !== '' ? { final_total_per_item: Number(ta), amount_paid: Number(ta), total_amount: Number(ta) } : {}),
                     };
 
                     const updated = await updateOrderViaApi({ itemId: editPaymentItem.id, updates });
@@ -685,9 +999,110 @@ export default function OrdersPage() {
                   }
                 }}
               >
-                Save Changes
+                {updatingStatus === editPaymentItem.id ? (
+                  <span className="inline-flex items-center gap-2">
+                    <InlineSpinner />
+                    Saving...
+                  </span>
+                ) : (
+                  'Save Changes'
+                )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {requestDetailsItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">Customer request details</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {requestDetailsItem.meta?.product_name || requestDetailsItem.product_details?.name || requestDetailsItem.product_id} • {requestDetailsItem.customer?.name || requestDetailsItem.customer_name || 'No customer'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRequestDetailsItem(null)}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-600 transition hover:bg-slate-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Special Instructions</div>
+                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                  {requestDetails.specialInstructions || 'No special instructions provided.'}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Color Customization</div>
+                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                  {requestDetails.colorCustomization || 'No color customization provided.'}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRequestDetailsItem(null)}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {receiptPreviewItem && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-5xl rounded-lg shadow-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <h3 className="text-base font-semibold text-black">Receipt Preview</h3>
+              <button
+                className="text-sm px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-black"
+                onClick={() => setReceiptPreviewItem(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <iframe
+              title="Receipt Preview"
+              className="w-full h-[75vh]"
+              srcDoc={buildReceiptPreviewHtml(receiptPreviewItem)}
+            />
+          </div>
+        </div>
+      )}
+
+      {invoicePreviewItem && (
+        <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-6xl rounded-lg shadow-lg overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div>
+                <h3 className="text-base font-semibold text-black">Invoice Preview</h3>
+                <p className="text-xs text-slate-600">
+                  {invoicePreviewItem.invoice_details?.invoice_number || 'Invoice'}
+                </p>
+              </div>
+              <button
+                className="text-sm px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-black"
+                onClick={() => setInvoicePreviewItem(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <iframe
+              title="Invoice Preview"
+              className="w-full h-[75vh]"
+              srcDoc={invoicePreviewItem.invoice_details?.invoice_html || '<div style="padding:24px;font-family:Arial">Invoice is not available yet.</div>'}
+            />
           </div>
         </div>
       )}

@@ -273,6 +273,7 @@ export async function POST(request: NextRequest) {
       // even if the website project env isn't configured.
       if (String(newStatus) === "approved") {
         const websiteBases = getWebsiteBaseCandidates();
+        const recipientEmail = typeof payload?.recipientEmail === "string" ? payload.recipientEmail.trim() : "";
 
         for (const websiteBase of websiteBases) {
           try {
@@ -285,6 +286,7 @@ export async function POST(request: NextRequest) {
                 adminName: payload?.adminName || null,
                 adminNotes: payload?.adminNotes || null,
                 estimatedDeliveryDate: payload?.estimatedDeliveryDate || null,
+                recipientEmail: recipientEmail || null,
                 skipUpdate: true,
               }),
               cache: "no-store",
@@ -309,6 +311,15 @@ export async function POST(request: NextRequest) {
             console.warn(`Website order-status proxy error for ${websiteBase}, trying next candidate:`, proxyError);
           }
         }
+
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Order was approved but invoice email service could not be reached. Configure WEBSITE_URL/NEXT_PUBLIC_USER_WEBSITE_URL and retry invoice sending.",
+          },
+          { status: 502 }
+        );
       }
 
       const { data: orderData, error: orderErr } = await supabaseAdmin

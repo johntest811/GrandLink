@@ -426,6 +426,8 @@ function CartCheckoutContent() {
 
   const computeUnitPrice = useCallback((item: UserItem) => {
     const product = products[item.product_id];
+    const storedUnitPrice = Number(item.meta?.pricing?.unit_price ?? item.meta?.product_price);
+    const storedUnitPriceValid = Number.isFinite(storedUnitPrice) && storedUnitPrice > 0;
     const defaultUnitPrice = Math.max(0, Number(product?.price ?? 0));
 
     const baseWmm = Number((product as any)?.width ?? 0);
@@ -444,13 +446,9 @@ function CartCheckoutContent() {
       (measurementsMatch(Number(customWidth ?? baseWidthM), baseWidthM) &&
         measurementsMatch(Number(customHeight ?? baseHeightM), baseHeightM))
     ) {
-      return computeMeasurementPricing({
-        widthMeters: baseWidthM,
-        heightMeters: baseHeightM,
-        unitPricePerSqm,
-        minSqm: 0,
-        sqmDecimals: 2,
-      }).unit_price;
+      // Keep stable/original unit price when measurements are unchanged.
+      if (storedUnitPriceValid) return storedUnitPrice;
+      return defaultUnitPrice;
     }
 
     const widthMeters = customWidth ?? baseWidthM;
@@ -1006,7 +1004,7 @@ function CartCheckoutContent() {
                   </div>
                 </label>
 
-                <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-[#8B1C1C] transition">
+                {/* <label className="flex items-center gap-3 p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-[#8B1C1C] transition">
                   <input
                     type="radio"
                     name="paymentMethod"
@@ -1018,7 +1016,7 @@ function CartCheckoutContent() {
                     <div className="font-semibold text-gray-900">PayPal</div>
                     <div className="text-sm text-gray-500">Pay with your PayPal wallet or linked card</div>
                   </div>
-                </label>
+                </label> */}
               </div>
             </div>
 

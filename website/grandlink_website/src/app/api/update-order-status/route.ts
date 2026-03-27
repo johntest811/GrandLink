@@ -36,7 +36,8 @@ function normalizeEmail(value: unknown) {
   return emailPattern.test(email) ? email : null;
 }
 
-async function resolveOrderRecipientEmail(orderData: any) {
+async function resolveOrderRecipientEmail(orderData: any, preferredRecipientEmail?: string | null) {
+  const normalizedPreferredEmail = normalizeEmail(preferredRecipientEmail || null);
   let addressEmail: string | null = null;
   if (orderData?.delivery_address_id) {
     const { data: address } = await supabase
@@ -62,13 +63,14 @@ async function resolveOrderRecipientEmail(orderData: any) {
     addressEmail,
     billingEmail,
     authEmail,
-    recipientEmail: addressEmail || billingEmail || authEmail,
+    preferredRecipientEmail: normalizedPreferredEmail,
+    recipientEmail: normalizedPreferredEmail || addressEmail || billingEmail || authEmail,
   };
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { userItemId, newStatus, adminName, adminNotes, estimatedDeliveryDate, skipUpdate } = await request.json();
+    const { userItemId, newStatus, adminName, adminNotes, estimatedDeliveryDate, skipUpdate, recipientEmail } = await request.json();
 
     if (!userItemId || !newStatus) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400, headers: corsHeaders });
@@ -149,7 +151,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const recipientInfo = await resolveOrderRecipientEmail(orderData);
+    const recipientInfo = await resolveOrderRecipientEmail(orderData, recipientEmail);
     const userEmail = recipientInfo.recipientEmail;
 
     const { data: preferences } = await supabase
@@ -210,7 +212,9 @@ export async function POST(request: NextRequest) {
     let invoiceRecipientEmail = userEmail;
     if (newStatus === "approved") {
       try {
-        const invoiceResult = await resendInvoiceEmailForUserItem(userItemId);
+        const invoiceResult = await resendInvoiceEmailForUserItem(userItemId, {
+          recipientEmails: userEmail ? [userEmail] : undefined,
+        });
         invoiceEmailSent = Boolean(invoiceResult?.emailSent);
         invoiceRecipientEmail = invoiceResult?.recipientEmails?.[0] || userEmail;
       } catch (invoiceErr) {

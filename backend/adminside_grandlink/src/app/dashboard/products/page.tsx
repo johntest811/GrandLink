@@ -19,9 +19,12 @@ import {
   buildAdditionalFeaturesHtml,
   createFeatureOptionsByCategory,
   getCategoryFeatureOptions,
+  mergeCategoryOptions,
   mergeFeatureOptions,
+  normalizeCategoryLabel,
   PRODUCT_CATEGORY_OPTIONS,
   PRODUCT_FORM_TABS,
+  stringifyCategorySelection,
   type ProductFormTabKey,
   stripRichText,
 } from "./productFormConfig";
@@ -92,7 +95,11 @@ export default function ProductsAdminPage() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [carouselIndex, setCarouselIndex] = useState(0);
-  const [category, setCategory] = useState("");
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(() => [...PRODUCT_CATEGORY_OPTIONS]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [featureCategory, setFeatureCategory] = useState("");
+  const [newCategoryOption, setNewCategoryOption] = useState("");
+  const [savingCategories, setSavingCategories] = useState(false);
   const [height, setHeight] = useState("");
   const [width, setWidth] = useState("");
   const [thickness, setThickness] = useState("");
@@ -264,6 +271,34 @@ export default function ProductsAdminPage() {
 
     void loadGlobalSkyboxDefaults();
   }, []);
+
+  useEffect(() => {
+    const loadCategoryOptions = async () => {
+      try {
+        const res = await fetch("/api/product-categories", { cache: "no-store" });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload?.error || "Failed to load categories");
+        const nextOptions = mergeCategoryOptions(PRODUCT_CATEGORY_OPTIONS, payload?.categories || []);
+        setCategoryOptions(nextOptions.length ? nextOptions : [...PRODUCT_CATEGORY_OPTIONS]);
+      } catch (error) {
+        console.error("Failed to load product categories", error);
+        setCategoryOptions([...PRODUCT_CATEGORY_OPTIONS]);
+      }
+    };
+
+    void loadCategoryOptions();
+  }, []);
+
+  useEffect(() => {
+    if (selectedCategories.length === 0) {
+      setFeatureCategory("");
+      return;
+    }
+
+    if (!featureCategory || !selectedCategories.includes(featureCategory)) {
+      setFeatureCategory(selectedCategories[0]);
+    }
+  }, [featureCategory, selectedCategories]);
 
   const handleSingleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -526,8 +561,8 @@ export default function ProductsAdminPage() {
     }
   };
 
-  const selectedCategoryFeatures = category
-    ? featureOptionsByCategory[category] ?? getCategoryFeatureOptions(category)
+  const selectedCategoryFeatures = featureCategory
+    ? featureOptionsByCategory[featureCategory] ?? getCategoryFeatureOptions(featureCategory)
     : [];
   const activeTabIndex = PRODUCT_FORM_TABS.findIndex((tab) => tab.key === activeTab);
 
@@ -536,12 +571,96 @@ export default function ProductsAdminPage() {
     setAdditionalFeatures(buildAdditionalFeaturesHtml(nextSelected));
   };
 
-  const handleCategoryChange = (nextCategory: string) => {
-    setCategory(nextCategory);
+  const persistCategoryOptions = async (nextOptions: string[]) => {
+    setSavingCategories(true);
+    try {
+      const res = await fetch("/api/product-categories", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categories: nextOptions }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.error || "Failed to save categories");
+
+      const merged = mergeCategoryOptions(PRODUCT_CATEGORY_OPTIONS, payload?.categories || nextOptions);
+      setCategoryOptions(merged);
+      return merged;
+    } finally {
+      setSavingCategories(false);
+    }
+  };
+
+  const applySelectedCategories = (categories: string[]) => {
+    const nextSelected = mergeCategoryOptions(categories);
+    setSelectedCategories(nextSelected);
+
+    if (nextSelected.length === 0) {
+      setFeatureCategory("");
+      syncAdditionalFeatures([]);
+      return;
+    }
+
+    const nextFeatureCategory =
+      featureCategory && nextSelected.includes(featureCategory) ? featureCategory : nextSelected[0];
+    setFeatureCategory(nextFeatureCategory);
+
+    const options = featureOptionsByCategory[nextFeatureCategory] ?? getCategoryFeatureOptions(nextFeatureCategory);
+    const filtered = selectedFeatureOptions.filter((item) => options.includes(item));
+    syncAdditionalFeatures(filtered);
+  };
+
+  const handleToggleProductCategory = (nextCategory: string) => {
+    const normalized = normalizeCategoryLabel(nextCategory);
+    if (!normalized) return;
+
+    const exists = selectedCategories.includes(normalized);
+    const nextSelected = exists
+      ? selectedCategories.filter((item) => item !== normalized)
+      : [...selectedCategories, normalized];
+
+    applySelectedCategories(nextSelected);
     setNewFeatureOption("");
-    const nextOptions = featureOptionsByCategory[nextCategory] ?? getCategoryFeatureOptions(nextCategory);
-    const filteredSelected = selectedFeatureOptions.filter((item) => nextOptions.includes(item));
-    syncAdditionalFeatures(filteredSelected);
+  };
+
+  const handleAddCategoryOption = async () => {
+    const nextCategory = normalizeCategoryLabel(newCategoryOption);
+    if (!nextCategory) return;
+
+    const nextOptions = mergeCategoryOptions(categoryOptions, [nextCategory]);
+    if (nextOptions.length === categoryOptions.length) {
+      setMessage(`Category "${nextCategory}" already exists.`);
+      setNewCategoryOption("");
+      return;
+    }
+
+    try {
+      const saved = await persistCategoryOptions(nextOptions);
+      setMessage(`Category "${nextCategory}" added successfully.`);
+      setCategoryOptions(saved);
+      setNewCategoryOption("");
+      applySelectedCategories([...selectedCategories, nextCategory]);
+    } catch (error) {
+      console.error("Failed to add category", error);
+      setMessage(error instanceof Error ? `Error: ${error.message}` : "Error adding category");
+    }
+  };
+
+  const handleRemoveCategoryOption = async (categoryToRemove: string) => {
+    const nextOptions = categoryOptions.filter((item) => item !== categoryToRemove);
+    if (nextOptions.length === categoryOptions.length) return;
+
+    try {
+      const saved = await persistCategoryOptions(nextOptions);
+      setCategoryOptions(saved);
+      setMessage(`Category "${categoryToRemove}" removed successfully.`);
+      applySelectedCategories(selectedCategories.filter((item) => item !== categoryToRemove));
+      if (featureCategory === categoryToRemove) {
+        setNewFeatureOption("");
+      }
+    } catch (error) {
+      console.error("Failed to remove category", error);
+      setMessage(error instanceof Error ? `Error: ${error.message}` : "Error removing category");
+    }
   };
 
   const handleFeatureToggle = (feature: string) => {
@@ -554,12 +673,12 @@ export default function ProductsAdminPage() {
 
   const handleAddFeatureOption = () => {
     const nextFeature = newFeatureOption.trim();
-    if (!category || !nextFeature) return;
+    if (!featureCategory || !nextFeature) return;
 
     const nextOptions = mergeFeatureOptions(selectedCategoryFeatures, [nextFeature]);
     setFeatureOptionsByCategory((prev) => ({
       ...prev,
-      [category]: nextOptions,
+      [featureCategory]: nextOptions,
     }));
     setNewFeatureOption("");
 
@@ -569,10 +688,10 @@ export default function ProductsAdminPage() {
   };
 
   const handleRemoveFeatureOption = (feature: string) => {
-    if (!category) return;
+    if (!featureCategory) return;
     setFeatureOptionsByCategory((prev) => ({
       ...prev,
-      [category]: (prev[category] ?? []).filter((item) => item !== feature),
+      [featureCategory]: (prev[featureCategory] ?? []).filter((item) => item !== feature),
     }));
     syncAdditionalFeatures(selectedFeatureOptions.filter((item) => item !== feature));
   };
@@ -585,7 +704,7 @@ export default function ProductsAdminPage() {
     }
 
     if (tab === "classification") {
-      if (!category.trim()) return "Product category is required before moving to the next tab.";
+      if (selectedCategories.length === 0) return "At least one product category is required before moving to the next tab.";
     }
 
     if (tab === "details") {
@@ -649,11 +768,11 @@ export default function ProductsAdminPage() {
           admin_name: currentAdmin.username,
           action: 'create',
           entity_type: 'product_form_submission',
-          details: `Initiated product creation for "${name}" in category "${category}"`,
+          details: `Initiated product creation for "${name}" in categories "${selectedCategories.join(', ') || 'none'}"`,
           page: 'products',
           metadata: {
             productName: name,
-            category,
+            categories: selectedCategories,
             price: Number(price) || 0,
             inventory: Number(inventory) || 0,
             hasImages: images.length > 0,
@@ -710,7 +829,7 @@ export default function ProductsAdminPage() {
         description: description.trim() || null,
         price: Number(price) || 0,
         inventory: Number(inventory) || 0,
-        category: category.trim(),
+        category: stringifyCategorySelection(selectedCategories),
         height: height ? Number(height) : null,
         width: width ? Number(width) : null,
         thickness: thickness ? Number(thickness) : null,
@@ -792,10 +911,12 @@ export default function ProductsAdminPage() {
       setHeight("");
       setWidth("");
       setThickness("");
-      setCategory("");
+      setSelectedCategories([]);
+      setFeatureCategory("");
       setSelectedFeatureOptions([]);
       setFeatureOptionsByCategory(createFeatureOptionsByCategory());
       setNewFeatureOption("");
+      setNewCategoryOption("");
       setActiveTab("identity");
       setFurthestTabIndex(0);
       setCarouselIndex(0);
@@ -899,7 +1020,7 @@ export default function ProductsAdminPage() {
                   initialIndex={currentFbxIndex}
                   weather={previewWeather}
                   frameFinish="matteBlack"
-                  productCategory={category || null}
+                  productCategory={selectedCategories[0] || null}
                   skyboxes={effectivePreviewSkyboxes}
                   productDimensions={{
                     width: width || null,
@@ -987,25 +1108,80 @@ export default function ProductsAdminPage() {
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-[#233a5e]">Product Category and Additional Features</h2>
                 <p className="mt-2 text-sm text-gray-600">
-                  Pick the product category, then select the preloaded feature bullets you want shown on the website.
+                  Add or remove category options, assign multiple categories to this product, then configure feature bullets.
                 </p>
               </div>
 
               <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
                 <div className="rounded-xl border border-gray-200 bg-[#f8fafc] p-5">
-                  <label className="mb-2 block font-semibold text-[#233a5e]">Product Category <span className="text-red-500">*</span></label>
-                  <div className="relative">
-                    <select
-                      className="w-full appearance-none rounded-lg border border-gray-300 bg-white p-3 pr-10 text-black outline-none transition focus:border-[#233a5e] focus:ring-2 focus:ring-[#233a5e]/20"
-                      value={category}
-                      onChange={(e) => handleCategoryChange(e.target.value)}
-                    >
-                      <option value="">Select Category</option>
-                      {PRODUCT_CATEGORY_OPTIONS.map((option) => (
-                        <option key={option} value={option}>{option}</option>
-                      ))}
-                    </select>
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">▼</span>
+                  <div className="mb-4">
+                    <label className="mb-2 block font-semibold text-[#233a5e]">Manage Category Options</label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="text"
+                        value={newCategoryOption}
+                        onChange={(e) => setNewCategoryOption(e.target.value)}
+                        placeholder="Add new category"
+                        className="flex-1 rounded-lg border border-gray-300 bg-white p-3 text-sm text-black outline-none transition focus:border-[#233a5e] focus:ring-2 focus:ring-[#233a5e]/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddCategoryOption}
+                        disabled={!newCategoryOption.trim() || savingCategories}
+                        className="rounded-lg bg-[#233a5e] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#1b2d49] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {savingCategories ? "Saving..." : "Add"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <label className="mb-2 block font-semibold text-[#233a5e]">Assign Categories To This Product <span className="text-red-500">*</span></label>
+                  <div className="max-h-72 space-y-2 overflow-auto rounded-lg border border-gray-200 bg-white p-3">
+                    {categoryOptions.map((option) => {
+                      const checked = selectedCategories.includes(option);
+                      return (
+                        <div key={option} className="flex items-center justify-between gap-3 rounded border border-gray-100 px-3 py-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => handleToggleProductCategory(option)}
+                              className="h-4 w-4 rounded border-gray-300 text-[#233a5e] focus:ring-[#233a5e]"
+                            />
+                            <span>{option}</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCategoryOption(option)}
+                            className="rounded px-2 py-1 text-[11px] font-semibold text-red-600 transition hover:bg-red-50"
+                            title="Delete category option"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Selected Categories</div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedCategories.length > 0 ? (
+                        selectedCategories.map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() => handleToggleProductCategory(option)}
+                            className="rounded-full bg-[#233a5e] px-3 py-1 text-xs font-semibold text-white"
+                            title="Click to remove"
+                          >
+                            {option} ×
+                          </button>
+                        ))
+                      ) : (
+                        <span className="text-sm text-gray-500">No categories selected yet.</span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1020,26 +1196,47 @@ export default function ProductsAdminPage() {
                     </div>
                   </div>
 
+                  <div className="mt-4">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Feature Category Scope</label>
+                    <select
+                      value={featureCategory}
+                      onChange={(e) => {
+                        const nextCategory = e.target.value;
+                        setFeatureCategory(nextCategory);
+                        const nextOptions = featureOptionsByCategory[nextCategory] ?? getCategoryFeatureOptions(nextCategory);
+                        const filtered = selectedFeatureOptions.filter((item) => nextOptions.includes(item));
+                        syncAdditionalFeatures(filtered);
+                      }}
+                      className="w-full rounded-lg border border-gray-300 bg-white p-3 text-sm text-black outline-none transition focus:border-[#233a5e] focus:ring-2 focus:ring-[#233a5e]/20 disabled:bg-gray-100"
+                      disabled={selectedCategories.length === 0}
+                    >
+                      <option value="">Select category</option>
+                      {selectedCategories.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </div>
+
                   <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                     <input
                       type="text"
                       value={newFeatureOption}
                       onChange={(e) => setNewFeatureOption(e.target.value)}
-                      placeholder={category ? "Create a new feature checkbox for this category" : "Select a category first"}
-                      disabled={!category}
+                      placeholder={featureCategory ? "Create a new feature checkbox for this category" : "Select a category first"}
+                      disabled={!featureCategory}
                       className="flex-1 rounded-lg border border-gray-300 bg-white p-3 text-sm text-black outline-none transition focus:border-[#233a5e] focus:ring-2 focus:ring-[#233a5e]/20 disabled:bg-gray-100 disabled:text-gray-400"
                     />
                     <button
                       type="button"
                       onClick={handleAddFeatureOption}
-                      disabled={!category || !newFeatureOption.trim()}
+                      disabled={!featureCategory || !newFeatureOption.trim()}
                       className="rounded-lg bg-[#233a5e] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#1b2d49] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Add Feature
                     </button>
                   </div>
 
-                  {category ? (
+                  {featureCategory ? (
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
                       {selectedCategoryFeatures.map((feature) => {
                         const checked = selectedFeatureOptions.includes(feature);

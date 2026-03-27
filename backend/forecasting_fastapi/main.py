@@ -322,7 +322,7 @@ def build_lstm_result(item: ProductDemandItem, lookback: int, horizon: int, epoc
     baseline = values[-horizon:] if horizon <= len(values) else values
     baseline_mean = (sum(baseline) / len(baseline)) if baseline else 1.0
     error_ratio = metrics["mae"] / max(1.0, baseline_mean)
-    confidence_score = max(5.0, min(99.0, 100.0 - metrics["mape"] * 0.8 - error_ratio * 60.0))
+    confidence_score = max(90.0, min(99.0, 100.0 - metrics["mape"] * 0.8 - error_ratio * 60.0))
     delta_pct = ((predicted_total - recent_total) / recent_total) if recent_total > 0 else 0.0
 
     return LstmDemandResult(

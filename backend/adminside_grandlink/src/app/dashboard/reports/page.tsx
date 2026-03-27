@@ -63,6 +63,31 @@ type DailySeries = {
   aov: number[];
 };
 
+type ReportBlockId =
+  | "performance_snapshot"
+  | "order_health"
+  | "revenue_leaders"
+  | "high_demand_low_stock"
+  | "revenue_over_time"
+  | "kpis_overview"
+  | "orders_status_breakdown"
+  | "revenue_by_category"
+  | "completed_orders"
+  | "products_performance";
+
+const REPORT_BLOCK_OPTIONS: Array<{ id: ReportBlockId; label: string }> = [
+  { id: "performance_snapshot", label: "Performance Snapshot" },
+  { id: "order_health", label: "Order Health" },
+  { id: "revenue_leaders", label: "Revenue Leaders" },
+  { id: "high_demand_low_stock", label: "High-demand, low-stock products" },
+  { id: "revenue_over_time", label: "Revenue over time" },
+  { id: "kpis_overview", label: "KPIs overview" },
+  { id: "orders_status_breakdown", label: "Orders status breakdown" },
+  { id: "revenue_by_category", label: "Revenue by category" },
+  { id: "completed_orders", label: "Completed Orders" },
+  { id: "products_performance", label: "Products Performance" },
+];
+
 export default function ReportsPage() {
   const [salesData, setSalesData] = useState<SalesData>({
     totalSales: 0,
@@ -84,6 +109,12 @@ export default function ReportsPage() {
   const [currentAdmin, setCurrentAdmin] = useState<any>(null);
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedStatus, setSelectedStatus] = useState("all");
+  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
+  const [selectedReportBlocks, setSelectedReportBlocks] = useState<ReportBlockId[]>(
+    REPORT_BLOCK_OPTIONS.map((block) => block.id)
+  );
 
   // Add refs to access the chart instances
   const revenueLineRef = useRef<any>(null);
@@ -111,7 +142,7 @@ export default function ReportsPage() {
       fetchCompleted();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentAdmin, dateRange]);
+  }, [currentAdmin, dateRange, selectedCategory, selectedStatus]);
 
   const loadCurrentAdmin = async () => {
     try {
@@ -137,6 +168,28 @@ export default function ReportsPage() {
     }
     return out;
   };
+
+  const normalizeStatus = (value: unknown) => String(value || "").trim().toLowerCase();
+  const normalizeCategory = (value: unknown) => String(value || "").trim().toLowerCase();
+
+  const isSelectedStatus = (rawStatus: unknown) => {
+    if (selectedStatus === "all") return true;
+
+    const normalized = normalizeStatus(rawStatus);
+    const successfulSet = new Set(["completed", "approved", "ready_for_delivery"]);
+    const pendingSet = new Set(["pending_payment", "reserved", "in_production"]);
+
+    if (selectedStatus === "successful") return successfulSet.has(normalized);
+    if (selectedStatus === "pending") return pendingSet.has(normalized);
+    return normalized === selectedStatus;
+  };
+
+  const isSelectedCategory = (rawCategory: unknown) => {
+    if (selectedCategory === "all") return true;
+    return normalizeCategory(rawCategory) === selectedCategory;
+  };
+
+  const hasReportBlock = (id: ReportBlockId) => selectedReportBlocks.includes(id);
 
   const fetchReportsData = async () => {
     try {
@@ -173,22 +226,28 @@ export default function ReportsPage() {
       const successStatuses = ["completed", "approved", "ready_for_delivery"];
       const statusOf = (row: any) => row.order_status || row.status;
 
+      const filteredOrders = (ordersData || []).filter((order) => {
+        const category = (order.products as any)?.category || "Uncategorized";
+        const orderStatus = statusOf(order);
+        return isSelectedCategory(category) && isSelectedStatus(orderStatus);
+      });
+
       // Metrics
-      const totalOrders = ordersData?.length || 0;
+      const totalOrders = filteredOrders.length || 0;
       const successfulOrders =
-        ordersData?.filter((o) => successStatuses.includes(statusOf(o))).length ||
+        filteredOrders.filter((o) => successStatuses.includes(statusOf(o))).length ||
         0;
       const cancelledOrders =
-        ordersData?.filter((o) => statusOf(o) === "cancelled").length || 0;
+        filteredOrders.filter((o) => statusOf(o) === "cancelled").length || 0;
       const pendingOrders =
-        ordersData?.filter((o) =>
+        filteredOrders.filter((o) =>
           ["pending_payment", "reserved", "in_production"].includes(statusOf(o))
         ).length || 0;
 
       let totalSales = 0;
       let totalProductsSold = 0;
 
-      ordersData?.forEach((order) => {
+      filteredOrders.forEach((order) => {
         if (successStatuses.includes(statusOf(order))) {
           const price = (order.products as any)?.price || 0;
           totalSales += price * order.quantity;
@@ -220,10 +279,19 @@ export default function ReportsPage() {
         throw productsError;
       }
 
-      const productsWithSales: ProductData[] = (products || []).map(
+      const categorySet = new Set<string>();
+      (products || []).forEach((product: any) => {
+        const label = String(product?.category || "Uncategorized").trim();
+        if (label) categorySet.add(label);
+      });
+      setAvailableCategories(Array.from(categorySet).sort((a, b) => a.localeCompare(b)));
+
+      const productsWithSales: ProductData[] = (products || [])
+        .filter((product: any) => isSelectedCategory(product.category || "Uncategorized"))
+        .map(
         (product) => {
           const productOrders =
-            ordersData?.filter(
+            filteredOrders.filter(
               (o) =>
                 o.product_id === product.id &&
                 successStatuses.includes(statusOf(o))
@@ -265,7 +333,7 @@ export default function ReportsPage() {
         sucOrdersByDay[d] = 0;
       });
 
-      ordersData?.forEach((o) => {
+      filteredOrders.forEach((o) => {
         const key = buildDateKey(o.created_at);
         if (!labels.includes(key)) return;
         if (successStatuses.includes(statusOf(o))) {
@@ -317,9 +385,14 @@ export default function ReportsPage() {
       // Optionally ensure charts are fully painted before capture
       // await new Promise((r) => requestAnimationFrame(() => r(null)));
 
-      const pdf = new jsPDF();
+      const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
       const currentDate = new Date().toLocaleDateString();
       const reportPeriod = `${dateRange.startDate} to ${dateRange.endDate}`;
+      const generatedAt = new Date().toLocaleString();
+      const brandPrimary: [number, number, number] = [127, 29, 29];
+      const brandAccent: [number, number, number] = [153, 27, 27];
+      const brandMuted: [number, number, number] = [120, 53, 15];
+      const marginX = 14;
 
       // Helper: load public logo (AVIF) and convert to PNG data URL for jsPDF
       const loadImageAsPngDataUrl = () =>
@@ -340,40 +413,60 @@ export default function ReportsPage() {
           img.src = "/ge-logo.avif"; // from public/
         });
 
-      // Try to place the logo on the right side of the header
-      let headerBottomY = 0;
+      // Keep header background white for print clarity.
+      const pageWidth = (pdf as any).internal.pageSize.getWidth();
+
+      pdf.setFontSize(18);
+      pdf.setTextColor(...brandPrimary);
+      pdf.text("GrandLink Sales Intelligence Report", marginX + 2, 18);
+
+      pdf.setFontSize(10);
+      pdf.setTextColor(...brandMuted);
+      pdf.text(`Prepared for: ${currentAdmin.username}`, marginX + 2, 24);
+      pdf.text(`Generated: ${generatedAt}`, marginX + 2, 29);
+
+      // Place logo on the right side of page 1 header.
+      let headerBottomY = 32;
       try {
         const logo = await loadImageAsPngDataUrl();
-        const pageWidth = (pdf as any).internal.pageSize.getWidth();
-        const margin = 20;
-        const imgW = 40; // display width in pdf units
+        const imgW = 42;
         const imgH = imgW * (logo.height / Math.max(1, logo.width));
-        const imgX = pageWidth - margin - imgW;
-        const imgY = 15; // a little lower to add more top space
+        const imgX = pageWidth - marginX - imgW;
+        const imgY = 8;
         pdf.addImage(logo.dataUrl, "PNG", imgX, imgY, imgW, imgH);
-        headerBottomY = imgY + imgH;
+        headerBottomY = Math.max(headerBottomY, imgY + imgH);
       } catch {
-        // If logo fails to load, continue without blocking PDF generation
-        headerBottomY = 30;
+        // If logo fails to load, continue without blocking PDF generation.
       }
 
-      // Header text (shifted down to add more top whitespace)
-      pdf.setFontSize(20);
-      pdf.setTextColor(139, 28, 28);
-      pdf.text("GRAND EAST SALES REPORT", 20, 35);
+      const selectedBlocksLabel = selectedReportBlocks.length
+        ? REPORT_BLOCK_OPTIONS.filter((block) => selectedReportBlocks.includes(block.id))
+            .map((block) => block.label)
+            .join(", ")
+        : "None";
 
-      pdf.setFontSize(12);
-      pdf.setTextColor(0, 0, 0);
-      pdf.text(`Report Period: ${reportPeriod}`, 20, 45);
-      pdf.text(`Generated on: ${currentDate}`, 20, 52);
-      pdf.text(`Generated by: ${currentAdmin.username}`, 20, 59);
+      autoTable(pdf, {
+        startY: Math.max(36, headerBottomY + 8),
+        head: [["Report Metadata", "Value"]],
+        body: [
+          ["Period", reportPeriod],
+          ["Category filter", selectedCategory === "all" ? "All categories" : selectedCategory],
+          ["Status filter", selectedStatus === "all" ? "All statuses" : selectedStatus],
+          ["Included sections", selectedBlocksLabel],
+          ["Generated on", currentDate],
+        ],
+        theme: "grid",
+        headStyles: { fillColor: brandPrimary, textColor: [255, 255, 255] },
+        styles: { fontSize: 9, cellPadding: 2.4, textColor: [31, 41, 55] },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        margin: { left: marginX, right: marginX },
+      });
 
       // Sales Summary Section
-      pdf.setFontSize(16);
-      pdf.setTextColor(139, 28, 28);
-      // Start this section below the header and logo with extra spacing
-      const sectionStartY = Math.max(80, headerBottomY + 20);
-      pdf.text("SALES SUMMARY", 20, sectionStartY);
+      pdf.setFontSize(14);
+      pdf.setTextColor(...brandPrimary);
+      const sectionStartY = ((pdf as any).lastAutoTable?.finalY || 40) + 10;
+      pdf.text("Executive Sales Summary", marginX, sectionStartY);
 
       pdf.setFontSize(11);
       pdf.setTextColor(0, 0, 0);
@@ -407,104 +500,118 @@ export default function ReportsPage() {
         startY: sectionStartY + 5,
         head: [salesSummaryData[0]],
         body: salesSummaryData.slice(1),
-        theme: "striped",
-        headStyles: { fillColor: [139, 28, 28] },
-        margin: { left: 20, right: 20 },
+        theme: "grid",
+        headStyles: { fillColor: brandPrimary, textColor: [255, 255, 255] },
+        styles: { fontSize: 9.5, cellPadding: 2.3, textColor: [31, 41, 55] },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        margin: { left: marginX, right: marginX },
       });
 
       let currentY = (pdf as any).lastAutoTable?.finalY
         ? (pdf as any).lastAutoTable.finalY + 16
         : sectionStartY + 70;
 
-      pdf.setFontSize(16);
-      pdf.setTextColor(139, 28, 28);
-      pdf.text("ANALYTICS HIGHLIGHTS", 20, currentY);
+      if (
+        hasReportBlock("performance_snapshot") ||
+        hasReportBlock("order_health") ||
+        hasReportBlock("revenue_leaders") ||
+        hasReportBlock("high_demand_low_stock")
+      ) {
+        pdf.setFontSize(14);
+        pdf.setTextColor(...brandPrimary);
+        pdf.text("Analytics Highlights", marginX, currentY);
 
-      const highlightRows = [
-        ["Average revenue per day", `₱${Math.round(reportInsights.avgRevenuePerDay).toLocaleString()}`],
-        ["Success / Cancel / Pending", `${reportInsights.successRate.toFixed(1)}% / ${reportInsights.cancelRate.toFixed(1)}% / ${reportInsights.pendingRate.toFixed(1)}%`],
-        ["Average units per successful order", reportInsights.avgUnitsPerOrder.toFixed(2)],
-        [
-          "Top product by revenue",
-          reportInsights.topRevenueProduct
-            ? `${reportInsights.topRevenueProduct.name} (₱${Math.round(reportInsights.topRevenueProduct.revenue || 0).toLocaleString()})`
-            : "N/A",
-        ],
-        [
-          "Top category by revenue",
-          `${reportInsights.topCategoryName} (₱${Math.round(reportInsights.topCategoryRevenue).toLocaleString()})`,
-        ],
-        ["Low-stock products (≤5 units)", reportInsights.lowStockProducts.toString()],
-      ];
+        const highlightRows = [
+          ["Average revenue per day", `₱${Math.round(reportInsights.avgRevenuePerDay).toLocaleString()}`],
+          ["Success / Cancel / Pending", `${reportInsights.successRate.toFixed(1)}% / ${reportInsights.cancelRate.toFixed(1)}% / ${reportInsights.pendingRate.toFixed(1)}%`],
+          ["Average units per successful order", reportInsights.avgUnitsPerOrder.toFixed(2)],
+          [
+            "Top product by revenue",
+            reportInsights.topRevenueProduct
+              ? `${reportInsights.topRevenueProduct.name} (₱${Math.round(reportInsights.topRevenueProduct.revenue || 0).toLocaleString()})`
+              : "N/A",
+          ],
+          [
+            "Top category by revenue",
+            `${reportInsights.topCategoryName} (₱${Math.round(reportInsights.topCategoryRevenue).toLocaleString()})`,
+          ],
+          ["Low-stock products (≤5 units)", reportInsights.lowStockProducts.toString()],
+        ];
 
-      autoTable(pdf, {
-        startY: currentY + 5,
-        head: [["Insight", "Value"]],
-        body: highlightRows,
-        theme: "striped",
-        headStyles: { fillColor: [139, 28, 28] },
-        margin: { left: 20, right: 20 },
-        styles: { fontSize: 10 },
-      });
+        autoTable(pdf, {
+          startY: currentY + 5,
+          head: [["Insight", "Value"]],
+          body: highlightRows,
+          theme: "grid",
+          headStyles: { fillColor: brandAccent, textColor: [255, 255, 255] },
+          margin: { left: marginX, right: marginX },
+          styles: { fontSize: 9.5, cellPadding: 2.2, textColor: [31, 41, 55] },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+        });
+      }
 
       // Products Inventory Section
       currentY = (pdf as any).lastAutoTable?.finalY
         ? (pdf as any).lastAutoTable.finalY + 20
         : 90;
 
-      pdf.setFontSize(16);
-      pdf.setTextColor(139, 28, 28);
-      pdf.text("PRODUCTS INVENTORY & PERFORMANCE", 20, currentY);
+      if (hasReportBlock("products_performance")) {
+        pdf.setFontSize(14);
+        pdf.setTextColor(...brandPrimary);
+        pdf.text("Products Inventory and Performance", marginX, currentY);
 
-      const productsTableData = productsData.map((product) => [
-        product.name,
-        product.category,
-        product.inventory.toString(),
-        product.reserved_stock.toString(),
-        `₱${(product.price || 0).toLocaleString()}`,
-        product.total_sold.toString(),
-        `₱${(product.revenue || 0).toLocaleString()}`,
-      ]);
+        const productsTableData = productsData.map((product) => [
+          product.name,
+          product.category,
+          product.inventory.toString(),
+          product.reserved_stock.toString(),
+          `₱${(product.price || 0).toLocaleString()}`,
+          product.total_sold.toString(),
+          `₱${(product.revenue || 0).toLocaleString()}`,
+        ]);
 
-      autoTable(pdf, {
-        startY: currentY + 5,
-        head: [
-          [
-            "Product Name",
-            "Category",
-            "In Stock",
-            "Reserved",
-            "Price",
-            "Sold",
-            "Revenue",
+        autoTable(pdf, {
+          startY: currentY + 5,
+          head: [
+            [
+              "Product Name",
+              "Category",
+              "In Stock",
+              "Reserved",
+              "Price",
+              "Sold",
+              "Revenue",
+            ],
           ],
-        ],
-        body: productsTableData,
-        theme: "striped",
-        headStyles: { fillColor: [139, 28, 28] },
-        margin: { left: 20, right: 20 },
-        styles: { fontSize: 9 },
-        columnStyles: {
-          0: { cellWidth: 40 },
-          1: { cellWidth: 25 },
-          2: { cellWidth: 20 },
-          3: { cellWidth: 20 },
-          4: { cellWidth: 25 },
-          5: { cellWidth: 20 },
-          6: { cellWidth: 30 },
-        },
-      });
+          body: productsTableData,
+          theme: "grid",
+          headStyles: { fillColor: brandPrimary, textColor: [255, 255, 255] },
+          margin: { left: marginX, right: marginX },
+          styles: { fontSize: 8.7, cellPadding: 1.9, textColor: [31, 41, 55] },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          columnStyles: {
+            0: { cellWidth: 40 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 20 },
+            3: { cellWidth: 20 },
+            4: { cellWidth: 25 },
+            5: { cellWidth: 20 },
+            6: { cellWidth: 30 },
+          },
+        });
+      }
 
       // Completed Orders Section
       currentY = (pdf as any).lastAutoTable?.finalY
         ? (pdf as any).lastAutoTable.finalY + 20
         : 90;
 
-      pdf.setFontSize(16);
-      pdf.setTextColor(139, 28, 28);
-      pdf.text("COMPLETED ORDERS", 20, currentY);
+      if (hasReportBlock("completed_orders")) {
+      pdf.setFontSize(14);
+      pdf.setTextColor(...brandPrimary);
+      pdf.text("Completed Orders", marginX, currentY);
 
-      const completedOrdersTableData = completedOrders.map((order) => {
+      const completedOrdersTableData = filteredCompletedOrders.map((order) => {
         const addr = order.address_details || {};
         const fullAddress = addr.address || 
           [addr.line1 || addr.street, addr.barangay, addr.city, addr.province || addr.region, addr.postal_code]
@@ -550,10 +657,11 @@ export default function ReportsPage() {
           ],
         ],
         body: completedOrdersTableData.length > 0 ? completedOrdersTableData : [['No completed orders in the selected date range', '', '', '', '', '', '', '']],
-        theme: "striped",
-        headStyles: { fillColor: [139, 28, 28] },
-        margin: { left: 20, right: 20 },
-        styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+        theme: "grid",
+        headStyles: { fillColor: brandPrimary, textColor: [255, 255, 255] },
+        margin: { left: marginX, right: marginX },
+        styles: { fontSize: 7.6, cellPadding: 1.8, overflow: 'linebreak', textColor: [31, 41, 55] },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
         bodyStyles: { valign: 'top' },
         pageBreak: 'auto',
         // Ensure the table fits within A4 portrait (210mm) minus 20mm margins on each side => 170mm usable.
@@ -570,15 +678,17 @@ export default function ReportsPage() {
           7: { cellWidth: 14 }, // Total Paid
         },
       });
+      }
 
       // Products Inventory & Performance Section
       currentY = (pdf as any).lastAutoTable?.finalY
         ? (pdf as any).lastAutoTable.finalY + 20
         : 90;
 
-      pdf.setFontSize(16);
-      pdf.setTextColor(139, 28, 28);
-      pdf.text("CATEGORY PERFORMANCE", 20, currentY);
+      if (hasReportBlock("revenue_by_category")) {
+      pdf.setFontSize(14);
+      pdf.setTextColor(...brandPrimary);
+      pdf.text("Category Performance", marginX, currentY);
 
       const categoryData = productsData.reduce((acc, product) => {
         const category = product.category || "Uncategorized";
@@ -611,23 +721,26 @@ export default function ReportsPage() {
         startY: currentY + 5,
         head: [["Category", "Products", "Total Stock", "Total Sold", "Total Revenue"]],
         body: categoryTableData,
-        theme: "striped",
-        headStyles: { fillColor: [139, 28, 28] },
-        margin: { left: 20, right: 20 },
+        theme: "grid",
+        headStyles: { fillColor: brandAccent, textColor: [255, 255, 255] },
+        margin: { left: marginX, right: marginX },
+        styles: { fontSize: 9, cellPadding: 2.1, textColor: [31, 41, 55] },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
       });
+      }
 
       // --- NEW: Embed charts as images ---
-      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pdfPageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 20;
+      const margin = marginX;
 
       let y = (pdf as any).lastAutoTable?.finalY
         ? (pdf as any).lastAutoTable.finalY + 20
         : 90;
 
-      const addChartToPdf = (chartRef: any, title: string) => {
+      const getChartImage = (chartRef: any) => {
         const chart = chartRef?.current;
-        if (!chart) return;
+        if (!chart) return null;
 
         // Try both Chart.js APIs to get a base64 image
         const canvas: HTMLCanvasElement | undefined =
@@ -637,66 +750,102 @@ export default function ReportsPage() {
             ? chart.toBase64Image()
             : canvas?.toDataURL?.("image/png");
 
-        if (!imgData) return;
+        if (!imgData) return null;
 
-        const canvasWidth = canvas?.width || 800;
-        const canvasHeight = canvas?.height || 400;
-        const maxWidth = pageWidth - margin * 2;
-        const ratio = canvasHeight / canvasWidth;
-        const imgWidth = maxWidth;
-        const imgHeight = imgWidth * ratio;
-
-        // New page if not enough space
-        if (y + imgHeight + 16 > pageHeight - margin) {
-          pdf.addPage();
-          y = margin;
-        }
-
-        // Title
-        pdf.setFontSize(14);
-        pdf.setTextColor(139, 28, 28);
-        pdf.text(title, margin, y);
-
-        // Image
-        y += 6;
-        pdf.addImage(imgData, "PNG", margin, y, imgWidth, imgHeight);
-        y += imgHeight + 16;
+        return {
+          imgData,
+          width: canvas?.width || 800,
+          height: canvas?.height || 400,
+        };
       };
 
       // Charts section
-      pdf.setFontSize(16);
-      pdf.setTextColor(139, 28, 28);
+      pdf.setFontSize(14);
+      pdf.setTextColor(...brandPrimary);
       if (y + 12 > pageHeight - margin) {
         pdf.addPage();
         y = margin;
       }
-      pdf.text("CHARTS", margin, y);
-      y += 8;
+      const hasAnySelectedChart =
+        hasReportBlock("revenue_over_time") ||
+        hasReportBlock("kpis_overview") ||
+        hasReportBlock("orders_status_breakdown") ||
+        hasReportBlock("revenue_by_category");
 
-      addChartToPdf(revenueLineRef, "Revenue Over Time");
-      addChartToPdf(kpiDoughnutRef, "KPIs Overview");           // CHANGED
-      addChartToPdf(ordersStatusRef, "Orders Status Breakdown"); // NEW
-      addChartToPdf(categoryRevenueRef, "Revenue by Category");  // NEW
+      if (hasAnySelectedChart) {
+        pdf.text("Charts and Visual Trends", margin, y);
+        y += 8;
+
+        const selectedCharts: Array<{ title: string; image: { imgData: string; width: number; height: number } }> = [];
+        if (hasReportBlock("revenue_over_time")) {
+          const image = getChartImage(revenueLineRef);
+          if (image) selectedCharts.push({ title: "Revenue Over Time", image });
+        }
+        if (hasReportBlock("kpis_overview")) {
+          const image = getChartImage(kpiDoughnutRef);
+          if (image) selectedCharts.push({ title: "KPIs Overview", image });
+        }
+        if (hasReportBlock("orders_status_breakdown")) {
+          const image = getChartImage(ordersStatusRef);
+          if (image) selectedCharts.push({ title: "Orders Status Breakdown", image });
+        }
+        if (hasReportBlock("revenue_by_category")) {
+          const image = getChartImage(categoryRevenueRef);
+          if (image) selectedCharts.push({ title: "Revenue by Category", image });
+        }
+
+        const chartGap = 6;
+        const chartBoxW = (pdfPageWidth - margin * 2 - chartGap) / 2;
+        const chartTitleH = 5;
+        const chartImageH = 56;
+        const chartRowH = chartTitleH + chartImageH + 8;
+
+        for (let i = 0; i < selectedCharts.length; i += 2) {
+          if (y + chartRowH > pageHeight - margin - 10) {
+            pdf.addPage();
+            y = margin;
+          }
+
+          const rowItems = selectedCharts.slice(i, i + 2);
+          rowItems.forEach((item, colIndex) => {
+            const x = margin + colIndex * (chartBoxW + chartGap);
+            pdf.setFontSize(11);
+            pdf.setTextColor(...brandPrimary);
+            pdf.text(item.title, x, y);
+
+            const ratio = item.image.width > 0 ? item.image.height / item.image.width : 0.5;
+            const fitByWidthH = chartBoxW * ratio;
+            const imgW = fitByWidthH <= chartImageH ? chartBoxW : chartImageH / Math.max(ratio, 0.01);
+            const imgH = Math.min(chartImageH, fitByWidthH);
+            const offsetX = x + (chartBoxW - imgW) / 2;
+            const imageY = y + chartTitleH;
+
+            pdf.addImage(item.image.imgData, "PNG", offsetX, imageY, imgW, imgH);
+          });
+
+          y += chartRowH;
+        }
+      }
 
       // Footer page numbers
       const pageCount = pdf.getNumberOfPages();
       pdf.setFontSize(8);
-      pdf.setTextColor(100, 100, 100);
+      pdf.setTextColor(...brandMuted);
       for (let i = 1; i <= pageCount; i++) {
         pdf.setPage(i);
         pdf.text(
           `Page ${i} of ${pageCount}`,
-          pdf.internal.pageSize.getWidth() - 40,
+          pdf.internal.pageSize.getWidth() - 34,
           pdf.internal.pageSize.getHeight() - 10
         );
         pdf.text(
-          "Grand East - Confidential Report",
-          20,
+          `GrandLink Internal Report • ${reportPeriod}`,
+          marginX,
           pdf.internal.pageSize.getHeight() - 10
         );
       }
 
-      const fileName = `Grand_East_Sales_Report_${dateRange.startDate}_to_${dateRange.endDate}.pdf`;
+      const fileName = `GrandLink_Sales_Report_${dateRange.startDate}_to_${dateRange.endDate}.pdf`;
       pdf.save(fileName);
 
       // Optional: activity log
@@ -884,6 +1033,100 @@ export default function ReportsPage() {
     };
   }, [dailySeries.labels.length, productsData, salesData]);
 
+  const filteredCompletedOrders = useMemo(() => {
+    return completedOrders
+      .filter((order) => {
+        const created = String(order?.created_at || "");
+        const day = created ? new Date(created).toISOString().slice(0, 10) : "";
+        if (!day) return false;
+        if (day < dateRange.startDate || day > dateRange.endDate) return false;
+
+        const category = order?.product_details?.category || order?.meta?.category || "Uncategorized";
+        if (!isSelectedCategory(category)) return false;
+
+        const status = normalizeStatus(order?.order_status || order?.status || "completed");
+        if (!isSelectedStatus(status)) return false;
+
+        return true;
+      })
+      .slice(0, 100);
+  }, [completedOrders, dateRange.endDate, dateRange.startDate, selectedCategory, selectedStatus]);
+
+  const exportFilteredResults = () => {
+    const lines: string[] = [];
+    lines.push(`Generated By,${JSON.stringify(currentAdmin?.username || "Unknown Admin")}`);
+    lines.push(`Start Date,${dateRange.startDate}`);
+    lines.push(`End Date,${dateRange.endDate}`);
+    lines.push(`Category Filter,${JSON.stringify(selectedCategory === "all" ? "All" : selectedCategory)}`);
+    lines.push(`Status Filter,${JSON.stringify(selectedStatus === "all" ? "All" : selectedStatus)}`);
+    lines.push(`Selected Reports,${JSON.stringify(selectedReportBlocks.join(" | "))}`);
+    lines.push("");
+
+    lines.push("KPI,Value");
+    lines.push(`Total Revenue,${salesData.totalSales}`);
+    lines.push(`Total Products Sold,${salesData.totalProductsSold}`);
+    lines.push(`Total Orders,${salesData.totalOrders}`);
+    lines.push(`Successful Orders,${salesData.successfulOrders}`);
+    lines.push(`Cancelled Orders,${salesData.cancelledOrders}`);
+    lines.push(`Pending Orders,${salesData.pendingOrders}`);
+    lines.push(`Average Order Value,${salesData.averageOrderValue}`);
+    lines.push("");
+
+    lines.push("Product,Category,Stock,Reserved,Price,Units Sold,Revenue");
+    productsData.forEach((product) => {
+      lines.push(
+        [
+          JSON.stringify(product.name || ""),
+          JSON.stringify(product.category || "Uncategorized"),
+          product.inventory,
+          product.reserved_stock,
+          product.price,
+          product.total_sold,
+          product.revenue,
+        ].join(",")
+      );
+    });
+    lines.push("");
+
+    lines.push("Date,Revenue,Products Sold,Successful Orders,AOV");
+    dailySeries.labels.forEach((day, index) => {
+      lines.push(
+        [
+          day,
+          dailySeries.revenue[index] || 0,
+          dailySeries.products[index] || 0,
+          dailySeries.successfulOrders[index] || 0,
+          dailySeries.aov[index] || 0,
+        ].join(",")
+      );
+    });
+    lines.push("");
+
+    lines.push("Completed Date,Customer,Product,Qty,Total Paid");
+    filteredCompletedOrders.forEach((order) => {
+      const customer = order?.address_details?.full_name || order?.customer_name || "";
+      const product = order?.product_details?.name || order?.meta?.product_name || order?.product_id || "";
+      lines.push(
+        [
+          JSON.stringify(String(order?.created_at || "").slice(0, 10)),
+          JSON.stringify(customer),
+          JSON.stringify(product),
+          Number(order?.quantity || 0),
+          Number(order?.total_paid || 0),
+        ].join(",")
+      );
+    });
+
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `custom_report_${dateRange.startDate}_to_${dateRange.endDate}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -897,22 +1140,31 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-gray-900">Sales Reports</h1>
+    <div className="mx-auto max-w-[1400px] space-y-7 rounded-3xl bg-rose-50/50 p-4 md:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-rose-900">Sales Reports</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Build custom analytics views by combining filters, section selection, and export tools.
+          </p>
+        </div>
         <div className="flex items-center space-x-4">
-          <div className="text-sm text-gray-600">
+          <div className="rounded-full border border-slate-200 bg-white px-4 py-1.5 text-sm text-slate-600 shadow-sm">
             Report by: {currentAdmin?.username || "Unknown Admin"}
           </div>
         </div>
       </div>
 
       {/* Date Range Filter */}
-      <div className="bg-white p-4 rounded-lg shadow-sm border">
+      <div className="rounded-2xl border border-rose-200 bg-white p-4 shadow-sm md:p-5">
+        <div className="mb-4 border-b border-slate-200 pb-3">
+          <h2 className="text-lg font-semibold text-rose-900">Report Builder</h2>
+          <p className="mt-1 text-sm text-slate-600">Set filters, choose report sections, then generate PDF or export CSV.</p>
+        </div>
         {/* Inputs row */}
         <div className="flex items-center gap-6 flex-wrap">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
               Start Date
             </label>
             <input
@@ -921,11 +1173,11 @@ export default function ReportsPage() {
               onChange={(e) =>
                 setDateRange((prev) => ({ ...prev, startDate: e.target.value }))
               }
-              className="px-3 py-2 border border-gray-300 rounded-lg text-black"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-black shadow-sm"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
               End Date
             </label>
             <input
@@ -934,16 +1186,98 @@ export default function ReportsPage() {
               onChange={(e) =>
                 setDateRange((prev) => ({ ...prev, endDate: e.target.value }))
               }
-              className="px-3 py-2 border border-gray-300 rounded-lg text-black"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-black shadow-sm"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Category
+            </label>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="min-w-[180px] rounded-lg border border-slate-300 px-3 py-2 text-black shadow-sm"
+            >
+              <option value="all">All Categories</option>
+              {availableCategories.map((category) => (
+                <option key={category} value={normalizeCategory(category)}>
+                  {category}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Status
+            </label>
+            <select
+              value={selectedStatus}
+              onChange={(e) => setSelectedStatus(e.target.value)}
+              className="min-w-[180px] rounded-lg border border-slate-300 px-3 py-2 text-black shadow-sm"
+            >
+              <option value="all">All Statuses</option>
+              <option value="successful">Successful (completed/approved/ready)</option>
+              <option value="pending">Pending (payment/reserved/production)</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="completed">Completed</option>
+              <option value="approved">Approved</option>
+              <option value="ready_for_delivery">Ready for Delivery</option>
+              <option value="reserved">Reserved</option>
+              <option value="pending_payment">Pending Payment</option>
+              <option value="in_production">In Production</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-gray-700">Generate report sections</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedReportBlocks(REPORT_BLOCK_OPTIONS.map((block) => block.id))}
+                className="text-xs font-medium text-blue-700 hover:text-blue-900"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedReportBlocks([])}
+                className="text-xs font-medium text-slate-600 hover:text-slate-900"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {REPORT_BLOCK_OPTIONS.map((block) => {
+              const checked = selectedReportBlocks.includes(block.id);
+              return (
+                <label key={block.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedReportBlocks((prev) => Array.from(new Set([...prev, block.id])));
+                        return;
+                      }
+                      setSelectedReportBlocks((prev) => prev.filter((item) => item !== block.id));
+                    }}
+                    className="h-4 w-4"
+                  />
+                  <span>{block.label}</span>
+                </label>
+              );
+            })}
           </div>
         </div>
 
         {/* Action row: place button below date inputs */}
-        <div className="mt-4">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
             onClick={generatePDFReport}
-            disabled={generatingPDF}
+            disabled={generatingPDF || selectedReportBlocks.length === 0}
             className="bg-red-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             {generatingPDF ? (
@@ -970,10 +1304,21 @@ export default function ReportsPage() {
               </>
             )}
           </button>
+
+          <button
+            type="button"
+            onClick={exportFilteredResults}
+            disabled={selectedReportBlocks.length === 0}
+            className="bg-gray-800 text-white px-6 py-2 rounded-lg font-medium hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Export Filtered Results (CSV)
+          </button>
         </div>
       </div>
 
       {/* KPI Cards */}
+      <section className="space-y-3">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Overview KPIs</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-6 rounded-lg shadow-sm border">
           <div className="flex items-center">
@@ -1085,8 +1430,13 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>
+      </section>
 
+      {(hasReportBlock("performance_snapshot") || hasReportBlock("order_health") || hasReportBlock("revenue_leaders")) && (
+      <section className="space-y-3">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Executive Insights</h2>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {hasReportBlock("performance_snapshot") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-3">Performance Snapshot</h3>
           <div className="space-y-2 text-sm text-gray-700">
@@ -1104,7 +1454,9 @@ export default function ReportsPage() {
             </div>
           </div>
         </div>
+        )}
 
+        {hasReportBlock("order_health") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-3">Order Health</h3>
           <div className="space-y-2 text-sm text-gray-700">
@@ -1122,7 +1474,9 @@ export default function ReportsPage() {
             </div>
           </div>
         </div>
+        )}
 
+        {hasReportBlock("revenue_leaders") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-3">Revenue Leaders</h3>
           <div className="space-y-2 text-sm text-gray-700">
@@ -1145,8 +1499,14 @@ export default function ReportsPage() {
             </div>
           </div>
         </div>
+        )}
       </div>
+      </section>
+      )}
 
+      {hasReportBlock("high_demand_low_stock") && (
+      <section className="space-y-3">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Risk Signals</h2>
       <div className="bg-white p-4 rounded-lg shadow-sm border">
         <h3 className="text-sm font-semibold text-gray-700 mb-2">High-demand, low-stock products</h3>
         {reportInsights.highDemandLowStock.length === 0 ? (
@@ -1176,34 +1536,45 @@ export default function ReportsPage() {
           </div>
         )}
       </div>
+      </section>
+      )}
 
       {/* Charts */}
+      {(hasReportBlock("revenue_over_time") || hasReportBlock("kpis_overview")) && (
+      <section className="space-y-3">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-rose-700">Trend Visualizations</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {hasReportBlock("revenue_over_time") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
             Revenue over time
           </h3>
-          <Line
-            ref={revenueLineRef}
-            data={revenueLineData}
-            options={{
-              responsive: true,
-              plugins: { legend: { display: true } },
-              scales: {
-                y: {
-                  ticks: { callback: (v) => `₱${Number(v).toLocaleString()}` },
+          <div className="h-[240px]">
+            <Line
+              ref={revenueLineRef}
+              data={revenueLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: true } },
+                scales: {
+                  y: {
+                    ticks: { callback: (v) => `₱${Number(v).toLocaleString()}` },
+                  },
                 },
-              },
-            }}
-          />
+              }}
+            />
+          </div>
         </div>
+        )}
 
         {/* KPIs combo: bars (Products/Orders) + line (AOV) */}
+        {hasReportBlock("kpis_overview") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
             KPIs overview
           </h3>
-          <div className="mx-auto">
+          <div className="mx-auto h-[240px]">
             <Bar
               ref={kpiDoughnutRef}
               data={kpiDoughnutData as any}
@@ -1238,20 +1609,27 @@ export default function ReportsPage() {
                   },
                 },
               }}
-              height={280}
+              height={240}
             />
           </div>
         </div>
+        )}
       </div>
+      </section>
+      )}
 
       {/* NEW extra charts row */}
+      {(hasReportBlock("orders_status_breakdown") || hasReportBlock("revenue_by_category")) && (
+      <section className="space-y-3">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-rose-700">Breakdowns</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {hasReportBlock("orders_status_breakdown") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
             Orders status breakdown
           </h3>
           <div className="mx-auto flex justify-center">
-            <div className="w-[280px] h-[280px]">
+            <div className="w-[220px] h-[220px]">
               <Doughnut
                 ref={ordersStatusRef}
                 data={ordersStatusData}
@@ -1265,37 +1643,46 @@ export default function ReportsPage() {
             </div>
           </div>
         </div>
+        )}
 
+        {hasReportBlock("revenue_by_category") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
             Revenue by category
           </h3>
-          <Bar
-            ref={categoryRevenueRef}
-            data={categoryRevenueData}
-            options={{
-              responsive: true,
-              plugins: { legend: { display: false } },
-              scales: {
-                y: {
-                  beginAtZero: true,
-                  ticks: {
-                    callback: (v) => `₱${Number(v).toLocaleString()}`,
+          <div className="h-[240px]">
+            <Bar
+              ref={categoryRevenueRef}
+              data={categoryRevenueData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    ticks: {
+                      callback: (v) => `₱${Number(v).toLocaleString()}`,
+                    },
                   },
+                  x: { ticks: { maxRotation: 45, minRotation: 0 } },
                 },
-                x: { ticks: { maxRotation: 45, minRotation: 0 } },
-              },
-            }}
-          />
+              }}
+            />
+          </div>
         </div>
+        )}
       </div>
+      </section>
+      )}
 
       {/* Completed Orders Section */}
+      {hasReportBlock("completed_orders") && (
       <div className="bg-white rounded-lg shadow-sm border" id="completed-orders-section">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">Completed Orders</h2>
           <p className="text-sm text-gray-600 mt-1">
-            Showing latest {Math.min(completedOrders.length, 100)} completed orders with customer and address details
+            Showing latest {Math.min(filteredCompletedOrders.length, 100)} completed orders with customer and address details
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -1329,7 +1716,7 @@ export default function ReportsPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {completedOrders.map((order) => {
+              {filteredCompletedOrders.map((order) => {
                 const addr = order.address_details || {};
                 const fullAddress = addr.address || 
                   [addr.line1 || addr.street, addr.barangay, addr.city, addr.province || addr.region, addr.postal_code]
@@ -1393,7 +1780,7 @@ export default function ReportsPage() {
                   </tr>
                 );
               })}
-              {completedOrders.length === 0 && (
+              {filteredCompletedOrders.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-12 text-center">
                     <div className="text-gray-500">
@@ -1410,8 +1797,10 @@ export default function ReportsPage() {
           </table>
         </div>
       </div>
+      )}
 
       {/* Products Performance Table (unchanged content below) */}
+      {hasReportBlock("products_performance") && (
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">
@@ -1485,6 +1874,7 @@ export default function ReportsPage() {
           </table>
         </div>
       </div>
+      )}
 
       {productsData.length === 0 && (
         <div className="text-center py-12">

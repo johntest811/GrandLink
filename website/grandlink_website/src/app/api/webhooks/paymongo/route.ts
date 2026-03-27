@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { ensureInvoiceForUserItem } from '@/app/lib/invoiceService';
 import { getMailFrom, getMailTransporter } from '@/app/lib/mailer';
 import { normalizeFulfillmentMethod } from '@/utils/fulfillment';
+import crypto from 'crypto';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,6 +11,47 @@ const supabase = createClient(
 );
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'https://grandlnik-website.vercel.app';
+
+function parsePaymongoSignatureHeader(value: string | null): { t?: string; te?: string; li?: string } {
+  if (!value) return {};
+  const parts = value
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const out: { t?: string; te?: string; li?: string } = {};
+  for (const part of parts) {
+    const eqIndex = part.indexOf('=');
+    if (eqIndex <= 0) continue;
+    const key = part.slice(0, eqIndex).trim();
+    const val = part.slice(eqIndex + 1).trim();
+    if (key === 't') out.t = val;
+    if (key === 'te') out.te = val;
+    if (key === 'li') out.li = val;
+  }
+  return out;
+}
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  try {
+    const aBuf = Buffer.from(a, 'hex');
+    const bBuf = Buffer.from(b, 'hex');
+    if (aBuf.length !== bBuf.length) return false;
+    return crypto.timingSafeEqual(aBuf, bBuf);
+  } catch {
+    return false;
+  }
+}
+
+function computePaymongoSignatureHex(secret: string, timestamp: string, rawBody: string): string {
+  const signedPayload = `${timestamp}.${rawBody}`;
+  return crypto.createHmac('sha256', secret).update(signedPayload, 'utf8').digest('hex');
+}
+
+function shouldEnforceSignatureVerification(): boolean {
+  // In local dev, allow running without a webhook secret.
+  return process.env.NODE_ENV === 'production' || !!process.env.PAYMONGO_WEBHOOK_SECRET;
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -80,10 +122,142 @@ function detectPayMongoChannel(payload: any): string | null {
   return normalized;
 }
 
+function allocateCentsByWeights(totalCents: number, weights: number[]): number[] {
+  const normalizedTotal = Math.max(0, Math.round(Number(totalCents || 0)));
+  const size = Array.isArray(weights) ? weights.length : 0;
+  if (size === 0) return [];
+  if (normalizedTotal <= 0) return new Array(size).fill(0);
+
+  const normalizedWeights = weights.map((value) => {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+    return Math.round(numeric);
+  });
+  const sumWeights = normalizedWeights.reduce((sum, value) => sum + value, 0);
+
+  if (sumWeights <= 0) {
+    const base = Math.floor(normalizedTotal / size);
+    let remainder = normalizedTotal - base * size;
+    return normalizedWeights.map(() => {
+      const extra = remainder > 0 ? 1 : 0;
+      if (remainder > 0) remainder -= 1;
+      return base + extra;
+    });
+  }
+
+  if (sumWeights === normalizedTotal) {
+    return normalizedWeights;
+  }
+
+  const provisional = normalizedWeights.map((weight, index) => {
+    const exact = (normalizedTotal * weight) / sumWeights;
+    const floorValue = Math.floor(exact);
+    return {
+      index,
+      floorValue,
+      remainder: exact - floorValue,
+    };
+  });
+
+  const allocation = new Array(size).fill(0);
+  let assigned = 0;
+  provisional.forEach((entry) => {
+    allocation[entry.index] = entry.floorValue;
+    assigned += entry.floorValue;
+  });
+
+  let remaining = normalizedTotal - assigned;
+  provisional
+    .slice()
+    .sort((left, right) => {
+      if (right.remainder !== left.remainder) return right.remainder - left.remainder;
+      return left.index - right.index;
+    })
+    .forEach((entry) => {
+      if (remaining <= 0) return;
+      allocation[entry.index] += 1;
+      remaining -= 1;
+    });
+
+  return allocation;
+}
+
+async function resolveReceiptEmail(options: {
+  userId: string;
+  deliveryAddressId?: string | null;
+}): Promise<string | null> {
+  const { userId, deliveryAddressId } = options;
+
+  const normalizeEmail = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const email = value.trim();
+    if (!email) return null;
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailPattern.test(email) ? email : null;
+  };
+
+  // Prefer the selected delivery address email (the user inputs this on the Address page).
+  if (deliveryAddressId) {
+    const { data: addr } = await supabase
+      .from('addresses')
+      .select('email')
+      .eq('id', deliveryAddressId)
+      .maybeSingle();
+    const email = normalizeEmail(addr?.email);
+    if (email) return email;
+  }
+
+  // Fallback to default/newest address email.
+  const { data: fallbackAddr } = await supabase
+    .from('addresses')
+    .select('email')
+    .eq('user_id', userId)
+    .order('is_default', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const fallbackEmail = normalizeEmail(fallbackAddr?.email);
+  if (fallbackEmail) return fallbackEmail;
+
+  // Final fallback: Supabase auth email.
+  try {
+    const { data: userWrap } = await supabase.auth.admin.getUserById(userId);
+    return normalizeEmail(userWrap?.user?.email);
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     console.log('📦 PayMongo webhook received');
-    const payload = await request.json();
+    const rawBody = await request.text();
+
+    // Verify PayMongo signature (recommended): https://developers.paymongo.com/docs/securing-webhook
+    const signatureHeader = request.headers.get('paymongo-signature');
+    const { t, te, li } = parsePaymongoSignatureHeader(signatureHeader);
+    const secret = process.env.PAYMONGO_WEBHOOK_SECRET;
+
+    if (shouldEnforceSignatureVerification()) {
+      if (!secret) {
+        console.error('❌ PAYMONGO_WEBHOOK_SECRET is not configured');
+        return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 500 });
+      }
+      if (!t || (!te && !li)) {
+        console.error('❌ Missing/invalid Paymongo-Signature header');
+        return NextResponse.json({ error: 'Invalid signature header' }, { status: 400 });
+      }
+
+      const expected = computePaymongoSignatureHex(secret, t, rawBody);
+      const provided = li || te || '';
+      const ok = timingSafeEqualHex(expected, provided);
+      if (!ok) {
+        console.error('❌ Webhook signature verification failed');
+        return NextResponse.json({ error: 'Signature verification failed' }, { status: 400 });
+      }
+    }
+
+    const payload = JSON.parse(rawBody);
     const data = payload?.data;
 
     const paymongoChannel = detectPayMongoChannel(payload);
@@ -116,6 +290,40 @@ export async function POST(request: NextRequest) {
         return 0;
       })();
       const totalAmount = Number(meta?.total_amount || amountPaid);
+      const perItemSummaryRaw = meta?.per_item_summary_json;
+      const perItemSummaryMap = new Map<string, number>();
+      if (typeof perItemSummaryRaw === 'string' && perItemSummaryRaw.trim().length > 0) {
+        try {
+          const parsed = JSON.parse(perItemSummaryRaw);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((entry: any) => {
+              const id = typeof entry?.id === 'string' ? entry.id : '';
+              const finalTotal = Number(entry?.final_total ?? 0);
+              if (!id || !Number.isFinite(finalTotal) || finalTotal < 0) return;
+              perItemSummaryMap.set(id, finalTotal);
+            });
+          }
+        } catch {
+          // Keep processing; fallback allocation handles malformed metadata.
+        }
+      }
+
+      const expectedPerItemCents = ids.map((id) => {
+        const expected = Number(perItemSummaryMap.get(id) ?? 0);
+        if (!Number.isFinite(expected) || expected < 0) return 0;
+        return Math.round(expected * 100);
+      });
+      const paidTotalCents = (() => {
+        const fromProvider = Math.round(Number(amountPaid || 0) * 100);
+        if (fromProvider > 0) return fromProvider;
+        const fromMeta = Math.round(Number(totalAmount || 0) * 100);
+        return Math.max(0, fromMeta);
+      })();
+      const allocatedPaidCents = allocateCentsByWeights(paidTotalCents, expectedPerItemCents);
+      const paidTotalMap = new Map<string, number>();
+      ids.forEach((id, index) => {
+        paidTotalMap.set(id, Number(((allocatedPaidCents[index] || 0) / 100).toFixed(2)));
+      });
 
       console.log('🔍 Processing payment for items:', ids);
       console.log('💰 Amount paid:', amountPaid, 'Total:', totalAmount);
@@ -128,9 +336,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid webhook data' }, { status: 400 });
       }
 
-      const notifiedItems: { id: string; product_id: string; product_name: string; product_image?: string | null; quantity: number; total_paid: number; user_id?: string }[] = [];
+      const notifiedItems: { id: string; product_id: string; product_name: string; product_image?: string | null; quantity: number; total_paid: number; user_id?: string; delivery_address_id?: string | null; meta?: Record<string, any> }[] = [];
       let grandTotalPaid = 0;
       let cartUserId: string | null = null;
+      let firstUserId: string | null = null;
+      let receiptAlreadySent = false;
 
       for (const id of ids) {
         // Try to find the item (could be cart or reservation)
@@ -157,8 +367,13 @@ export async function POST(request: NextRequest) {
         }
         
         if (!cartUserId) cartUserId = userItem.user_id;
+        if (!firstUserId) firstUserId = userItem.user_id;
 
         const itemMeta = userItem.meta || {};
+        if (itemMeta?.receipt_email_sent_at) {
+          receiptAlreadySent = true;
+        }
+
         const { data: productDetails } = await supabase
           .from('products')
           .select('name,price,inventory,images,image1,image2,image3,image4,image5')
@@ -175,12 +390,19 @@ export async function POST(request: NextRequest) {
         const reservationShare = Number(reservationShareRaw.toFixed(2));
         const storedFinal = Number(itemMeta.final_total_per_item ?? 0);
         const computedFinal = lineAfterDiscount + reservationShare;
-        const finalTotalPerItem = Number((storedFinal > 0 ? storedFinal : computedFinal).toFixed(2));
+        const fallbackFinalTotal = Number((storedFinal > 0 ? storedFinal : computedFinal).toFixed(2));
+        const allocatedPaidTotal = paidTotalMap.get(id);
+        const finalTotalPerItem = Number(
+          ((typeof allocatedPaidTotal === 'number' && allocatedPaidTotal >= 0)
+            ? allocatedPaidTotal
+            : fallbackFinalTotal).toFixed(2)
+        );
 
         grandTotalPaid += finalTotalPerItem;
 
         // Prepare update data
         const updateData: any = {
+          // Payment is confirmed, but fulfillment must still pass admin approval first.
           status: 'pending_payment',
           order_status: 'pending_payment',
           price: Number(userItem.price || 0),
@@ -203,6 +425,7 @@ export async function POST(request: NextRequest) {
             payment_session_id: sessionId,
             payment_method: 'paymongo',
             paymongo_channel: paymongoChannel,
+            paid_via_qrph: paymongoChannel === 'qrph',
             subtotal,
             addons_total: addonsTotal,
             addons_total_per_item: addonsPerItem,
@@ -274,9 +497,11 @@ export async function POST(request: NextRequest) {
           quantity: userItem.quantity,
           total_paid: finalTotalPerItem,
           user_id: userItem.user_id,
+          delivery_address_id: userItem.delivery_address_id ?? null,
+          meta: itemMeta,
         });
 
-        // Generate invoice (best-effort)
+        // Pre-generate invoice record only (email is sent after admin approval).
         try {
           await ensureInvoiceForUserItem(id);
         } catch (e) {
@@ -362,59 +587,99 @@ export async function POST(request: NextRequest) {
         // Customer payment confirmation email (includes purchased items)
         try {
           const transporter = getMailTransporter();
-          if (transporter && cartUserId) {
-            const { data: userWrap } = await supabase.auth.admin.getUserById(cartUserId);
-            const recipientEmail = userWrap?.user?.email;
+          const userIdForReceipt = cartUserId || firstUserId;
+
+          // Idempotency: avoid resending receipt if webhook retries.
+          if (receiptAlreadySent) {
+            console.log('ℹ️ Receipt already sent for at least one item; skipping customer receipt email');
+            return;
+          }
+
+          if (transporter && userIdForReceipt) {
+            const deliveryAddressId = notifiedItems.find((item) => item.user_id === userIdForReceipt)?.delivery_address_id;
+            const recipientEmail = await resolveReceiptEmail({
+              userId: userIdForReceipt,
+              deliveryAddressId: deliveryAddressId ?? null,
+            });
 
             if (recipientEmail) {
+              const receiptLabel = paymongoChannel === 'qrph'
+                ? 'QRPh receipt'
+                : paymongoChannel
+                ? `${paymongoChannel.toUpperCase()} receipt`
+                : 'PayMongo receipt';
+
               const itemCards = notifiedItems
                 .map(
                   (item) =>
-                    `<div style="display:flex;gap:16px;align-items:flex-start;padding:16px;border:1px solid #e5e7eb;border-radius:16px;background:#fff;margin-top:12px;">
+                    `<div style="display:flex;gap:16px;align-items:flex-start;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;margin-top:12px;">
                       ${item.product_image ? `<img src="${escapeHtml(item.product_image)}" alt="${escapeHtml(item.product_name)}" style="width:96px;height:96px;object-fit:cover;border-radius:12px;border:1px solid #e5e7eb;flex-shrink:0;" />` : ''}
                       <div style="flex:1;min-width:0;">
-                        <div style="font-size:16px;font-weight:700;color:#111827;">${escapeHtml(item.product_name)}</div>
-                        <div style="margin-top:6px;font-size:13px;color:#4b5563;">Quantity: ${escapeHtml(item.quantity)}</div>
-                        <div style="margin-top:4px;font-size:13px;color:#4b5563;">Amount: ₱${Number(item.total_paid).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                        <div style="font-size:15px;font-weight:700;color:#111827;">${escapeHtml(item.product_name)}</div>
+                        <div style="margin-top:6px;font-size:13px;color:#374151;">Quantity: ${escapeHtml(item.quantity)}</div>
+                        <div style="margin-top:4px;font-size:13px;color:#111827;font-weight:600;">Paid Amount: ₱${Number(item.total_paid).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                       </div>
                     </div>`
-                )
-                .join('');
-
-              const itemRows = notifiedItems
-                .map(
-                  (item) =>
-                    `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(item.product_name)}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${item.quantity}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₱${Number(item.total_paid).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>`
                 )
                 .join('');
 
               await transporter.sendMail({
                 from: getMailFrom(),
                 to: recipientEmail,
-                subject: `Payment Confirmed - ${paymentLabel}`,
+                subject: `Payment Confirmed (${receiptLabel}) - ${paymentLabel}`,
                 html: `
-                  <div style="font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;background:#f9fafb;padding:24px;border-radius:20px;">
-                    <h2 style="margin-bottom:8px;color:#111827;">Payment Confirmed</h2>
-                    <p style="margin-top:0;color:#444;">Your payment has been received successfully via PayMongo${channelLabel}.</p>
-                    <div style="margin-top:18px;">
-                      <div style="font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;">Purchased items</div>
+                  <div style="font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;background:#f3f4f6;padding:24px;border-radius:16px;">
+                    <div style="background:#16a34a;color:#fff;padding:24px;border-radius:12px;text-align:center;">
+                      <div style="font-size:24px;font-weight:700;line-height:1.2;">Payment Successful</div>
+                      <div style="font-size:14px;opacity:0.95;margin-top:6px;">Your reservation payment has been received via PayMongo${channelLabel}.</div>
+                    </div>
+
+                    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:16px;">
+                      <div style="font-size:18px;font-weight:700;color:#111827;margin-bottom:10px;">Reservation Receipt</div>
+                      <div style="font-size:13px;color:#374151;line-height:1.7;">
+                        <div><strong>Payment Reference:</strong> ${escapeHtml(sessionId)}</div>
+                        <div><strong>Payment Method:</strong> PayMongo ${paymongoChannel ? `(${escapeHtml(paymongoChannel.toUpperCase())})` : ''}</div>
+                        <div><strong>Items:</strong> ${notifiedItems.length}</div>
+                        <div><strong>Total Paid:</strong> ₱${Number(grandTotalPaid || amountPaid || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                      </div>
+                    </div>
+
+                    <div style="margin-top:16px;">
+                      <div style="font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;">Purchased Items</div>
                       ${itemCards}
                     </div>
-                    <table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:14px;">
-                      <thead>
-                        <tr>
-                          <th style="text-align:left;padding:8px;border-bottom:2px solid #e5e7eb;">Item</th>
-                          <th style="text-align:right;padding:8px;border-bottom:2px solid #e5e7eb;">Qty</th>
-                          <th style="text-align:right;padding:8px;border-bottom:2px solid #e5e7eb;">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>${itemRows}</tbody>
-                    </table>
-                    <p style="margin-top:14px;font-weight:700;">Total Paid: ₱${Number(grandTotalPaid || amountPaid || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                    <p style="margin-top:6px;color:#666;font-size:12px;">Invoice emails are sent separately for each purchased item.</p>
+
+                    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:16px;">
+                      <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:10px;">What's Next?</div>
+                      <div style="font-size:13px;color:#374151;line-height:1.8;">
+                        <div><strong>1.</strong> Your payment is confirmed and now waiting for admin approval.</div>
+                        <div><strong>2.</strong> After approval, your order moves into production and delivery workflow.</div>
+                        <div><strong>3.</strong> The official invoice PDF will be emailed once admin approves your order.</div>
+                      </div>
+                    </div>
+
+                    <p style="margin-top:12px;color:#6b7280;font-size:12px;">This receipt confirms payment only. Final invoice is sent after admin approval.</p>
                   </div>
                 `,
               });
+
+              // Mark receipt as sent (best-effort) to prevent duplicate emails on webhook retries.
+              try {
+                const sentAt = new Date().toISOString();
+                for (const item of notifiedItems) {
+                  const nextMeta = {
+                    ...(item.meta || {}),
+                    receipt_email_sent_at: sentAt,
+                    receipt_email_to: recipientEmail,
+                  };
+                  await supabase.from('user_items').update({
+                    meta: nextMeta,
+                    updated_at: sentAt,
+                  }).eq('id', item.id);
+                }
+              } catch (markErr) {
+                console.warn('⚠️ Failed to mark receipt as sent:', markErr);
+              }
             }
           }
         } catch (emailErr) {

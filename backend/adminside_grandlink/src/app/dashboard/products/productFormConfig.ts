@@ -9,6 +9,51 @@ export const PRODUCT_CATEGORY_OPTIONS = [
   "Curtain Wall",
 ] as const;
 
+function normalizeCategoryKey(value: string): string {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function normalizeCategoryLabel(value: string | null | undefined): string {
+  return stripRichText(String(value || "")).replace(/\s+/g, " ").trim();
+}
+
+export function parseCategorySelection(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return mergeCategoryOptions(value.map((item) => normalizeCategoryLabel(String(item || ""))));
+  }
+
+  if (typeof value !== "string") return [];
+
+  const parts = value
+    .split(/[\,\|\/]+/)
+    .map((item) => normalizeCategoryLabel(item))
+    .filter(Boolean);
+
+  return mergeCategoryOptions(parts);
+}
+
+export function stringifyCategorySelection(categories: string[]): string {
+  return mergeCategoryOptions(categories).join(" | ");
+}
+
+export function mergeCategoryOptions(...groups: (string[] | readonly string[] | null | undefined)[]): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  groups.forEach((group) => {
+    (group || []).forEach((item) => {
+      const normalized = normalizeCategoryLabel(String(item || ""));
+      if (!normalized) return;
+      const key = normalizeCategoryKey(normalized);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      merged.push(normalized);
+    });
+  });
+
+  return merged;
+}
+
 export const PRODUCT_FEATURE_PRESETS: Record<string, string[]> = {
   Doors: [
     "Tempered safety glass",
