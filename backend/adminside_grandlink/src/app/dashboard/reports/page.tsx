@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -115,6 +115,7 @@ export default function ReportsPage() {
   const [selectedReportBlocks, setSelectedReportBlocks] = useState<ReportBlockId[]>(
     REPORT_BLOCK_OPTIONS.map((block) => block.id)
   );
+  const [isReportBlockPending, startReportBlockTransition] = useTransition();
 
   // Add refs to access the chart instances
   const revenueLineRef = useRef<any>(null);
@@ -190,6 +191,28 @@ export default function ReportsPage() {
   };
 
   const hasReportBlock = (id: ReportBlockId) => selectedReportBlocks.includes(id);
+
+  const selectAllReportBlocks = useCallback(() => {
+    startReportBlockTransition(() => {
+      setSelectedReportBlocks(REPORT_BLOCK_OPTIONS.map((block) => block.id));
+    });
+  }, [startReportBlockTransition]);
+
+  const clearReportBlocks = useCallback(() => {
+    startReportBlockTransition(() => {
+      setSelectedReportBlocks([]);
+    });
+  }, [startReportBlockTransition]);
+
+  const toggleReportBlock = useCallback((blockId: ReportBlockId, checked: boolean) => {
+    startReportBlockTransition(() => {
+      if (checked) {
+        setSelectedReportBlocks((prev) => Array.from(new Set([...prev, blockId])));
+        return;
+      }
+      setSelectedReportBlocks((prev) => prev.filter((item) => item !== blockId));
+    });
+  }, [startReportBlockTransition]);
 
   const fetchReportsData = async () => {
     try {
@@ -382,6 +405,9 @@ export default function ReportsPage() {
 
     setGeneratingPDF(true);
     try {
+      // Let the loading state paint first to avoid blocking the interaction frame.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
       // Optionally ensure charts are fully painted before capture
       // await new Promise((r) => requestAnimationFrame(() => r(null)));
 
@@ -415,6 +441,16 @@ export default function ReportsPage() {
 
       // Keep header background white for print clarity.
       const pageWidth = (pdf as any).internal.pageSize.getWidth();
+      const pageHeight = (pdf as any).internal.pageSize.getHeight();
+      const availableTableWidth = pageWidth - marginX * 2;
+
+      const ensureSectionFits = (targetY: number, minRequiredHeight = 30) => {
+        if (targetY + minRequiredHeight > pageHeight - marginX) {
+          pdf.addPage();
+          return marginX;
+        }
+        return targetY;
+      };
 
       pdf.setFontSize(18);
       pdf.setTextColor(...brandPrimary);
@@ -556,6 +592,7 @@ export default function ReportsPage() {
         : 90;
 
       if (hasReportBlock("products_performance")) {
+        currentY = ensureSectionFits(currentY, 34);
         pdf.setFontSize(14);
         pdf.setTextColor(...brandPrimary);
         pdf.text("Products Inventory and Performance", marginX, currentY);
@@ -587,16 +624,24 @@ export default function ReportsPage() {
           theme: "grid",
           headStyles: { fillColor: brandPrimary, textColor: [255, 255, 255] },
           margin: { left: marginX, right: marginX },
-          styles: { fontSize: 8.7, cellPadding: 1.9, textColor: [31, 41, 55] },
+          tableWidth: availableTableWidth,
+          styles: {
+            fontSize: 8.5,
+            cellPadding: 1.9,
+            overflow: "linebreak",
+            textColor: [31, 41, 55],
+          },
+          bodyStyles: { valign: "top" },
+          rowPageBreak: "avoid",
           alternateRowStyles: { fillColor: [248, 250, 252] },
           columnStyles: {
-            0: { cellWidth: 40 },
-            1: { cellWidth: 25 },
-            2: { cellWidth: 20 },
-            3: { cellWidth: 20 },
-            4: { cellWidth: 25 },
-            5: { cellWidth: 20 },
-            6: { cellWidth: 30 },
+            0: { cellWidth: availableTableWidth * 0.27 },
+            1: { cellWidth: availableTableWidth * 0.15 },
+            2: { cellWidth: availableTableWidth * 0.09 },
+            3: { cellWidth: availableTableWidth * 0.09 },
+            4: { cellWidth: availableTableWidth * 0.12 },
+            5: { cellWidth: availableTableWidth * 0.09 },
+            6: { cellWidth: availableTableWidth * 0.19 },
           },
         });
       }
@@ -607,6 +652,7 @@ export default function ReportsPage() {
         : 90;
 
       if (hasReportBlock("completed_orders")) {
+      currentY = ensureSectionFits(currentY, 34);
       pdf.setFontSize(14);
       pdf.setTextColor(...brandPrimary);
       pdf.text("Completed Orders", marginX, currentY);
@@ -664,18 +710,17 @@ export default function ReportsPage() {
         alternateRowStyles: { fillColor: [248, 250, 252] },
         bodyStyles: { valign: 'top' },
         pageBreak: 'auto',
-        // Ensure the table fits within A4 portrait (210mm) minus 20mm margins on each side => 170mm usable.
-        // The following widths sum to exactly 170 to prevent overflow.
-        tableWidth: 'wrap',
+        rowPageBreak: 'avoid',
+        tableWidth: availableTableWidth,
         columnStyles: {
-          0: { cellWidth: 18 }, // Date
-          1: { cellWidth: 22 }, // Customer
-          2: { cellWidth: 26 }, // Contact
-          3: { cellWidth: 38 }, // Address
-          4: { cellWidth: 16 }, // Branch
-          5: { cellWidth: 28 }, // Product
-          6: { cellWidth: 8 },  // Qty
-          7: { cellWidth: 14 }, // Total Paid
+          0: { cellWidth: availableTableWidth * 0.11 }, // Date
+          1: { cellWidth: availableTableWidth * 0.14 }, // Customer
+          2: { cellWidth: availableTableWidth * 0.16 }, // Contact
+          3: { cellWidth: availableTableWidth * 0.23 }, // Address
+          4: { cellWidth: availableTableWidth * 0.08 }, // Branch
+          5: { cellWidth: availableTableWidth * 0.16 }, // Product
+          6: { cellWidth: availableTableWidth * 0.05 }, // Qty
+          7: { cellWidth: availableTableWidth * 0.07 }, // Total Paid
         },
       });
       }
@@ -686,6 +731,7 @@ export default function ReportsPage() {
         : 90;
 
       if (hasReportBlock("revenue_by_category")) {
+      currentY = ensureSectionFits(currentY, 34);
       pdf.setFontSize(14);
       pdf.setTextColor(...brandPrimary);
       pdf.text("Category Performance", marginX, currentY);
@@ -731,7 +777,6 @@ export default function ReportsPage() {
 
       // --- NEW: Embed charts as images ---
       const pdfPageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = marginX;
 
       let y = (pdf as any).lastAutoTable?.finalY
@@ -1140,10 +1185,11 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-7 rounded-3xl bg-rose-50/50 p-4 md:p-6">
+    <div className="mx-auto max-w-[1400px] space-y-7 rounded-3xl bg-slate-50 p-4 md:p-6">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-rose-900">Sales Reports</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900">Sales Reports</h1>
           <p className="mt-1 text-sm text-slate-600">
             Build custom analytics views by combining filters, section selection, and export tools.
           </p>
@@ -1154,11 +1200,12 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>
+      </div>
 
       {/* Date Range Filter */}
-      <div className="rounded-2xl border border-rose-200 bg-white p-4 shadow-sm md:p-5">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
         <div className="mb-4 border-b border-slate-200 pb-3">
-          <h2 className="text-lg font-semibold text-rose-900">Report Builder</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Report Builder</h2>
           <p className="mt-1 text-sm text-slate-600">Set filters, choose report sections, then generate PDF or export CSV.</p>
         </div>
         {/* Inputs row */}
@@ -1235,14 +1282,14 @@ export default function ReportsPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setSelectedReportBlocks(REPORT_BLOCK_OPTIONS.map((block) => block.id))}
+                onClick={selectAllReportBlocks}
                 className="text-xs font-medium text-blue-700 hover:text-blue-900"
               >
                 Select All
               </button>
               <button
                 type="button"
-                onClick={() => setSelectedReportBlocks([])}
+                onClick={clearReportBlocks}
                 className="text-xs font-medium text-slate-600 hover:text-slate-900"
               >
                 Clear
@@ -1257,13 +1304,7 @@ export default function ReportsPage() {
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedReportBlocks((prev) => Array.from(new Set([...prev, block.id])));
-                        return;
-                      }
-                      setSelectedReportBlocks((prev) => prev.filter((item) => item !== block.id));
-                    }}
+                    onChange={(e) => toggleReportBlock(block.id, e.target.checked)}
                     className="h-4 w-4"
                   />
                   <span>{block.label}</span>
@@ -1271,6 +1312,9 @@ export default function ReportsPage() {
               );
             })}
           </div>
+          {isReportBlockPending && (
+            <div className="mt-2 text-xs text-slate-500">Updating selected sections...</div>
+          )}
         </div>
 
         {/* Action row: place button below date inputs */}
@@ -1542,7 +1586,7 @@ export default function ReportsPage() {
       {/* Charts */}
       {(hasReportBlock("revenue_over_time") || hasReportBlock("kpis_overview")) && (
       <section className="space-y-3">
-      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-rose-700">Trend Visualizations</h2>
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Trend Visualizations</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {hasReportBlock("revenue_over_time") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
@@ -1621,7 +1665,7 @@ export default function ReportsPage() {
       {/* NEW extra charts row */}
       {(hasReportBlock("orders_status_breakdown") || hasReportBlock("revenue_by_category")) && (
       <section className="space-y-3">
-      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-rose-700">Breakdowns</h2>
+      <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">Breakdowns</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {hasReportBlock("orders_status_breakdown") && (
         <div className="bg-white p-4 rounded-lg shadow-sm border">
@@ -1676,7 +1720,7 @@ export default function ReportsPage() {
       </section>
       )}
 
-      {/* Completed Orders Section */}
+      {/* Completed Orders Section newest*/}
       {hasReportBlock("completed_orders") && (
       <div className="bg-white rounded-lg shadow-sm border" id="completed-orders-section">
         <div className="px-6 py-4 border-b border-gray-200">
@@ -1701,9 +1745,9 @@ export default function ReportsPage() {
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Full Address
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                {/* <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Branch
-                </th>
+                </th> */}
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Product
                 </th>
@@ -1765,9 +1809,9 @@ export default function ReportsPage() {
                     <td className="px-4 py-3 text-sm text-gray-900 max-w-xs break-words">
                       {fullAddress}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                    {/* <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                       {branch}
-                    </td>
+                    </td> */}
                     <td className="px-4 py-3 text-sm text-gray-900">
                       {order.product_details?.name || order.meta?.product_name || order.product_id}
                     </td>

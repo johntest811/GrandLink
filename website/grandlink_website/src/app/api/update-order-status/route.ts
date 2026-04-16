@@ -210,6 +210,7 @@ export async function POST(request: NextRequest) {
 
     let invoiceEmailSent = false;
     let invoiceRecipientEmail = userEmail;
+    let invoiceSendReason: string | undefined;
     if (newStatus === "approved") {
       try {
         const invoiceResult = await resendInvoiceEmailForUserItem(userItemId, {
@@ -217,8 +218,10 @@ export async function POST(request: NextRequest) {
         });
         invoiceEmailSent = Boolean(invoiceResult?.emailSent);
         invoiceRecipientEmail = invoiceResult?.recipientEmails?.[0] || userEmail;
+        invoiceSendReason = (invoiceResult as any)?.reason;
       } catch (invoiceErr) {
         console.error("Invoice email send failed:", invoiceErr);
+        invoiceSendReason = "EXCEPTION";
       }
     }
 
@@ -267,14 +270,27 @@ export async function POST(request: NextRequest) {
       created_at: now,
     });
 
+    const approvedEmailFailed = newStatus === "approved" && !invoiceEmailSent;
+
     return NextResponse.json(
       {
-        success: true,
-        message: "Notification processed",
+        success: approvedEmailFailed ? false : true,
+        message: approvedEmailFailed
+          ? "Order status updated, but invoice email failed to send"
+          : "Notification processed",
         invoiceEmailSent,
+        invoiceRecipientEmail,
+        invoiceSendReason,
         statusEmailSent,
+        resolvedRecipient: {
+          preferredRecipientEmail: recipientInfo.preferredRecipientEmail,
+          addressEmail: recipientInfo.addressEmail,
+          billingEmail: recipientInfo.billingEmail,
+          authEmail: recipientInfo.authEmail,
+          recipientEmail: recipientInfo.recipientEmail,
+        },
       },
-      { headers: corsHeaders }
+      { status: approvedEmailFailed ? 502 : 200, headers: corsHeaders }
     );
   } catch (error) {
     console.error("Order status update error:", error);

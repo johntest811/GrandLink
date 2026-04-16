@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { adminNotificationService } from "@/utils/notificationHelper";
 
 type UserItem = {
@@ -192,15 +193,55 @@ function formatLocalDateTime(value: unknown) {
 
 function getPaymentSummary(item: UserItem) {
   const meta = (item.meta || {}) as Record<string, any>;
-  const paymentStatus = String(item.payment_status || meta.payment_status || "").toLowerCase();
-  const paymongoChannel = String(meta.paymongo_channel || "").toLowerCase();
+  const paymentStatus = String(item.payment_status || meta.payment_status || "").trim().toLowerCase();
+  const paymongoChannel = String(meta.paymongo_channel || meta.payrex_channel || "").trim().toLowerCase();
   const confirmedAt = meta.payment_confirmed_at || meta.paid_at || meta.payment_paid_at || null;
   const reference = item.payment_id || meta.payment_session_id || meta.payment_reference || null;
+  const amountPaid = Number(item.total_paid ?? meta.amount_paid ?? meta.final_total_per_item ?? 0);
+  const stage = String(item.order_status || item.order_progress || item.status || "").trim().toLowerCase();
+  const provider = String(
+    item.payment_method || meta.payment_method || meta.payment_provider || meta.payment_type || ""
+  )
+    .trim()
+    .toLowerCase();
 
-  const isPaid = paymentStatus === "completed" || paymentStatus === "paid";
-  const provider = String(item.payment_method || meta.payment_method || "").toLowerCase();
-  const providerLabel = provider ? provider.toUpperCase() : "";
-  const channelLabel = paymongoChannel ? paymongoChannel.toUpperCase() : "";
+  const paidStatuses = new Set(["completed", "paid", "succeeded", "success"]);
+  const paymentConfirmedStages = new Set([
+    "reserved",
+    "approved",
+    "in_production",
+    "quality_check",
+    "start_packaging",
+    "packaging",
+    "ready_for_delivery",
+    "out_for_delivery",
+    "completed",
+  ]);
+  const providerLooksOnline =
+    provider.includes("paymongo") || provider.includes("paypal") || provider.includes("payrex");
+
+  const isPaid =
+    paidStatuses.has(paymentStatus) ||
+    Boolean(confirmedAt) ||
+    amountPaid > 0 ||
+    (providerLooksOnline && Boolean(reference)) ||
+    (providerLooksOnline && paymentConfirmedStages.has(stage));
+
+  const providerLabel = provider.includes("paymongo")
+    ? "PAYMONGO"
+    : provider.includes("paypal")
+    ? "PAYPAL"
+    : provider.includes("payrex")
+    ? "PAYREX"
+    : provider
+    ? provider.toUpperCase()
+    : "";
+
+  const channelLabel = paymongoChannel
+    ? paymongoChannel.toUpperCase()
+    : meta.paid_via_qrph === true && providerLabel === "PAYMONGO"
+    ? "QRPH"
+    : "";
 
   return {
     isPaid,
@@ -280,6 +321,7 @@ function InlineSpinner() {
 }
 
 export default function OrdersPage() {
+  const searchParams = useSearchParams();
   const [reservations, setReservations] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -302,6 +344,13 @@ export default function OrdersPage() {
   // New: date/time filter
   const [startDateTime, setStartDateTime] = useState<string>('');
   const [endDateTime, setEndDateTime] = useState<string>('');
+  const [focusOrderId, setFocusOrderId] = useState<string>('');
+  const [flashOrderId, setFlashOrderId] = useState<string>('');
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+
+  const requestedOrderId = useMemo(() => {
+    return String(searchParams.get("orderId") || "").trim();
+  }, [searchParams]);
 
   // Minimal API to update only user_items
   const updateOrderViaApi = async (payload: any) => {
@@ -432,13 +481,13 @@ export default function OrdersPage() {
           preferredRecipientEmail || undefined
         );
 
-        if (newStatus === 'approved' && !notifyResult?.invoiceEmailSent) {
-          alert('Order was approved, but invoice email was not confirmed as sent. Please verify mail settings and use invoice resend if needed.');
+        if (newStatus === 'approved' && notifyResult?.success === false) {
+          alert(`Order was approved, but invoice email failed: ${notifyResult?.error || 'Unknown error'}.`);
         }
       } catch (notifError: any) {
         console.warn('Failed to send notification:', notifError);
         if (newStatus === 'approved') {
-          alert('Order was approved, but invoice email failed to send. Please verify mail settings and resend the invoice.');
+          alert('Order was approved, but invoice email request failed. Please verify mail settings and resend the invoice.');
         }
       }
 
@@ -538,37 +587,37 @@ export default function OrdersPage() {
   }, [reservations]);
 
   // NEW: query filter
-  const filteredReservations = reservations.filter((r) => {
-    if (statusFilter && getStage(r) !== statusFilter) return false;
-    // Date range filter (created_at)
-    if (startDateTime) {
-      const from = new Date(startDateTime).getTime();
-      const created = new Date(r.created_at).getTime();
-      if (!Number.isNaN(from) && !Number.isNaN(created) && created < from) return false;
-    }
-    if (endDateTime) {
-      const to = new Date(endDateTime).getTime();
-      const created = new Date(r.created_at).getTime();
-      if (!Number.isNaN(to) && !Number.isNaN(created) && created > to) return false;
-    }
+  const filteredReservations = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return true;
-    const fields = [
-      r.id,
-      r.user_id,
-      r.product_id,
-      r.customer_name,
-      r.customer_email,
-      r.customer_phone,
-      r.meta?.product_name,
-      r.meta?.customer_name,
-      r.meta?.customer_email,
-      r.meta?.customer_phone,
-    ]
-      .filter(Boolean)
-      .map((x: any) => String(x).toLowerCase());
-    return fields.some((f) => f.includes(q));
-  });
+    const from = startDateTime ? new Date(startDateTime).getTime() : null;
+    const to = endDateTime ? new Date(endDateTime).getTime() : null;
+
+    return reservations.filter((r) => {
+      if (statusFilter && getStage(r) !== statusFilter) return false;
+
+      // Date range filter (created_at)
+      const created = new Date(r.created_at).getTime();
+      if (from && !Number.isNaN(from) && !Number.isNaN(created) && created < from) return false;
+      if (to && !Number.isNaN(to) && !Number.isNaN(created) && created > to) return false;
+
+      if (!q) return true;
+      const fields = [
+        r.id,
+        r.user_id,
+        r.product_id,
+        r.customer_name,
+        r.customer_email,
+        r.customer_phone,
+        r.meta?.product_name,
+        r.meta?.customer_name,
+        r.meta?.customer_email,
+        r.meta?.customer_phone,
+      ]
+        .filter(Boolean)
+        .map((x: any) => String(x).toLowerCase());
+      return fields.some((f) => f.includes(q));
+    });
+  }, [reservations, statusFilter, searchQuery, startDateTime, endDateTime]);
 
   const filteredStageCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -580,6 +629,28 @@ export default function OrdersPage() {
   }, [filteredReservations]);
 
   const requestDetails = useMemo(() => extractRequestDetails(requestDetailsItem), [requestDetailsItem]);
+
+  useEffect(() => {
+    if (!requestedOrderId) return;
+    setSearchQuery(requestedOrderId);
+    setFocusOrderId(requestedOrderId);
+  }, [requestedOrderId]);
+
+  useEffect(() => {
+    if (!focusOrderId || loading) return;
+
+    const targetRow = rowRefs.current[focusOrderId];
+    if (!targetRow) return;
+
+    targetRow.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashOrderId(focusOrderId);
+
+    const timeout = window.setTimeout(() => {
+      setFlashOrderId("");
+    }, 3500);
+
+    return () => window.clearTimeout(timeout);
+  }, [filteredReservations, focusOrderId, loading]);
 
   if (loading) {
     return (
@@ -594,9 +665,14 @@ export default function OrdersPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-black">Reservations & Orders Management</h1>
+    <div className="space-y-6 max-w-7xl mx-auto">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-black">Reservations & Orders Management</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Review order details, customer delivery info, payment, status, then apply next-stage actions.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -622,7 +698,20 @@ export default function OrdersPage() {
 
       {/* Filters / Controls */}
       <div className="bg-white p-4 rounded-lg shadow-sm border">
-        <div className="flex flex-wrap items-end gap-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-sm font-semibold text-slate-800">Filters</div>
+          {(statusFilter || searchQuery || startDateTime || endDateTime) && (
+            <button
+              onClick={() => { setStatusFilter(''); setSearchQuery(''); setStartDateTime(''); setEndDateTime(''); }}
+              className="px-3 py-2 border rounded-md bg-white hover:bg-gray-50 text-black text-sm"
+              title="Clear filters"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-end gap-4">
           {/* Left group: search + date range */}
           <div className="flex-1 min-w-[260px] grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -671,26 +760,15 @@ export default function OrdersPage() {
                 ))}
               </select>
             </div>
-            {(statusFilter || searchQuery || startDateTime || endDateTime) && (
-              <button
-                onClick={() => { setStatusFilter(''); setSearchQuery(''); setStartDateTime(''); setEndDateTime(''); }}
-                className="px-3 py-2 border rounded-md bg-white hover:bg-gray-50 text-black"
-                title="Clear filters"
-              >
-                Clear
-              </button>
-            )}
           </div>
         </div>
       </div>
 
       {/* Table */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
-        <div className="border-b bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          Review each order from left to right: order details, customer delivery info, payment details, then apply next-stage actions.
-        </div>
+        <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+          <thead className="bg-gray-50 sticky top-0 z-10">
             <tr>
               <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Order Details</th>
               <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-black">Customer and Delivery</th>
@@ -721,12 +799,28 @@ export default function OrdersPage() {
               // inline payment editing removed; we now use a modal
 
               return (
-                <tr key={r.id} className="hover:bg-gray-50">
+                <tr
+                  key={r.id}
+                  ref={(element) => {
+                    rowRefs.current[r.id] = element;
+                  }}
+                  className={`hover:bg-gray-50 ${
+                    flashOrderId === r.id ? "bg-indigo-50 ring-2 ring-inset ring-indigo-300" : ""
+                  }`}
+                >
                   <td className="px-4 py-3 align-top">
-                    <div className="text-sm text-black font-medium break-all">{r.id}</div>
-                    <div className="text-xs text-black mt-1">{new Date(r.created_at).toLocaleString()}</div>
-                    <div className="text-xs text-black font-semibold mt-2">{r.meta?.product_name || r.product_details?.name || r.product_id}</div>
-                    <div className="text-xs text-black">Qty: {r.quantity}</div>
+                    <div className="space-y-1">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Order ID</div>
+                        <div className="text-sm text-black font-medium break-all">{r.id}</div>
+                      </div>
+                      <div className="text-xs text-slate-600">Created: {new Date(r.created_at).toLocaleString()}</div>
+                      <div className="pt-1">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Product</div>
+                        <div className="text-xs text-black font-semibold">{r.meta?.product_name || r.product_details?.name || r.product_id}</div>
+                        <div className="text-xs text-black">Qty: {r.quantity}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3 align-top max-w-[320px]">
                     {customerName && (
@@ -885,6 +979,7 @@ export default function OrdersPage() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {filteredReservations.length === 0 && (

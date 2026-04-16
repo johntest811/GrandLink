@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { getInvoiceMailFrom, getInvoiceMailTransporter } from "./mailer";
-import { InvoiceData, InvoiceLine, renderInvoiceHtml, renderInvoicePdf } from "./invoice";
+import { InvoiceData, InvoiceLine, renderInvoiceHtml } from "./invoice";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -46,7 +46,7 @@ function getCompanyLogoUrl() {
     process.env.NEXT_PUBLIC_BASE_URL ||
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
-  return `${baseUrl.replace(/\/$/, "")}/ge-logo.avif`;
+  return `${baseUrl.replace(/\/$/, "")}/api/assets/logo`;
 }
 
 async function prepareInvoicePayload(userItemId: string, existingInvoice?: InvoiceRecord | null) {
@@ -196,9 +196,14 @@ async function sendInvoiceEmail(options: {
 }) {
   const { invoiceId, recipients, invoiceData, invoiceHtml } = options;
   const transporter = getInvoiceMailTransporter();
-  if (!transporter || recipients.length === 0) return false;
+  if (recipients.length === 0) {
+    return { emailSent: false, reason: "NO_RECIPIENTS" as const };
+  }
 
-  const pdfBuffer = await renderInvoicePdf(invoiceData);
+  if (!transporter) {
+    return { emailSent: false, reason: "NO_TRANSPORTER" as const };
+  }
+
   const receiptSummaryHtml = `
     <div style="margin:0 0 16px 0; padding:12px; border:1px solid #e5e7eb; border-radius:8px; background:#f9fafb;">
       <div style="font-weight:700; margin-bottom:6px;">Payment Receipt Summary</div>
@@ -214,13 +219,6 @@ async function sendInvoiceEmail(options: {
     to: recipients.join(","),
     subject: `GrandLink Receipt and Invoice ${invoiceData.invoiceNumber}`,
     html: `${receiptSummaryHtml}${invoiceHtml}`,
-    attachments: [
-      {
-        filename: `${invoiceData.invoiceNumber}-receipt-invoice.pdf`,
-        content: pdfBuffer,
-        contentType: "application/pdf",
-      },
-    ],
   });
 
   await supabaseAdmin
@@ -228,7 +226,7 @@ async function sendInvoiceEmail(options: {
     .update({ email_sent_at: new Date().toISOString(), invoice_html: invoiceHtml })
     .eq("id", invoiceId);
 
-  return true;
+  return { emailSent: true };
 }
 
 export async function ensureInvoiceForUserItem(
@@ -292,7 +290,7 @@ export async function resendInvoiceEmailForUserItem(
     const prepared = await prepareInvoicePayload(userItemId);
     const created = await ensureInvoiceForUserItem(userItemId, { sendEmail: false });
     const effectiveRecipients = overrideRecipients.length ? overrideRecipients : prepared.recipients;
-    const emailSent = await sendInvoiceEmail({
+    const sendResult = await sendInvoiceEmail({
       invoiceId: created.id,
       recipients: effectiveRecipients,
       invoiceData: prepared.invoiceData,
@@ -307,7 +305,8 @@ export async function resendInvoiceEmailForUserItem(
 
     return {
       invoice: refreshed || created,
-      emailSent,
+      emailSent: Boolean(sendResult.emailSent),
+      reason: "reason" in sendResult ? sendResult.reason : undefined,
       recipientEmails: effectiveRecipients,
     };
   }
@@ -323,7 +322,7 @@ export async function resendInvoiceEmailForUserItem(
     })
     .eq("id", existing.id);
 
-  const emailSent = await sendInvoiceEmail({
+  const sendResult = await sendInvoiceEmail({
     invoiceId: existing.id,
     recipients: effectiveRecipients,
     invoiceData: prepared.invoiceData,
@@ -336,5 +335,10 @@ export async function resendInvoiceEmailForUserItem(
     .eq("id", existing.id)
     .single();
 
-  return { invoice: refreshed, emailSent, recipientEmails: effectiveRecipients };
+  return {
+    invoice: refreshed,
+    emailSent: Boolean(sendResult.emailSent),
+    reason: "reason" in sendResult ? sendResult.reason : undefined,
+    recipientEmails: effectiveRecipients,
+  };
 }

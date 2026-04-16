@@ -52,6 +52,12 @@ const measurementsMatch = (left?: number, right?: number) => {
   return Math.abs(left - right) < 0.000001;
 };
 
+const parsePositiveInteger = (value: unknown): number | null => {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return parsed;
+};
+
 type Product = {
   id: string;
   name: string;
@@ -362,6 +368,7 @@ function ReservationPageContent() {
   }, [addressForm.province, addressForm.city, addressForm.barangay]);
 
   const qty = Math.max(1, Number(formData.quantity || 1));
+  const availableStock = Math.max(0, Number(product?.inventory || 0));
   const selectedAddressPreview = addresses.find((a) => a.id === selectedAddressId) || null;
 
   const originalPrice = Math.max(0, Number(product?.price || 0));
@@ -429,6 +436,44 @@ function ReservationPageContent() {
     } finally {
       setApplyingVoucher(false);
     }
+  };
+
+  const handleQuantityInputChange = (rawValue: string) => {
+    const digitsOnly = rawValue.replace(/[^\d]/g, "");
+    if (!digitsOnly) {
+      setFormData((prev) => ({ ...prev, quantity: 1 }));
+      return;
+    }
+
+    const parsed = parsePositiveInteger(digitsOnly);
+    if (!parsed) {
+      setFormData((prev) => ({ ...prev, quantity: 1 }));
+      return;
+    }
+
+    if (availableStock > 0 && parsed > availableStock) {
+      alert(`Only ${availableStock} unit(s) available for this product.`);
+      setFormData((prev) => ({ ...prev, quantity: availableStock }));
+      return;
+    }
+
+    setFormData((prev) => ({ ...prev, quantity: parsed }));
+  };
+
+  const normalizeQuantityInput = () => {
+    const parsed = parsePositiveInteger(formData.quantity);
+    if (!parsed) {
+      setFormData((prev) => ({ ...prev, quantity: 1 }));
+      return;
+    }
+
+    if (availableStock > 0 && parsed > availableStock) {
+      alert(`Only ${availableStock} unit(s) available for this product.`);
+      setFormData((prev) => ({ ...prev, quantity: availableStock }));
+      return;
+    }
+
+    setFormData((prev) => ({ ...prev, quantity: parsed }));
   };
 
   const addToCartInstead = async () => {
@@ -503,11 +548,36 @@ function ReservationPageContent() {
       alert("Please enter valid custom width/height in mm (greater than 0).");
       return;
     }
-    if (product.inventory < qty) {
-      alert("Insufficient inventory for this quantity");
-      return;
+
+    // Refresh live inventory right before creating the reservation.
+    try {
+      const { data: latestProduct, error: latestError } = await supabase
+        .from("products")
+        .select("inventory")
+        .eq("id", product.id)
+        .maybeSingle();
+
+      if (latestError) {
+        console.warn("Failed to refresh inventory:", latestError);
+      } else if (latestProduct && typeof (latestProduct as any).inventory !== "undefined") {
+        const latestInv = Math.max(0, Number((latestProduct as any).inventory ?? 0));
+        setProduct((prev) => (prev ? { ...prev, inventory: latestInv } : prev));
+        if (latestInv <= 0) {
+          alert("This product is out of stock.");
+          return;
+        }
+        if (latestInv < qty) {
+          alert(`Only ${latestInv} unit(s) available for this product.`);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Inventory refresh threw:", e);
     }
+
     setSubmitting(true);
+
+    let createdUserItemId: string | null = null;
     try {
       const selectedAddress =
         fulfillmentMethod === "delivery"
@@ -606,6 +676,8 @@ function ReservationPageContent() {
 
       if (userItemError) throw new Error(`Database error: ${userItemError.message}`);
 
+      createdUserItemId = userItem.id;
+
       // IMPORTANT: send user_item_ids array to the API
       const paymentPayload = {
         user_item_ids: [userItem.id],
@@ -625,9 +697,13 @@ function ReservationPageContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(paymentPayload),
       });
-      const { checkoutUrl, sessionId, error: paymentError } = await response.json();
-      if (paymentError || !checkoutUrl)
-        throw new Error(paymentError || "Payment session creation failed");
+      const paymentJson = await response.json();
+      const checkoutUrl = paymentJson?.checkoutUrl;
+      const sessionId = paymentJson?.sessionId;
+      const paymentError = paymentJson?.error;
+      if (!response.ok || paymentError || !checkoutUrl) {
+        throw new Error(paymentError || paymentJson?.message || paymentJson?.details || "Payment session creation failed");
+      }
 
       await supabase.from("payment_sessions").insert({
         user_id: userId,
@@ -643,6 +719,14 @@ function ReservationPageContent() {
 
       window.location.href = checkoutUrl;
     } catch (error: any) {
+      // If payment session failed, avoid leaving a dangling pending reservation row.
+      if (createdUserItemId) {
+        try {
+          await supabase.from("user_items").delete().eq("id", createdUserItemId).eq("user_id", userId);
+        } catch (cleanupError) {
+          console.warn("Failed to cleanup reservation user_item after error:", cleanupError);
+        }
+      }
       alert("Error creating reservation: " + (error?.message || "Unknown error occurred"));
     } finally {
       setSubmitting(false);
@@ -694,17 +778,23 @@ function ReservationPageContent() {
                     Quantity <span className="text-red-600">*</span>
                   </label>
                   <input
-                    type="number"
-                    min={1}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={qty}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        quantity: Math.max(1, Number(e.target.value || 1)),
-                      })
-                    }
+                    onChange={(event) => handleQuantityInputChange(event.target.value)}
+                    onBlur={normalizeQuantityInput}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                      }
+                      if (event.key === "e" || event.key === "E" || event.key === "+" || event.key === "-" || event.key === ".") {
+                        event.preventDefault();
+                      }
+                    }}
                     className="w-full border border-gray-300 rounded-lg px-4 py-3"
                   />
+                  <div className="mt-1 text-sm text-gray-600">Available stock: {availableStock}</div>
                 </div>
 
                 <div>

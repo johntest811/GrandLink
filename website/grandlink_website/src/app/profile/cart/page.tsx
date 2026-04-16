@@ -21,6 +21,7 @@ type Product = {
   price?: number;
   images?: string[];
   image1?: string;
+  inventory?: number;
   width?: number;
   height?: number;
 };
@@ -46,6 +47,12 @@ const measurementsMatch = (left?: number, right?: number) => {
   return Math.abs(left - right) < 0.000001;
 };
 
+const parsePositiveInteger = (value: unknown): number | null => {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return parsed;
+};
+
 export default function CartPage() {
   const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
@@ -55,6 +62,7 @@ export default function CartPage() {
   const [fulfillmentMethod, setFulfillmentMethod] = useState<FulfillmentMethod>("delivery");
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
+  const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({});
   const [voucher, setVoucher] = useState("");
   const [voucherInfo, setVoucherInfo] = useState<{ code: string; type: 'percent'|'amount'; value: number } | null>(null);
   const [applying, setApplying] = useState(false);
@@ -77,13 +85,19 @@ export default function CartPage() {
         .eq("user_id", uid);
 
       if (cartError) throw cartError;
-      setItems(cartData as any || []);
+      const list = (cartData as any) || [];
+      setItems(list);
+      const nextDrafts: Record<string, string> = {};
+      list.forEach((item: any) => {
+        nextDrafts[String(item.id)] = String(Math.max(1, Number(item.quantity || 1)));
+      });
+      setQuantityDrafts(nextDrafts);
 
       const productIds = Array.from(new Set(cartData?.map((item: any) => item.product_id) || []));
       if (productIds.length > 0) {
         const { data: prodData } = await supabase
           .from("products")
-          .select("id, name, price, images, image1, width, height")
+          .select("id, name, price, images, image1, inventory, width, height")
           .in("id", productIds);
 
         const map: Record<string, Product> = {};
@@ -179,14 +193,70 @@ export default function CartPage() {
     return { ...base, discount, deliveryFee, total };
   }, [selectedItems, voucherInfo, fulfillmentMethod, computeUnitPrice]);
 
-  const updateQuantity = async (item: UserItem, delta: number) => {
-    const next = Math.max(1, (item.quantity || 1) + delta);
-    await fetch("/api/cart", {
+  const updateQuantity = async (item: UserItem, nextQuantity: number) => {
+    const product = products[item.product_id];
+    const inventory = Math.max(0, Number(product?.inventory ?? 0));
+    const requested = Math.max(1, Number(nextQuantity || 1));
+
+    if (inventory > 0 && requested > inventory) {
+      alert(`Only ${inventory} unit(s) available for ${product?.name || "this product"}.`);
+      return;
+    }
+
+    const res = await fetch("/api/cart", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: item.id, quantity: next })
+      body: JSON.stringify({ id: item.id, quantity: requested }),
     });
+    const json = await res.json();
+    if (!res.ok) {
+      alert(json?.error || "Failed to update quantity");
+      return;
+    }
     if (userId) loadCart(userId);
+  };
+
+  const handleQuantityDraftChange = (item: UserItem, rawValue: string) => {
+    const digitsOnly = rawValue.replace(/[^\d]/g, "");
+
+    if (!digitsOnly) {
+      setQuantityDrafts((prev) => ({ ...prev, [item.id]: "" }));
+      return;
+    }
+
+    const parsed = parsePositiveInteger(digitsOnly);
+    if (!parsed) {
+      setQuantityDrafts((prev) => ({ ...prev, [item.id]: "1" }));
+      return;
+    }
+
+    const product = products[item.product_id];
+    const inventory = Math.max(0, Number(product?.inventory ?? 0));
+    if (inventory > 0 && parsed > inventory) {
+      alert(`Only ${inventory} unit(s) available for ${product?.name || "this product"}.`);
+      setQuantityDrafts((prev) => ({ ...prev, [item.id]: String(inventory) }));
+      return;
+    }
+
+    setQuantityDrafts((prev) => ({ ...prev, [item.id]: String(parsed) }));
+  };
+
+  const commitQuantityDraft = async (item: UserItem) => {
+    const currentQty = Math.max(1, Number(item.quantity || 1));
+    const draftRaw = quantityDrafts[item.id] ?? String(currentQty);
+    const parsed = parsePositiveInteger(draftRaw);
+
+    if (!parsed) {
+      setQuantityDrafts((prev) => ({ ...prev, [item.id]: String(currentQty) }));
+      return;
+    }
+
+    if (parsed === currentQty) {
+      setQuantityDrafts((prev) => ({ ...prev, [item.id]: String(parsed) }));
+      return;
+    }
+
+    await updateQuantity(item, parsed);
   };
 
   const removeItem = async (id: string) => {
@@ -208,6 +278,21 @@ export default function CartPage() {
     if (!selectedItems.length) {
       alert("Select at least one item.");
       return;
+    }
+
+    // Validate selected items against live inventory
+    for (const item of selectedItems) {
+      const product = products[item.product_id];
+      const inventory = Math.max(0, Number(product?.inventory ?? 0));
+      const qty = Math.max(1, Number(item.quantity || 1));
+      if (inventory <= 0) {
+        alert(`${product?.name || "A product"} is out of stock.`);
+        return;
+      }
+      if (qty > inventory) {
+        alert(`Only ${inventory} unit(s) available for ${product?.name || "a product"}. Please adjust your quantity.`);
+        return;
+      }
     }
     
     // Navigate to checkout page with selected items
@@ -279,6 +364,7 @@ export default function CartPage() {
 
           const selectedFlag = !!selected[item.id];
           const qty = item.quantity || 1;
+          const inventory = Math.max(0, Number(product?.inventory ?? 0));
           const unitPrice = computeUnitPrice(item);
           const addonsArr: any[] = Array.isArray(item.meta?.addons) ? item.meta.addons : [];
           const hasColorAddon = addonsArr.some((a: any) => a?.key === 'color_customization');
@@ -341,15 +427,38 @@ export default function CartPage() {
                     <div>
                       <div className="text-black font-semibold">{product?.name || 'Product'}</div>
                       <div className="text-black text-sm">₱{unitPrice.toLocaleString()} each{addonsFee > 0 && ` + ₱${addonsFee.toLocaleString()} addons = ₱${unitWithAddons.toLocaleString()}/unit`}</div>
+                      {Number.isFinite(inventory) && (
+                        <div className="text-black text-sm">In stock: {inventory}</div>
+                      )}
                       <div className="text-black text-base font-semibold mt-1">Line Total: ₱{lineTotal.toLocaleString()}</div>
                     </div>
                     <button onClick={() => removeItem(item.id)} className="text-red-600 text-sm hover:underline">Remove</button>
                   </div>
 
                   <div className="mt-3 flex items-center gap-2">
-                    <button className="px-2 py-1 border rounded text-black" onClick={() => updateQuantity(item, -1)}>-</button>
-                    <span className="w-10 text-center text-black">{qty}</span>
-                    <button className="px-2 py-1 border rounded text-black" onClick={() => updateQuantity(item, 1)}>+</button>
+                    <label className="text-sm text-black font-medium">Quantity</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={quantityDrafts[item.id] ?? String(qty)}
+                      onChange={(event) => handleQuantityDraftChange(item, event.target.value)}
+                      onBlur={() => void commitQuantityDraft(item)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                          event.preventDefault();
+                        }
+                        if (event.key === "e" || event.key === "E" || event.key === "+" || event.key === "-" || event.key === ".") {
+                          event.preventDefault();
+                        }
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      className="w-24 rounded border px-3 py-2 text-center text-black"
+                      aria-label={`Quantity for ${product?.name || "product"}`}
+                    />
                   </div>
 
                   <div className="mt-3">
